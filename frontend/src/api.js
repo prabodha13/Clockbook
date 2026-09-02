@@ -36,6 +36,7 @@ async function request(path, options = {}) {
 
 export const api = {
   getAuthStatus: () => request("/auth/status"),
+  getServerTime: () => request("/time"),
   claimAccount: (payload) => request("/auth/claim", { method: "POST", body: JSON.stringify(payload) }),
   login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request("/auth/logout", { method: "POST" }),

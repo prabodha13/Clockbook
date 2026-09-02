@@ -1827,8 +1827,30 @@ export default function App() {
   const [sleepAlert, setSleepAlert] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
 
+  // Every timestamp actually saved comes from the server, so what gets recorded is always
+  // accurate regardless of this computer's own clock. But the live ticking display for a
+  // running task has to compare a server timestamp against this browser's own idea of "now",
+  // and if the two clocks disagree, that shows up as a sudden jump the moment a timer
+  // resumes. This measures the gap once and folds it into every tick so the live number
+  // stays honest even when the computer's clock is wrong.
+  const clockOffsetRef = useRef(0);
+
   useEffect(() => {
-    const iv = setInterval(() => setNow(Date.now()), 1000);
+    (async () => {
+      try {
+        const before = Date.now();
+        const { now: serverNow } = await api.getServerTime();
+        const after = Date.now();
+        const roundTripEstimate = (after - before) / 2;
+        clockOffsetRef.current = new Date(serverNow).getTime() + roundTripEstimate - after;
+      } catch (err) {
+        // if this fails, the live display just falls back to trusting this computer's own clock
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const iv = setInterval(() => setNow(Date.now() + clockOffsetRef.current), 1000);
     return () => clearInterval(iv);
   }, []);
 
@@ -1983,24 +2005,30 @@ export default function App() {
     const task = runningTaskRef.current;
     if (!task) return;
     try {
-      const updated = await api.pauseTask(task.id, new Date(sleepStartMs).toISOString());
+      const updated = await api.pauseTask(task.id, new Date(sleepStartMs + clockOffsetRef.current).toISOString());
       mergeTask(updated);
     } catch (err) {
       // if this fails, still tell the person below so they know to check the task themselves
     }
     setSleepAlert({ task, gapMs, sleepStartMs });
-    if ("Notification" in window && Notification.permission === "granted") {
-      try {
-        const n = new Notification("Clockbook", {
-          body: `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`,
-          tag: "clockbook-sleep-alert",
-          requireInteraction: true,
-        });
-        n.onclick = () => window.focus();
-      } catch (e) {
-        // Some platforms restrict the Notification constructor, safe to ignore
+    // Firing this the instant the screen unlocks seems to land it in a window where Windows
+    // delivers it straight to the notification center with no visible toast. Waiting a
+    // couple of seconds is an attempt to land just outside that window instead, this is an
+    // experiment, not a guaranteed fix, since it depends on Windows's own internal timing.
+    setTimeout(() => {
+      if ("Notification" in window && Notification.permission === "granted") {
+        try {
+          const n = new Notification("Clockbook", {
+            body: `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`,
+            tag: "clockbook-sleep-alert",
+            requireInteraction: true,
+          });
+          n.onclick = () => window.focus();
+        } catch (e) {
+          // Some platforms restrict the Notification constructor, safe to ignore
+        }
       }
-    }
+    }, 2000);
   }
 
   useEffect(() => {
