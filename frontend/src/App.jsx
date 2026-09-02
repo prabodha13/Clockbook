@@ -494,7 +494,6 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
             </div>
 
             <div className="cb-field">
-              <div className="cb-field">
               <label className="cb-label">Assign to</label>
               {currentUser.role === "admin" ? (
                 <select className="cb-select" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
