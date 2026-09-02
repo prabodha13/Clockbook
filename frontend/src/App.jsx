@@ -551,94 +551,87 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
 
 function AddMemberModal({ onClose, onAdd }) {
   const [name, setName] = useState("");
+  const [role, setRole] = useState("member");
   const [busy, setBusy] = useState(false);
+
   return (
-    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+    <div
+      className="cb-overlay"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
       <div className="cb-modal">
         <div className="cb-modal-head">
           <div className="cb-modal-title">Add teammate</div>
-          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+          <button className="cb-icon-btn" onClick={onClose}>
+            <X size={16} />
+          </button>
         </div>
-        <form onSubmit={async (e) => { e.preventDefault(); if (name.trim() && !busy) { setBusy(true); await onAdd(name); onClose(); } }}>
+
+        <form
+          onSubmit={async (e) => {
+            e.preventDefault();
+
+            if (name.trim() && !busy) {
+              setBusy(true);
+              await onAdd(name, role);
+              onClose();
+            }
+          }}
+        >
           <div className="cb-modal-body">
+
             <div className="cb-field">
               <label className="cb-label">Name</label>
-              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" />
+              <input
+                className="cb-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                autoFocus
+                placeholder="e.g. Priya Nair"
+              />
             </div>
-            <div className="cb-hint">Anyone with access to this app can select this name. There is no password yet. A real login system is a natural next step once you are ready to open this up more widely.</div>
+
+            <div className="cb-field">
+              <label className="cb-label">Access level</label>
+
+              <select
+                className="cb-select"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+              >
+                <option value="member">Staff</option>
+                <option value="admin">Admin</option>
+              </select>
+            </div>
+
+            <div className="cb-hint">
+              Staff can track and complete their assigned work.
+              Admins can manage teammates, templates, clients and task assignments.
+            </div>
+
           </div>
+
           <div className="cb-modal-foot">
-            <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>Add</button>
+            <button
+              type="button"
+              className="cb-btn cb-btn-ghost"
+              onClick={onClose}
+            >
+              Cancel
+            </button>
+
+            <button
+              type="submit"
+              className="cb-btn cb-btn-primary"
+              disabled={busy}
+            >
+              Add
+            </button>
           </div>
         </form>
       </div>
-    </div>
-  );
-}
-
-function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
-  const [expanded, setExpanded] = useState(false);
-  const [addingTask, setAddingTask] = useState(false);
-  const [tName, setTName] = useState("");
-  const [tRole, setTRole] = useState("");
-  const [tType, setTType] = useState("");
-
-  async function addTask(e) {
-    e.preventDefault();
-    if (!tName.trim()) return;
-    await onAddTask(template.id, { name: tName.trim(), role: tRole.trim(), task_type: tType.trim() });
-    setTName(""); setTRole(""); setTType(""); setAddingTask(false);
-  }
-
-  return (
-    <div className="cb-tmpl-card">
-      <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
-        <div>
-          <div className="cb-tmpl-field">{template.field}</div>
-          <div className="cb-tmpl-name">{template.name}</div>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}</span>
-          <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
-        </div>
-      </button>
-      {expanded && (
-        <>
-          {isAdmin && (
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 16px 0" }}>
-              <button className="cb-btn cb-btn-sm" onClick={() => setAddingTask((v) => !v)}><Plus size={13} />Task</button>
-              <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
-            </div>
-          )}
-          {template.tasks.map((t) =>
-            isAdmin ? (
-              <div className="cb-tmpl-task-row" key={t.id}>
-                <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
-                <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
-                <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
-                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
-              </div>
-            ) : (
-              <div className="cb-row" key={t.id}>
-                <div className="cb-row-main">
-                  <div className="cb-row-task">{t.name}</div>
-                  <div className="cb-row-meta">{t.role && <span>{t.role}</span>}{t.task_type && <span>{t.task_type}</span>}</div>
-                </div>
-              </div>
-            )
-          )}
-          {isAdmin && addingTask && (
-            <form className="cb-tmpl-task-row" onSubmit={addTask}>
-              <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
-              <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
-              <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
-              <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
-            </form>
-          )}
-          {template.tasks.length === 0 && !addingTask && <div className="cb-empty">No tasks yet in this template.</div>}
-        </>
-      )}
     </div>
   );
 }
@@ -1133,9 +1126,13 @@ export default function App() {
     setAlertsBannerDismissed(true);
   }
 
-  async function createMember(name) {
-    try {
-      const member = await api.createMember(name.trim(), currentUser ? currentUser.id : null);
+  async function createMember(name, role = "member") {
+  try {
+    const member = await api.createMember(
+      name.trim(),
+      role,
+      currentUser ? currentUser.id : null
+    );
       setMembers((prev) => [...prev, member]);
       setCurrentUserId(member.id);
       localStorage.setItem(MEMBER_ID_KEY, member.id);
