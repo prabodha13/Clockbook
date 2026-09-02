@@ -858,4 +858,7 @@ if os.path.isdir("dist"):
 
     @app.get("/{full_path:path}")
     def serve_frontend(full_path: str):
+        candidate = os.path.join("dist", full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
         return FileResponse("dist/index.html")
