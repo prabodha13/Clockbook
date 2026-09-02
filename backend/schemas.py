@@ -18,6 +18,7 @@ class MemberOut(BaseModel):
 
 class MemberCreate(BaseModel):
     name: str
+    role: str = "member"
     created_by: Optional[str] = None
 
 
