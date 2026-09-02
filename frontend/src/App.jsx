@@ -1517,10 +1517,12 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
           <option value="all">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        <select className="cb-select" style={{ width: 200 }} value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)}>
-          <option value="all">All staff</option>
-          {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </select>
+        {isAdmin && (
+          <select className="cb-select" style={{ width: 200 }} value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)}>
+            <option value="all">All staff</option>
+            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        )}
         <div style={{ marginLeft: "auto", fontSize: 13, color: "var(--ink-soft)" }}>
           {rows.length} entr{rows.length === 1 ? "y" : "ies"}, <span className="cb-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>{totalHours.toFixed(2)}h</span> total
         </div>
