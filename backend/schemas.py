@@ -54,18 +54,34 @@ class ClientCreate(BaseModel):
     name: str
 
 
+class BankAccountOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    client_id: str
+    name: str
+
+
+class BankAccountCreate(BaseModel):
+    client_id: str
+    name: str
+
+
 class TemplateTaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
     role: str
     task_type: str
+    requires_bank_account: bool
+    tracks_number_label: str
 
 
 class TemplateTaskCreate(BaseModel):
     name: str
     role: str = ""
     task_type: str = ""
+    requires_bank_account: bool = False
+    tracks_number_label: str = ""
 
 
 class TemplateOut(BaseModel):
@@ -97,6 +113,11 @@ class TaskOut(BaseModel):
     submitted_at: Optional[datetime] = None
     submitted_by_id: Optional[str] = None
     pushed_to_karbon: bool
+    bank_account_id: Optional[str] = None
+    bank_account_name: str = ""
+    tracks_number_label: str = ""
+    start_count: Optional[int] = None
+    end_count: Optional[int] = None
 
     @field_serializer("created_at", "submitted_at")
     def serialize_as_utc(self, value: Optional[datetime], _info):
@@ -114,6 +135,9 @@ class TaskCreate(BaseModel):
     role: str = ""
     task_type: str = ""
     owner_id: Optional[str] = None
+    bank_account_id: Optional[str] = None
+    bank_account_name: str = ""
+    tracks_number_label: str = ""
 
 
 class TaskPause(BaseModel):
@@ -122,6 +146,11 @@ class TaskPause(BaseModel):
 
 class TaskSubmit(BaseModel):
     note: str = ""
+    end_count: Optional[int] = None
+
+
+class TaskStart(BaseModel):
+    start_count: Optional[int] = None
 
 
 class TaskReassign(BaseModel):

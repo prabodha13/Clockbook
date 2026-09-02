@@ -33,6 +33,13 @@ class Client(Base):
     name = Column(String, nullable=False)
 
 
+class BankAccount(Base):
+    __tablename__ = "bank_accounts"
+    id = Column(String, primary_key=True, default=lambda: gen_id("bank"))
+    client_id = Column(String, ForeignKey("clients.id"), nullable=False)
+    name = Column(String, nullable=False)
+
+
 class Template(Base):
     __tablename__ = "templates"
     id = Column(String, primary_key=True, default=lambda: gen_id("tpl"))
@@ -53,6 +60,8 @@ class TemplateTask(Base):
     name = Column(String, nullable=False)
     role = Column(String, default="")
     task_type = Column(String, default="")
+    requires_bank_account = Column(Boolean, default=False)
+    tracks_number_label = Column(String, default="")  # e.g. "Unreconciled transactions", blank means not tracked
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -72,3 +81,8 @@ class TaskInstance(Base):
     submitted_at = Column(DateTime, nullable=True)
     submitted_by_id = Column(String, ForeignKey("members.id"), nullable=True)
     pushed_to_karbon = Column(Boolean, default=False)
+    bank_account_id = Column(String, ForeignKey("bank_accounts.id"), nullable=True)
+    bank_account_name = Column(String, default="")
+    tracks_number_label = Column(String, default="")  # copied from the template task at creation time
+    start_count = Column(Integer, nullable=True)
+    end_count = Column(Integer, nullable=True)

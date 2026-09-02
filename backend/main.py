@@ -49,6 +49,28 @@ def run_startup_migrations():
             if "password_hash" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN password_hash VARCHAR"))
 
+    if "template_tasks" in inspector.get_table_names():
+        existing_tt_columns = {c["name"] for c in inspector.get_columns("template_tasks")}
+        with engine.begin() as conn:
+            if "requires_bank_account" not in existing_tt_columns:
+                conn.execute(text("ALTER TABLE template_tasks ADD COLUMN requires_bank_account BOOLEAN DEFAULT FALSE"))
+            if "tracks_number_label" not in existing_tt_columns:
+                conn.execute(text("ALTER TABLE template_tasks ADD COLUMN tracks_number_label VARCHAR DEFAULT ''"))
+
+    if "tasks" in inspector.get_table_names():
+        existing_task_columns = {c["name"] for c in inspector.get_columns("tasks")}
+        with engine.begin() as conn:
+            if "bank_account_id" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN bank_account_id VARCHAR"))
+            if "bank_account_name" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN bank_account_name VARCHAR DEFAULT ''"))
+            if "tracks_number_label" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN tracks_number_label VARCHAR DEFAULT ''"))
+            if "start_count" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN start_count INTEGER"))
+            if "end_count" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN end_count INTEGER"))
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -305,6 +327,37 @@ def delete_client(client_id: str, current_member: models.Member = Depends(get_cu
 
 
 # ---------------------------------------------------------------
+# Bank accounts
+# ---------------------------------------------------------------
+
+@app.get("/api/bank-accounts", response_model=list[schemas.BankAccountOut])
+def list_bank_accounts(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return db.query(models.BankAccount).all()
+
+
+@app.post("/api/bank-accounts", response_model=schemas.BankAccountOut, status_code=201)
+def create_bank_account(payload: schemas.BankAccountCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    account = models.BankAccount(client_id=payload.client_id, name=payload.name.strip())
+    db.add(account)
+    db.commit()
+    db.refresh(account)
+    return account
+
+
+@app.delete("/api/bank-accounts/{account_id}", status_code=204)
+def delete_bank_account(account_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    used = db.query(models.TaskInstance).filter(models.TaskInstance.bank_account_id == account_id).count()
+    if used > 0:
+        raise HTTPException(400, "This bank account has tracked tasks and cannot be deleted")
+    account = db.get(models.BankAccount, account_id)
+    if account:
+        db.delete(account)
+        db.commit()
+    return None
+
+
+# ---------------------------------------------------------------
 # Templates
 # ---------------------------------------------------------------
 
@@ -344,6 +397,8 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
         name=payload.name.strip(),
         role=payload.role.strip(),
         task_type=payload.task_type.strip(),
+        requires_bank_account=payload.requires_bank_account,
+        tracks_number_label=payload.tracks_number_label.strip(),
     )
     db.add(task)
     db.commit()
@@ -360,6 +415,8 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     task.name = payload.name.strip()
     task.role = payload.role.strip()
     task.task_type = payload.task_type.strip()
+    task.requires_bank_account = payload.requires_bank_account
+    task.tracks_number_label = payload.tracks_number_label.strip()
     db.commit()
     db.refresh(task)
     return task
@@ -398,6 +455,9 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         owner_id=owner_id,
         status="todo",
         segments=[],
+        bank_account_id=payload.bank_account_id,
+        bank_account_name=payload.bank_account_name.strip(),
+        tracks_number_label=payload.tracks_number_label.strip(),
     )
     db.add(task)
     db.commit()
@@ -406,12 +466,17 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
 
 
 @app.post("/api/tasks/{task_id}/start", response_model=schemas.TaskOut)
-def start_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
+
+    if task.tracks_number_label and task.start_count is None:
+        if payload.start_count is None:
+            raise HTTPException(400, f"Enter the starting {task.tracks_number_label.lower()} before starting the timer")
+        task.start_count = payload.start_count
 
     # Enforce the one running timer per person rule on the server, not just in the browser
     others = db.query(models.TaskInstance).filter(
@@ -453,10 +518,13 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
+    if task.tracks_number_label and payload.end_count is None:
+        raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
     if task.status == "running":
         task.segments = close_open_segment(task.segments)
     task.status = "submitted"
     task.note = payload.note
+    task.end_count = payload.end_count
     task.submitted_at = datetime.utcnow()
     task.submitted_by_id = current_member.id
     task.pushed_to_karbon = False
@@ -533,6 +601,9 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None):
     rows = []
     for t in tasks:
         hours = elapsed_seconds(t.segments) / 3600
+        change = None
+        if t.start_count is not None and t.end_count is not None:
+            change = t.end_count - t.start_count
         rows.append({
             "id": t.id,
             "date": t.submitted_at.strftime("%Y-%m-%d") if t.submitted_at else "",
@@ -544,6 +615,11 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None):
             "note": t.note,
             "tracked_by": members.get(t.submitted_by_id, ""),
             "pushed": t.pushed_to_karbon,
+            "bank_account": t.bank_account_name,
+            "metric": t.tracks_number_label,
+            "start_count": t.start_count,
+            "end_count": t.end_count,
+            "change": change,
         })
     return rows
 
@@ -558,11 +634,18 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     rows = build_export_rows(db, client_id, pushed, date_from, date_to)
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(["Date", "Client", "Task", "Role", "Task Type", "Hours", "Notes", "Tracked by", "Pushed to Karbon"])
+    writer.writerow([
+        "Date", "Client", "Task", "Role", "Task Type", "Hours", "Notes", "Tracked by", "Pushed to Karbon",
+        "Bank Account", "Metric", "Start Count", "End Count", "Change",
+    ])
     for r in rows:
         writer.writerow([
             r["date"], r["client"], r["task"], r["role"], r["task_type"],
             r["hours"], r["note"], r["tracked_by"], "Yes" if r["pushed"] else "No",
+            r["bank_account"], r["metric"],
+            r["start_count"] if r["start_count"] is not None else "",
+            r["end_count"] if r["end_count"] is not None else "",
+            r["change"] if r["change"] is not None else "",
         ])
     buffer.seek(0)
     return StreamingResponse(
