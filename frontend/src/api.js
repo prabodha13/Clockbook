@@ -88,6 +88,8 @@ export const api = {
     request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(startCount != null ? { start_count: startCount } : {}) }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
+  getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>
+    request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`),
   submitTask: (id, note, endCount, adjustedSeconds) =>
     request(`/tasks/${id}/submit`, {
       method: "POST",
@@ -102,12 +104,16 @@ export const api = {
   deleteTask: (id) => request(`/tasks/${id}`, { method: "DELETE" }),
 };
 
-export function exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy) {
+function exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy) {
   const params = new URLSearchParams({ client_id: clientId, pushed });
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
   if (submittedBy) params.set("submitted_by", submittedBy);
-  return `${BASE}/export.csv?${params.toString()}`;
+  return params.toString();
+}
+
+export function exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy) {
+  return `${BASE}/export.csv?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`;
 }
 
 // Export now requires a login, and a plain browser navigation cannot carry the

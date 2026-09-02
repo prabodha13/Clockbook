@@ -1436,7 +1436,7 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onDelete, onAdd
   );
 }
 
-function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onDeleteTask }) {
+function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask }) {
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
   const [staffFilter, setStaffFilter] = useState("all");
@@ -1444,66 +1444,37 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+  const [rows, setRows] = useState([]);
+  const [loadError, setLoadError] = useState("");
 
   const dateRange = useMemo(() => {
     if (datePreset === "custom") return dateRangeForCustom(customFrom, customTo);
     return dateRangeForPreset(datePreset);
   }, [datePreset, customFrom, customTo]);
 
-  const submitted = tasks.filter((t) => t.status === "submitted");
+  const loadRows = useCallback(async () => {
+    try {
+      const fromIso = dateRange ? dateRange.fromIso : null;
+      const toIso = dateRange ? dateRange.toIso : null;
+      const data = await api.getExportRows(clientFilter, pushFilter, fromIso, toIso, staffFilter);
+      setRows(data);
+      setLoadError("");
+    } catch (err) {
+      setLoadError(err.message || "Could not load the export");
+    }
+  }, [clientFilter, pushFilter, staffFilter, dateRange]);
 
-  const rows = useMemo(() => {
-    return submitted
-      .filter((t) => (clientFilter === "all" ? true : t.client_id === clientFilter))
-      .filter((t) => (staffFilter === "all" ? true : t.submitted_by_id === staffFilter))
-      .filter((t) => {
-        if (pushFilter === "all") return true;
-        if (pushFilter === "pending") return !t.pushed_to_karbon;
-        return !!t.pushed_to_karbon;
-      })
-      .filter((t) => {
-        if (!dateRange || !t.submitted_at) return true;
-        const submittedMs = new Date(t.submitted_at).getTime();
-        return submittedMs >= new Date(dateRange.fromIso).getTime() && submittedMs <= new Date(dateRange.toIso).getTime();
-      })
-      .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))
-      .map((t) => {
-        const trackedSecs = elapsedSeconds(t, now);
-        const isAdjusted = t.adjusted_seconds != null;
-        const finalSecs = isAdjusted ? t.adjusted_seconds : trackedSecs;
-        const trackedBy = (members.find((m) => m.id === t.submitted_by_id) || {}).name || "none";
-        const hasCount = t.start_count != null && t.end_count != null;
-        return {
-          id: t.id,
-          date: formatDate(t.submitted_at),
-          client: t.client_name,
-          task: t.name,
-          role: t.role,
-          taskType: t.task_type,
-          decHours: decimalHours(finalSecs),
-          hm: formatHM(finalSecs),
-          isAdjusted,
-          trackedHm: isAdjusted ? formatHM(trackedSecs) : "",
-          trackedDecHours: isAdjusted ? decimalHours(trackedSecs) : "",
-          note: t.note,
-          trackedBy,
-          pushed: !!t.pushed_to_karbon,
-          bankAccount: t.bank_account_name || "",
-          metric: t.tracks_number_label || "",
-          startCount: t.start_count,
-          endCount: t.end_count,
-          change: hasCount ? t.end_count - t.start_count : null,
-        };
-      });
-  }, [submitted, clientFilter, staffFilter, pushFilter, dateRange, members, now]);
+  useEffect(() => { loadRows(); }, [loadRows]);
 
-  const totalHours = rows.reduce((sum, r) => sum + parseFloat(r.decHours), 0);
+  const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
 
   function copyRow(r) {
-    const countPart = r.change != null ? ` | ${r.metric}: ${r.startCount} to ${r.endCount} (${r.change > 0 ? "+" : ""}${r.change})` : "";
-    const bankPart = r.bankAccount ? ` | ${r.bankAccount}` : "";
-    const adjustedPart = r.isAdjusted ? ` | tracked ${r.trackedHm}, adjusted to ${r.hm}` : "";
-    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.taskType || "none"} | ${r.hm} (${r.decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
+    const decHours = r.hours.toFixed(2);
+    const hm = formatHM(r.seconds);
+    const countPart = r.change != null ? ` | ${r.metric}: ${r.start_count} to ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "";
+    const bankPart = r.bank_account ? ` | ${r.bank_account}` : "";
+    const adjustedPart = r.adjusted ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
+    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1600); }
     });
@@ -1521,9 +1492,15 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
     copyToClipboard(text);
   }
 
+  async function handleTogglePushed(id) {
+    await onTogglePushed(id);
+    await loadRows();
+  }
+
   async function handleDelete(r) {
-    if (window.confirm(`Delete this submitted entry for ${r.client}: ${r.task} (${r.hm})? This cannot be undone.`)) {
+    if (window.confirm(`Delete this submitted entry for ${r.client}: ${r.task} (${formatHM(r.seconds)})? This cannot be undone.`)) {
       await onDeleteTask(r.id);
+      await loadRows();
     }
   }
 
@@ -1580,6 +1557,8 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
         </div>
       </div>
 
+      {loadError && <div className="cb-error" style={{ marginBottom: 10 }}>{loadError}</div>}
+
       <div className="cb-table-wrap">
         <table className="cb-table">
           <thead>
@@ -1595,21 +1574,21 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
             )}
             {rows.map((r) => (
               <tr key={r.id}>
-                <td>{r.date}</td>
+                <td>{formatDate(r.submitted_at)}</td>
                 <td>{r.client}</td>
                 <td>{r.task}</td>
                 <td>{r.role || "none"}</td>
-                <td>{r.taskType || "none"}</td>
-                <td className="num cb-mono">{r.hm}{r.isAdjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                <td className="num cb-mono">{r.isAdjusted ? r.trackedHm : ""}</td>
-                <td>{r.bankAccount || "none"}</td>
+                <td>{r.task_type || "none"}</td>
+                <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
+                <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                <td>{r.bank_account || "none"}</td>
                 <td>{r.metric || "none"}</td>
                 <td className="num cb-mono">
-                  {r.change != null ? `${r.startCount} \u2192 ${r.endCount} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
+                  {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                 </td>
                 <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                <td>{r.trackedBy}</td>
-                <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => onTogglePushed(r.id)} /></td>
+                <td>{r.tracked_by || "none"}</td>
+                <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
                 <td>
                   <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
                     {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
@@ -2368,7 +2347,7 @@ export default function App() {
             )}
             {view === "export" && (
               <ExportView
-                tasks={tasks} members={members} clients={clients} now={now} isAdmin={isAdmin}
+                members={members} clients={clients} isAdmin={isAdmin}
                 onTogglePushed={togglePushed} onDeleteTask={deleteTask}
               />
             )}
