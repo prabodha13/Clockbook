@@ -66,6 +66,10 @@ export const api = {
   createTaskType: (name) => request("/task-types", { method: "POST", body: JSON.stringify({ name }) }),
   deleteTaskType: (id) => request(`/task-types/${id}`, { method: "DELETE" }),
 
+  getTrackedMetrics: () => request("/tracked-metrics"),
+  createTrackedMetric: (name) => request("/tracked-metrics", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteTrackedMetric: (id) => request(`/tracked-metrics/${id}`, { method: "DELETE" }),
+
   getTemplates: () => request("/templates"),
   createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),

@@ -928,12 +928,10 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
-function TemplateTaskEditor({ template, task, roles, taskTypes, onUpdateTask, onDeleteTask }) {
+function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask }) {
   const [name, setName] = useState(task.name);
-  const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
 
   useEffect(() => { setName(task.name); }, [task.name]);
-  useEffect(() => { setTracksLabel(task.tracks_number_label); }, [task.tracks_number_label]);
 
   function saveField(field, value) {
     if (value === task[field]) return; // nothing actually changed, skip a wasted request
@@ -941,19 +939,13 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, onUpdateTask, on
       name: field === "name" ? value : name,
       role: field === "role" ? value : task.role,
       task_type: field === "task_type" ? value : task.task_type,
-      requires_bank_account: task.requires_bank_account,
-      tracks_number_label: field === "tracks_number_label" ? value : tracksLabel,
+      requires_bank_account: field === "requires_bank_account" ? value : task.requires_bank_account,
+      tracks_number_label: field === "tracks_number_label" ? value : task.tracks_number_label,
     });
   }
 
   function saveOnEnter(e) {
     if (e.key === "Enter") e.target.blur();
-  }
-
-  function toggleRequiresBankAccount(checked) {
-    onUpdateTask(template.id, task.id, {
-      name, role: task.role, task_type: task.task_type, requires_bank_account: checked, tracks_number_label: tracksLabel,
-    });
   }
 
   return (
@@ -983,24 +975,27 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, onUpdateTask, on
         <label className="cb-tmpl-task-option-checkbox">
           <input
             type="checkbox" className="cb-checkbox" checked={!!task.requires_bank_account}
-            onChange={(e) => toggleRequiresBankAccount(e.target.checked)}
+            onChange={(e) => saveField("requires_bank_account", e.target.checked)}
           />
           Requires a bank account
         </label>
-        <input
-          className="cb-input cb-tmpl-task-tracks-input"
-          placeholder="Tracks a number, e.g. Unreconciled transactions"
-          value={tracksLabel}
-          onChange={(e) => setTracksLabel(e.target.value)}
-          onBlur={(e) => saveField("tracks_number_label", e.target.value)}
-          onKeyDown={(e) => saveOnEnter(e, "tracks_number_label")}
-        />
+        <select
+          className="cb-select cb-tmpl-task-tracks-input"
+          value={task.tracks_number_label}
+          onChange={(e) => saveField("tracks_number_label", e.target.value)}
+        >
+          <option value="">Not tracked</option>
+          {trackedMetrics.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+          {task.tracks_number_label && !trackedMetrics.some((m) => m.name === task.tracks_number_label) && (
+            <option value={task.tracks_number_label}>{task.tracks_number_label}</option>
+          )}
+        </select>
       </div>
     </div>
   );
 }
 
-function TemplateEditor({ template, isAdmin, roles, taskTypes, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
+function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
   const [expanded, setExpanded] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
   const [tName, setTName] = useState("");
@@ -1042,7 +1037,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, onAddTask, onUpda
           {template.tasks.map((t) =>
             isAdmin ? (
               <TemplateTaskEditor
-                key={t.id} template={template} task={t} roles={roles} taskTypes={taskTypes}
+                key={t.id} template={template} task={t} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask}
               />
             ) : (
@@ -1078,12 +1073,14 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, onAddTask, onUpda
                   <input type="checkbox" className="cb-checkbox" checked={tRequiresBank} onChange={(e) => setTRequiresBank(e.target.checked)} />
                   Requires a bank account
                 </label>
-                <input
-                  className="cb-input cb-tmpl-task-tracks-input"
-                  placeholder="Tracks a number, e.g. Unreconciled transactions"
+                <select
+                  className="cb-select cb-tmpl-task-tracks-input"
                   value={tTracksLabel}
                   onChange={(e) => setTTracksLabel(e.target.value)}
-                />
+                >
+                  <option value="">Not tracked</option>
+                  {trackedMetrics.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                </select>
               </div>
             </form>
           )}
@@ -1094,9 +1091,13 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, onAddTask, onUpda
   );
 }
 
-function SettingsView({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType }) {
+function SettingsView({
+  roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
+  onAddTrackedMetric, onDeleteTrackedMetric,
+}) {
   const [newRole, setNewRole] = useState("");
   const [newTaskType, setNewTaskType] = useState("");
+  const [newMetric, setNewMetric] = useState("");
   const [error, setError] = useState("");
 
   async function submitRole(e) {
@@ -1123,6 +1124,18 @@ function SettingsView({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType
     }
   }
 
+  async function submitMetric(e) {
+    e.preventDefault();
+    if (!newMetric.trim()) return;
+    try {
+      await onAddTrackedMetric(newMetric);
+      setNewMetric("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
   return (
     <div>
       <div className="cb-page-head">
@@ -1135,7 +1148,7 @@ function SettingsView({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType
         <div className="cb-tmpl-head">
           <div>
             <div className="cb-tmpl-field">Setup</div>
-            <div className="cb-tmpl-name">Roles and task types</div>
+            <div className="cb-tmpl-name">Roles, task types, and tracked numbers</div>
           </div>
         </div>
         <div style={{ padding: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
@@ -1167,6 +1180,20 @@ function SettingsView({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
           </div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div className="cb-label" style={{ marginBottom: 8 }}>Tracked numbers</div>
+            {trackedMetrics.map((m) => (
+              <div key={m.id} className="cb-client-account-row">
+                <div style={{ fontSize: 13.5 }}>{m.name}</div>
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTrackedMetric(m.id)}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            {trackedMetrics.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>Nothing added yet.</div>}
+            <form onSubmit={submitMetric} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input className="cb-input" placeholder="e.g. Unreconciled transactions" value={newMetric} onChange={(e) => setNewMetric(e.target.value)} />
+              <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
+            </form>
+          </div>
           {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
         </div>
       </div>
@@ -1174,7 +1201,7 @@ function SettingsView({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType
   );
 }
 
-function Templates({ templates, isAdmin, roles, taskTypes, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
+function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -1222,7 +1249,7 @@ function Templates({ templates, isAdmin, roles, taskTypes, onAddTask, onUpdateTa
       ) : (
         templates.map((t) => (
           <TemplateEditor
-            key={t.id} template={t} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes}
+            key={t.id} template={t} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
             onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onDeleteTemplate={onDeleteTemplate}
           />
         ))
@@ -1702,6 +1729,7 @@ export default function App() {
   const [bankAccounts, setBankAccounts] = useState([]);
   const [roles, setRoles] = useState([]);
   const [taskTypes, setTaskTypes] = useState([]);
+  const [trackedMetrics, setTrackedMetrics] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState("dashboard");
@@ -1756,9 +1784,9 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [m, c, t, tk, b, r, tt] = await Promise.all([
+      const [m, c, t, tk, b, r, tt, tm] = await Promise.all([
         api.getMembers(), api.getClients(), api.getTemplates(), api.getTasks(), api.getBankAccounts(),
-        api.getRoles(), api.getTaskTypes(),
+        api.getRoles(), api.getTaskTypes(), api.getTrackedMetrics(),
       ]);
       setMembers(m);
       setClients(c);
@@ -1767,6 +1795,7 @@ export default function App() {
       setBankAccounts(b);
       setRoles(r);
       setTaskTypes(tt);
+      setTrackedMetrics(tm);
       setLoadError("");
     } catch (err) {
       setLoadError(err.message || "Could not reach the server");
@@ -2098,6 +2127,16 @@ export default function App() {
     setTaskTypes((prev) => prev.filter((t) => t.id !== id));
   }
 
+  async function addTrackedMetric(name) {
+    const metric = await api.createTrackedMetric(name.trim());
+    setTrackedMetrics((prev) => [...prev, metric]);
+  }
+
+  async function deleteTrackedMetric(id) {
+    await api.deleteTrackedMetric(id);
+    setTrackedMetrics((prev) => prev.filter((m) => m.id !== id));
+  }
+
   async function createTasks(payloads) {
     const created = [];
     for (const payload of payloads) {
@@ -2186,7 +2225,7 @@ export default function App() {
             )}
             {view === "templates" && (
               <Templates
-                templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes}
+                templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
                 onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate}
               />
@@ -2212,8 +2251,9 @@ export default function App() {
             )}
             {view === "settings" && isAdmin && (
               <SettingsView
-                roles={roles} taskTypes={taskTypes}
+                roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
+                onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
               />
             )}
           </div>
