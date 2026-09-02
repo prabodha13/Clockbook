@@ -15,6 +15,7 @@ class Member(Base):
     id = Column(String, primary_key=True, default=lambda: gen_id("mem"))
     name = Column(String, nullable=False)
     color_idx = Column(Integer, default=0)
+    role = Column(String, nullable=False, default="member")
 
 
 class Client(Base):
