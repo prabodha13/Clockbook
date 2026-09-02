@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
@@ -318,7 +318,7 @@ function TopBar({ currentUser, onLogout, runningTask, now, onPause, onComplete }
   );
 }
 
-function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign }) {
+function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, hideClient }) {
   const isMine = task.owner_id === currentUser.id;
   const isAdmin = currentUser.role === "admin";
   const elapsed = elapsedSeconds(task, now);
@@ -326,7 +326,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
   return (
     <div className="cb-row">
       <div className="cb-row-main">
-        <div className="cb-row-client"><Building2 size={11} />{task.client_name}</div>
+        {!hideClient && <div className="cb-row-client"><Building2 size={11} />{task.client_name}</div>}
         <div className="cb-row-task">{task.name}</div>
         <div className="cb-row-meta">
           {task.role && <span>{task.role}</span>}
@@ -378,12 +378,24 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
 
 function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onNewTask }) {
   const todo = tasks.filter((t) => t.status === "todo");
-  const inProgress = tasks
-    .filter((t) => t.status === "running" || t.status === "paused")
-    .sort((a, b) => (a.status === "running" ? -1 : 1));
+  const inProgress = tasks.filter((t) => t.status === "running" || t.status === "paused");
   const submittedToday = tasks
     .filter((t) => t.status === "submitted" && isToday(t.submitted_at))
     .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
+
+  const inProgressByClient = (() => {
+    const map = new Map();
+    for (const t of inProgress) {
+      if (!map.has(t.client_name)) map.set(t.client_name, []);
+      map.get(t.client_name).push(t);
+    }
+    return Array.from(map.keys())
+      .sort((a, b) => a.localeCompare(b))
+      .map((clientName) => ({
+        clientName,
+        items: map.get(clientName).sort((a, b) => (a.status === "running" ? -1 : b.status === "running" ? 1 : 0)),
+      }));
+  })();
 
   const myTasks = tasks.filter((t) => t.owner_id === currentUser.id);
   const todaySeconds = myTasks.reduce((sum, t) => {
@@ -440,7 +452,29 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
         </div>
       </div>
 
-      <Group title="In progress" items={inProgress} empty="Nothing running or paused. Start a task below to begin tracking." />
+      <div className="cb-group">
+        <div className="cb-group-head">
+          <div className="cb-group-title">In progress</div>
+          <div className="cb-group-count">{inProgress.length}</div>
+        </div>
+        <div className="cb-card-list">
+          {inProgress.length === 0 ? (
+            <div className="cb-empty">Nothing running or paused. Start a task below to begin tracking.</div>
+          ) : (
+            inProgressByClient.map((group) => (
+              <Fragment key={group.clientName}>
+                <div className="cb-client-subgroup-head"><Building2 size={12} />{group.clientName}</div>
+                {group.items.map((t) => (
+                  <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
+                    onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign}
+                    hideClient />
+                ))}
+              </Fragment>
+            ))
+          )}
+        </div>
+      </div>
+
       <Group title="To do" items={todo} empty={<span><span className="cb-empty-title">No tasks queued</span><br />Add one from a template or a one off task.</span>} />
       <Group title="Submitted today" items={submittedToday} empty="Nothing submitted yet today." />
     </div>
@@ -448,30 +482,35 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
 }
 
 function NewTaskModal({ clients, templates, members, currentUser, onClose, onCreate, onAddClient }) {
-  const allTemplateTasks = useMemo(() => {
-    const list = [];
-    for (const tpl of templates) {
-      for (const t of tpl.tasks) list.push({ ...t, field: tpl.field });
-    }
-    return list;
-  }, [templates]);
-
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState(clients[0] ? clients[0].id : "");
   const [newClientName, setNewClientName] = useState("");
-  const [taskMode, setTaskMode] = useState(allTemplateTasks.length ? "template" : "custom");
-  const [templateTaskKey, setTemplateTaskKey] = useState(allTemplateTasks[0] ? allTemplateTasks[0].name : "");
+
+  const [taskMode, setTaskMode] = useState(templates.length ? "template" : "custom");
+  const [templateId, setTemplateId] = useState(templates[0] ? templates[0].id : "");
+  const [selectedTaskIds, setSelectedTaskIds] = useState(() => {
+    const first = templates[0];
+    return first && first.tasks[0] ? [first.tasks[0].id] : [];
+  });
+
   const [customName, setCustomName] = useState("");
-  const [role, setRole] = useState(allTemplateTasks[0] ? allTemplateTasks[0].role : "");
-  const [taskType, setTaskType] = useState(allTemplateTasks[0] ? allTemplateTasks[0].task_type : "");
+  const [role, setRole] = useState("");
+  const [taskType, setTaskType] = useState("");
+
   const [ownerId, setOwnerId] = useState(currentUser.id);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  function pickTemplateTask(name) {
-    setTemplateTaskKey(name);
-    const found = allTemplateTasks.find((t) => t.name === name);
-    if (found) { setRole(found.role); setTaskType(found.task_type); }
+  const selectedTemplate = templates.find((t) => t.id === templateId) || null;
+
+  function pickTemplate(id) {
+    setTemplateId(id);
+    const tpl = templates.find((t) => t.id === id);
+    setSelectedTaskIds(tpl && tpl.tasks[0] ? [tpl.tasks[0].id] : []);
+  }
+
+  function toggleTaskId(id) {
+    setSelectedTaskIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
   }
 
   async function handleSubmit(e) {
@@ -489,9 +528,27 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
         if (!c) { setBusy(false); return; }
         cName = c.name;
       }
-      const name = taskMode === "template" ? templateTaskKey : customName.trim();
-      if (!name) { setBusy(false); return; }
-      await onCreate({ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId });
+
+      let payloads = [];
+      if (taskMode === "template") {
+        if (!selectedTemplate || selectedTaskIds.length === 0) {
+          setError("Select at least one task from the template");
+          setBusy(false);
+          return;
+        }
+        payloads = selectedTemplate.tasks
+          .filter((t) => selectedTaskIds.includes(t.id))
+          .map((t) => ({
+            client_id: cId, client_name: cName, name: t.name,
+            role: t.role, task_type: t.task_type, owner_id: ownerId,
+          }));
+      } else {
+        const name = customName.trim();
+        if (!name) { setBusy(false); return; }
+        payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId }];
+      }
+
+      await onCreate(payloads);
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -526,33 +583,57 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
 
             <div className="cb-field">
               <label className="cb-label">Task</label>
-              {allTemplateTasks.length > 0 && (
+              {templates.length > 0 && (
                 <div className="cb-tabs" style={{ marginBottom: 8, width: "fit-content" }}>
                   <button type="button" className={`cb-tab ${taskMode === "template" ? "active" : ""}`} onClick={() => setTaskMode("template")}>From template</button>
                   <button type="button" className={`cb-tab ${taskMode === "custom" ? "active" : ""}`} onClick={() => setTaskMode("custom")}>Custom</button>
                 </div>
               )}
+
               {taskMode === "template" ? (
-                <select className="cb-select" value={templateTaskKey} onChange={(e) => pickTemplateTask(e.target.value)}>
-                  {allTemplateTasks.map((t) => (
-                    <option key={t.field + t.name} value={t.name}>{t.field}: {t.name}</option>
-                  ))}
-                </select>
+                <>
+                  <select className="cb-select" value={templateId} onChange={(e) => pickTemplate(e.target.value)} style={{ marginBottom: 10 }}>
+                    {templates.map((t) => <option key={t.id} value={t.id}>{t.field}: {t.name}</option>)}
+                  </select>
+                  {selectedTemplate && (
+                    <div className="cb-checklist">
+                      {selectedTemplate.tasks.length === 0 && (
+                        <div className="cb-hint" style={{ padding: 10 }}>This template has no tasks yet.</div>
+                      )}
+                      {selectedTemplate.tasks.map((t) => (
+                        <label className="cb-checklist-item" key={t.id}>
+                          <input
+                            type="checkbox"
+                            className="cb-checkbox"
+                            checked={selectedTaskIds.includes(t.id)}
+                            onChange={() => toggleTaskId(t.id)}
+                          />
+                          <div>
+                            <div className="cb-checklist-name">{t.name}</div>
+                            <div className="cb-checklist-meta">{t.role || "no role"}{t.task_type ? ` \u00b7 ${t.task_type}` : ""}</div>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </>
               ) : (
                 <input className="cb-input" placeholder="e.g. Payroll review" value={customName} onChange={(e) => setCustomName(e.target.value)} />
               )}
             </div>
 
-            <div className="cb-field-row">
-              <div className="cb-field">
-                <label className="cb-label">Karbon role</label>
-                <input className="cb-input" placeholder="e.g. Bookkeeper" value={role} onChange={(e) => setRole(e.target.value)} />
+            {taskMode === "custom" && (
+              <div className="cb-field-row">
+                <div className="cb-field">
+                  <label className="cb-label">Karbon role</label>
+                  <input className="cb-input" placeholder="e.g. Bookkeeper" value={role} onChange={(e) => setRole(e.target.value)} />
+                </div>
+                <div className="cb-field">
+                  <label className="cb-label">Karbon task type</label>
+                  <input className="cb-input" placeholder="e.g. Reconciliation" value={taskType} onChange={(e) => setTaskType(e.target.value)} />
+                </div>
               </div>
-              <div className="cb-field">
-                <label className="cb-label">Karbon task type</label>
-                <input className="cb-input" placeholder="e.g. Reconciliation" value={taskType} onChange={(e) => setTaskType(e.target.value)} />
-              </div>
-            </div>
+            )}
 
             <div className="cb-field">
               <label className="cb-label">Assign to</label>
@@ -568,7 +649,9 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
           </div>
           <div className="cb-modal-foot">
             <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>Add to dashboard</button>
+            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>
+              {taskMode === "template" && selectedTaskIds.length > 1 ? `Add ${selectedTaskIds.length} tasks` : "Add to dashboard"}
+            </button>
           </div>
         </form>
       </div>
@@ -1509,9 +1592,13 @@ export default function App() {
     setClients((prev) => prev.filter((c) => c.id !== clientId));
   }
 
-  async function createTask(payload) {
-    const created = await api.createTask(payload);
-    setTasks((prev) => [created, ...prev]);
+  async function createTasks(payloads) {
+    const created = [];
+    for (const payload of payloads) {
+      const task = await api.createTask(payload);
+      created.push(task);
+    }
+    setTasks((prev) => [...created, ...prev]);
     setShowNewTask(false);
   }
 
@@ -1618,7 +1705,7 @@ export default function App() {
       {showNewTask && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} currentUser={currentUser}
-          onClose={() => setShowNewTask(false)} onCreate={createTask} onAddClient={addClient}
+          onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
         />
       )}
       {completingTask && (

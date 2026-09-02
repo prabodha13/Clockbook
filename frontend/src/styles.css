@@ -169,6 +169,20 @@ html, body, #root {
 }
 .cb-owner-select:hover { border-color: var(--line); }
 
+.cb-client-subgroup-head {
+  display: flex; align-items: center; gap: 6px; padding: 7px 16px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.02em; color: var(--ink-soft); background: var(--paper);
+  border-bottom: 1px solid var(--line);
+}
+
+.cb-checklist { border: 1px solid var(--line-strong); border-radius: 6px; max-height: 220px; overflow-y: auto; }
+.cb-checklist-item { display: flex; align-items: flex-start; gap: 10px; padding: 9px 11px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.cb-checklist-item:last-child { border-bottom: none; }
+.cb-checklist-item:hover { background: var(--paper); }
+.cb-checklist-item input { margin-top: 2px; }
+.cb-checklist-name { font-size: 13.5px; font-weight: 500; }
+.cb-checklist-meta { font-size: 11.5px; color: var(--ink-soft); margin-top: 1px; }
+
 /* Forms */
 .cb-field { margin-bottom: 14px; }
 .cb-label { display: block; font-size: 12.5px; font-weight: 600; color: var(--ink-soft); margin-bottom: 5px; }
