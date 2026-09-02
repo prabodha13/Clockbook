@@ -249,6 +249,15 @@ def get_me(current_member: models.Member = Depends(get_current_member)):
     return current_member
 
 
+@app.get("/api/time")
+def get_server_time():
+    # Lets the browser measure any gap between its own clock and the server's, so a live
+    # running timer can correct for it instead of drifting the moment a computer's clock
+    # disagrees with the server, this has no effect on anything actually saved, every
+    # stored timestamp already comes from the server regardless.
+    return {"now": datetime.utcnow().isoformat() + "Z"}
+
+
 # ---------------------------------------------------------------
 # Members
 # ---------------------------------------------------------------
