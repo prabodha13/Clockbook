@@ -167,8 +167,8 @@ def elapsed_seconds(segments):
     total = 0.0
     now = datetime.utcnow()
     for seg in segments or []:
-        start = datetime.fromisoformat(seg["start"])
-        end = datetime.fromisoformat(seg["end"]) if seg.get("end") else now
+        start = parse_utc_naive(seg["start"])
+        end = parse_utc_naive(seg["end"]) if seg.get("end") else now
         total += max(0, (end - start).total_seconds())
     return total
 
@@ -675,8 +675,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
     if payload.adjusted_seconds is not None and payload.adjusted_seconds < 0:
         raise HTTPException(400, "Adjusted time cannot be negative")
-    if task.status == "running":
-        task.segments = close_open_segment(task.segments)
+    task.segments = close_open_segment(task.segments)
     tracked_seconds = elapsed_seconds(task.segments)
     # Only actually record an adjustment if it genuinely differs from what was tracked,
     # a coincidental match should not get flagged as an edit
