@@ -87,8 +87,14 @@ export const api = {
     request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(startCount != null ? { start_count: startCount } : {}) }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
-  submitTask: (id, note, endCount) =>
-    request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note, end_count: endCount != null ? endCount : null }) }),
+  submitTask: (id, note, endCount, adjustedSeconds) =>
+    request(`/tasks/${id}/submit`, {
+      method: "POST",
+      body: JSON.stringify({
+        note, end_count: endCount != null ? endCount : null,
+        adjusted_seconds: adjustedSeconds != null ? adjustedSeconds : null,
+      }),
+    }),
   reassignTask: (id, ownerId) =>
     request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId }) }),
   togglePushed: (id) => request(`/tasks/${id}/toggle-pushed`, { method: "PATCH" }),

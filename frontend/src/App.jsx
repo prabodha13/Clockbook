@@ -853,7 +853,16 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
   const [endCount, setEndCount] = useState(task.end_count != null ? String(task.end_count) : "");
   const [busy, setBusy] = useState(false);
   const total = elapsedSeconds(task, now);
+  const trackedH = Math.floor(total / 3600);
+  const trackedM = Math.round((total % 3600) / 60);
+  const roundedTrackedSeconds = trackedH * 3600 + trackedM * 60;
+  const [hours, setHours] = useState(String(trackedH));
+  const [minutes, setMinutes] = useState(String(trackedM));
   const needsCount = !!task.tracks_number_label;
+
+  const editedSeconds = (parseInt(hours || "0", 10) * 3600) + (parseInt(minutes || "0", 10) * 60);
+  const isAdjusted = editedSeconds !== roundedTrackedSeconds;
+
   return (
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal">
@@ -865,8 +874,28 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 500 }}>{task.name}</div>
-            <div className="cb-mono" style={{ fontSize: 24, fontWeight: 600, marginTop: 8, color: "var(--green)" }}>{formatHM(total)}</div>
-            <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>{decimalHours(total)} hours, {task.role || "no role set"}, {task.task_type || "no task type set"}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 4 }}>{task.role || "no role set"}, {task.task_type || "no task type set"}</div>
+          </div>
+          <div className="cb-field">
+            <label className="cb-label">Time to record</label>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <input
+                type="number" min="0" className="cb-input" style={{ width: 80 }}
+                value={hours} onChange={(e) => setHours(e.target.value)}
+              />
+              <span style={{ color: "var(--ink-soft)" }}>h</span>
+              <input
+                type="number" min="0" max="59" className="cb-input" style={{ width: 80 }}
+                value={minutes} onChange={(e) => setMinutes(e.target.value)}
+              />
+              <span style={{ color: "var(--ink-soft)" }}>m</span>
+            </div>
+            <div className="cb-hint">
+              Tracked: {formatHM(total)} ({decimalHours(total)}h){isAdjusted ? ", you are changing this" : ""}
+            </div>
+            {isAdjusted && (
+              <div className="cb-hint">The tracked time is kept on record either way, it helps to explain the change in the note below.</div>
+            )}
           </div>
           {needsCount && (
             <div className="cb-field">
@@ -886,7 +915,10 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsCount && endCount === "")}
-            onClick={async () => { setBusy(true); await onSubmit(task.id, note, needsCount ? parseInt(endCount, 10) : null); }}
+            onClick={async () => {
+              setBusy(true);
+              await onSubmit(task.id, note, needsCount ? parseInt(endCount, 10) : null, isAdjusted ? editedSeconds : null);
+            }}
           >
             <CheckCircle2 size={14} />Submit
           </button>
@@ -1436,7 +1468,9 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
       })
       .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))
       .map((t) => {
-        const secs = elapsedSeconds(t, now);
+        const trackedSecs = elapsedSeconds(t, now);
+        const isAdjusted = t.adjusted_seconds != null;
+        const finalSecs = isAdjusted ? t.adjusted_seconds : trackedSecs;
         const trackedBy = (members.find((m) => m.id === t.submitted_by_id) || {}).name || "none";
         const hasCount = t.start_count != null && t.end_count != null;
         return {
@@ -1446,8 +1480,11 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
           task: t.name,
           role: t.role,
           taskType: t.task_type,
-          decHours: decimalHours(secs),
-          hm: formatHM(secs),
+          decHours: decimalHours(finalSecs),
+          hm: formatHM(finalSecs),
+          isAdjusted,
+          trackedHm: isAdjusted ? formatHM(trackedSecs) : "",
+          trackedDecHours: isAdjusted ? decimalHours(trackedSecs) : "",
           note: t.note,
           trackedBy,
           pushed: !!t.pushed_to_karbon,
@@ -1465,7 +1502,8 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
   function copyRow(r) {
     const countPart = r.change != null ? ` | ${r.metric}: ${r.startCount} to ${r.endCount} (${r.change > 0 ? "+" : ""}${r.change})` : "";
     const bankPart = r.bankAccount ? ` | ${r.bankAccount}` : "";
-    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.taskType || "none"} | ${r.hm} (${r.decHours}h)${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
+    const adjustedPart = r.isAdjusted ? ` | tracked ${r.trackedHm}, adjusted to ${r.hm}` : "";
+    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.taskType || "none"} | ${r.hm} (${r.decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1600); }
     });
@@ -1547,13 +1585,13 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
           <thead>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th>
-              <th className="num">Duration</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
+              <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
               <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={isAdmin ? 14 : 13}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
+              <tr><td colSpan={isAdmin ? 15 : 14}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
             {rows.map((r) => (
               <tr key={r.id}>
@@ -1562,7 +1600,8 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
                 <td>{r.task}</td>
                 <td>{r.role || "none"}</td>
                 <td>{r.taskType || "none"}</td>
-                <td className="num cb-mono">{r.hm}</td>
+                <td className="num cb-mono">{r.hm}{r.isAdjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
+                <td className="num cb-mono">{r.isAdjusted ? r.trackedHm : ""}</td>
                 <td>{r.bankAccount || "none"}</td>
                 <td>{r.metric || "none"}</td>
                 <td className="num cb-mono">
@@ -2109,9 +2148,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note, endCount) {
+  async function submitCompletion(taskId, note, endCount, adjustedSeconds) {
     try {
-      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null);
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
