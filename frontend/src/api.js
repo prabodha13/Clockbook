@@ -50,6 +50,9 @@ export const api = {
   exportRows: (clientId, pushed) => request(`/export?client_id=${clientId}&pushed=${pushed}`),
 };
 
-export function exportCsvUrl(clientId, pushed) {
-  return `${BASE}/export.csv?client_id=${encodeURIComponent(clientId)}&pushed=${encodeURIComponent(pushed)}`;
+export function exportCsvUrl(clientId, pushed, dateFrom, dateTo) {
+  const params = new URLSearchParams({ client_id: clientId, pushed });
+  if (dateFrom) params.set("date_from", dateFrom);
+  if (dateTo) params.set("date_to", dateTo);
+  return `${BASE}/export.csv?${params.toString()}`;
 }
