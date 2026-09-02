@@ -230,7 +230,7 @@ html, body, #root {
 .cb-tmpl-task-block .cb-tmpl-task-row { border-bottom: none; padding-bottom: 2px; }
 .cb-tmpl-task-options { display: flex; align-items: center; gap: 14px; padding: 0 16px 10px; flex-wrap: wrap; }
 .cb-tmpl-task-option-checkbox { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-soft); white-space: nowrap; cursor: pointer; }
-.cb-tmpl-task-tracks-input { font-size: 12.5px; padding: 6px 9px; flex: 1; min-width: 180px; }
+.cb-tmpl-task-tracks-input { font-size: 12.5px; padding: 6px 9px; width: auto; max-width: 240px; flex: none; }
 
 /* Tables */
 .cb-table-wrap { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: auto; }
