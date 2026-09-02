@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect, text
+from sqlalchemy import inspect, text, or_
 
 from database import get_db, engine, Base
 import models
@@ -309,6 +309,29 @@ def set_member_credentials(member_id: str, payload: schemas.LoginRequest, curren
     db.commit()
     db.refresh(member)
     return member
+
+
+@app.delete("/api/members/{member_id}", status_code=204)
+def delete_member(member_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    if member_id == current_member.id:
+        raise HTTPException(400, "You cannot delete your own account")
+    member = db.get(models.Member, member_id)
+    if not member:
+        return None
+    if member.role == "admin":
+        admin_count = db.query(models.Member).filter(models.Member.role == "admin").count()
+        if admin_count <= 1:
+            raise HTTPException(400, "At least one admin is required")
+    has_tasks = db.query(models.TaskInstance).filter(
+        or_(models.TaskInstance.owner_id == member_id, models.TaskInstance.submitted_by_id == member_id)
+    ).count()
+    if has_tasks > 0:
+        raise HTTPException(400, "This person has tracked tasks and cannot be deleted")
+    db.query(models.Session).filter(models.Session.member_id == member_id).delete()
+    db.delete(member)
+    db.commit()
+    return None
 
 
 # ---------------------------------------------------------------
