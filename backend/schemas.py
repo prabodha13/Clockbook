@@ -13,7 +13,7 @@ class MemberOut(BaseModel):
     id: str
     name: str
     color_idx: int
-    role: str
+    role: str = "staff"
 
 
 class MemberCreate(BaseModel):
