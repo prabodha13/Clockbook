@@ -90,6 +90,17 @@ html, body, #root {
 }
 .cb-user-dropdown-item:hover { background: var(--paper); }
 .cb-user-dropdown-divider { height: 1px; background: var(--line); margin: 4px 0; }
+.cb-user-dropdown-row { display: flex; align-items: center; }
+.cb-user-dropdown-row .cb-user-dropdown-item { flex: 1; }
+.cb-role-badge {
+  font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em;
+  background: var(--green-soft); color: var(--green); border-radius: 20px; padding: 1px 7px; flex-shrink: 0;
+}
+.cb-role-toggle {
+  font-size: 11px; color: var(--ink-faint); background: transparent; border: none; cursor: pointer;
+  padding: 4px 10px 4px 0; white-space: nowrap; flex-shrink: 0;
+}
+.cb-role-toggle:hover { color: var(--ink); text-decoration: underline; }
 
 .cb-content { padding: 26px; flex: 1; overflow: auto; }
 
