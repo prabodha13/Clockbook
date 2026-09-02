@@ -868,6 +868,76 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
+function TemplateTaskEditor({ template, task, onUpdateTask, onDeleteTask }) {
+  const [name, setName] = useState(task.name);
+  const [role, setRole] = useState(task.role);
+  const [taskType, setTaskType] = useState(task.task_type);
+  const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
+
+  useEffect(() => { setName(task.name); }, [task.name]);
+  useEffect(() => { setRole(task.role); }, [task.role]);
+  useEffect(() => { setTaskType(task.task_type); }, [task.task_type]);
+  useEffect(() => { setTracksLabel(task.tracks_number_label); }, [task.tracks_number_label]);
+
+  function saveField(field, value) {
+    if (value === task[field]) return; // nothing actually changed, skip a wasted request
+    onUpdateTask(template.id, task.id, {
+      name: field === "name" ? value : name,
+      role: field === "role" ? value : role,
+      task_type: field === "task_type" ? value : taskType,
+      requires_bank_account: task.requires_bank_account,
+      tracks_number_label: field === "tracks_number_label" ? value : tracksLabel,
+    });
+  }
+
+  function saveOnEnter(e, field, value) {
+    if (e.key === "Enter") e.target.blur();
+  }
+
+  function toggleRequiresBankAccount(checked) {
+    onUpdateTask(template.id, task.id, {
+      name, role, task_type: taskType, requires_bank_account: checked, tracks_number_label: tracksLabel,
+    });
+  }
+
+  return (
+    <div className="cb-tmpl-task-block">
+      <div className="cb-tmpl-task-row">
+        <input
+          className="cb-input" value={name} onChange={(e) => setName(e.target.value)}
+          onBlur={(e) => saveField("name", e.target.value)} onKeyDown={(e) => saveOnEnter(e, "name")}
+        />
+        <input
+          className="cb-input" placeholder="Role" value={role} onChange={(e) => setRole(e.target.value)}
+          onBlur={(e) => saveField("role", e.target.value)} onKeyDown={(e) => saveOnEnter(e, "role")}
+        />
+        <input
+          className="cb-input" placeholder="Task type" value={taskType} onChange={(e) => setTaskType(e.target.value)}
+          onBlur={(e) => saveField("task_type", e.target.value)} onKeyDown={(e) => saveOnEnter(e, "task_type")}
+        />
+        <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
+      </div>
+      <div className="cb-tmpl-task-options">
+        <label className="cb-tmpl-task-option-checkbox">
+          <input
+            type="checkbox" className="cb-checkbox" checked={!!task.requires_bank_account}
+            onChange={(e) => toggleRequiresBankAccount(e.target.checked)}
+          />
+          Requires a bank account
+        </label>
+        <input
+          className="cb-input cb-tmpl-task-tracks-input"
+          placeholder="Tracks a number, e.g. Unreconciled transactions"
+          value={tracksLabel}
+          onChange={(e) => setTracksLabel(e.target.value)}
+          onBlur={(e) => saveField("tracks_number_label", e.target.value)}
+          onKeyDown={(e) => saveOnEnter(e, "tracks_number_label")}
+        />
+      </div>
+    </div>
+  );
+}
+
 function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
   const [expanded, setExpanded] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
@@ -876,14 +946,6 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
   const [tType, setTType] = useState("");
   const [tRequiresBank, setTRequiresBank] = useState(false);
   const [tTracksLabel, setTTracksLabel] = useState("");
-
-  function patchTask(t, patch) {
-    onUpdateTask(template.id, t.id, {
-      name: t.name, role: t.role, task_type: t.task_type,
-      requires_bank_account: t.requires_bank_account, tracks_number_label: t.tracks_number_label,
-      ...patch,
-    });
-  }
 
   async function addTask(e) {
     e.preventDefault();
@@ -917,29 +979,7 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
           )}
           {template.tasks.map((t) =>
             isAdmin ? (
-              <div key={t.id} className="cb-tmpl-task-block">
-                <div className="cb-tmpl-task-row">
-                  <input className="cb-input" value={t.name} onChange={(e) => patchTask(t, { name: e.target.value })} />
-                  <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => patchTask(t, { role: e.target.value })} />
-                  <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => patchTask(t, { task_type: e.target.value })} />
-                  <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
-                </div>
-                <div className="cb-tmpl-task-options">
-                  <label className="cb-tmpl-task-option-checkbox">
-                    <input
-                      type="checkbox" className="cb-checkbox" checked={!!t.requires_bank_account}
-                      onChange={(e) => patchTask(t, { requires_bank_account: e.target.checked })}
-                    />
-                    Requires a bank account
-                  </label>
-                  <input
-                    className="cb-input cb-tmpl-task-tracks-input"
-                    placeholder="Tracks a number, e.g. Unreconciled transactions"
-                    value={t.tracks_number_label}
-                    onChange={(e) => patchTask(t, { tracks_number_label: e.target.value })}
-                  />
-                </div>
-              </div>
+              <TemplateTaskEditor key={t.id} template={template} task={t} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} />
             ) : (
               <div className="cb-row" key={t.id}>
                 <div className="cb-row-main">
