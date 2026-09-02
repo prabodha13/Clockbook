@@ -40,7 +40,7 @@ export const api = {
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
   startTask: (id, ownerId) => request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify({ owner_id: ownerId }) }),
-  pauseTask: (id) => request(`/tasks/${id}/pause`, { method: "POST" }),
+  pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   submitTask: (id, note) => request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note }) }),
   reassignTask: (id, ownerId) =>
     request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId }) }),

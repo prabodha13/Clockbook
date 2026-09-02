@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet,
@@ -771,6 +771,39 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   );
 }
 
+function niceDuration(ms) {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function SleepAlertModal({ alert, onKeep, onRemoveIdleTime }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="cb-overlay">
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Welcome back</div>
+        </div>
+        <div className="cb-modal-body">
+          <div style={{ marginBottom: 14, lineHeight: 1.5 }}>
+            This computer looks like it was asleep, or away from this tab, for about{" "}
+            <strong>{niceDuration(alert.gapMs)}</strong>. The timer for{" "}
+            <strong>{alert.task.client_name}: {alert.task.name}</strong> kept running the whole time.
+          </div>
+          <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keep that time as tracked, or remove the time it was away?</div>
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn" disabled={busy} onClick={onKeep}>Keep this time</button>
+          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onRemoveIdleTime(); }}>
+            Remove the idle time
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -785,6 +818,7 @@ export default function App() {
   const [showNewTask, setShowNewTask] = useState(false);
   const [completingTask, setCompletingTask] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
+  const [sleepAlert, setSleepAlert] = useState(null);
 
   useEffect(() => {
     const iv = setInterval(() => setNow(Date.now()), 1000);
@@ -832,6 +866,44 @@ export default function App() {
   }, []);
 
   const currentUser = members.find((m) => m.id === currentUserId) || null;
+  const myRunningTask = currentUser ? tasks.find((t) => t.owner_id === currentUser.id && t.status === "running") : null;
+
+  // Tracks whether this computer or tab appears to have been asleep or inactive for a while.
+  // Browsers give web pages no direct "the machine slept" event, so this compares how much
+  // time actually passed against how much was expected between checks. A gap far larger than
+  // expected almost always means the laptop slept or the browser was fully backgrounded.
+  const runningTaskRef = useRef(null);
+  useEffect(() => { runningTaskRef.current = myRunningTask || null; }, [myRunningTask]);
+
+  useEffect(() => {
+    const HEARTBEAT_MS = 3000;
+    const SLEEP_THRESHOLD_MS = 20000;
+    let lastTick = Date.now();
+    const iv = setInterval(() => {
+      const nowTick = Date.now();
+      const gap = nowTick - lastTick;
+      const sleepStart = lastTick;
+      lastTick = nowTick;
+      if (gap > SLEEP_THRESHOLD_MS) {
+        const task = runningTaskRef.current;
+        if (task) {
+          setSleepAlert({ task, gapMs: gap, sleepStartMs: sleepStart });
+          if ("Notification" in window && Notification.permission === "granted") {
+            try {
+              const n = new Notification("Clockbook", {
+                body: `Timer for ${task.client_name}: ${task.name} kept running for about ${niceDuration(gap)} while this computer was away.`,
+                tag: "clockbook-sleep-alert",
+              });
+              n.onclick = () => window.focus();
+            } catch (e) {
+              // Some platforms restrict the Notification constructor, safe to ignore
+            }
+          }
+        }
+      }
+    }, HEARTBEAT_MS);
+    return () => clearInterval(iv);
+  }, []);
 
   async function createMember(name) {
     try {
@@ -856,6 +928,10 @@ export default function App() {
 
   async function startTask(taskId) {
     if (!currentUser) return;
+    if ("Notification" in window && Notification.permission === "default") {
+      // Tied to this click so the browser treats it as a genuine user request, not spam
+      Notification.requestPermission();
+    }
     try {
       await api.startTask(taskId, currentUser.id);
       await refreshTasks();
@@ -864,9 +940,9 @@ export default function App() {
     }
   }
 
-  async function pauseTask(taskId) {
+  async function pauseTask(taskId, endAt) {
     try {
-      await api.pauseTask(taskId);
+      await api.pauseTask(taskId, endAt);
       await refreshTasks();
     } catch (err) {
       showToast(err.message, true);
@@ -974,8 +1050,6 @@ export default function App() {
     return <div className="cb-root"><FirstRun onCreate={createMember} /></div>;
   }
 
-  const myRunningTask = tasks.find((t) => t.owner_id === currentUser.id && t.status === "running");
-
   return (
     <div className="cb-root">
       <div className="cb-shell">
@@ -1027,6 +1101,17 @@ export default function App() {
       )}
       {showAddMember && (
         <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={createMember} />
+      )}
+      {sleepAlert && (
+        <SleepAlertModal
+          alert={sleepAlert}
+          onKeep={() => setSleepAlert(null)}
+          onRemoveIdleTime={async () => {
+            await pauseTask(sleepAlert.task.id, new Date(sleepAlert.sleepStartMs).toISOString());
+            setSleepAlert(null);
+            showToast("Idle time removed from the timer");
+          }}
+        />
       )}
       {toast && <div className={`cb-toast ${toast.isError ? "error" : ""}`}>{toast.msg}</div>}
     </div>
