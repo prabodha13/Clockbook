@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "rea
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
-  CheckCircle2, StickyNote, ClipboardList, LogOut,
+  CheckCircle2, StickyNote, ClipboardList, LogOut, Settings,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -256,13 +256,14 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView }) {
+function Sidebar({ view, setView, isAdmin }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
     { id: "clients", label: "Clients", icon: Building2 },
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
+    ...(isAdmin ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
     <div className="cb-sidebar">
@@ -501,6 +502,14 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     return first && first.tasks[0] ? [first.tasks[0].id] : [];
   });
   const [bankAccountByTaskId, setBankAccountByTaskId] = useState({});
+  const [roleByTaskId, setRoleByTaskId] = useState(() => {
+    const firstTask = templates[0] && templates[0].tasks[0];
+    return firstTask ? { [firstTask.id]: firstTask.role || "" } : {};
+  });
+  const [taskTypeByTaskId, setTaskTypeByTaskId] = useState(() => {
+    const firstTask = templates[0] && templates[0].tasks[0];
+    return firstTask ? { [firstTask.id]: firstTask.task_type || "" } : {};
+  });
 
   const [customName, setCustomName] = useState("");
   const [role, setRole] = useState("");
@@ -527,20 +536,25 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
   function pickTemplate(id) {
     setTemplateId(id);
     const tpl = templates.find((t) => t.id === id);
-    setSelectedTaskIds(tpl && tpl.tasks[0] ? [tpl.tasks[0].id] : []);
+    const firstTask = tpl && tpl.tasks[0];
+    setSelectedTaskIds(firstTask ? [firstTask.id] : []);
     setBankAccountByTaskId({});
+    setRoleByTaskId(firstTask ? { [firstTask.id]: firstTask.role || "" } : {});
+    setTaskTypeByTaskId(firstTask ? { [firstTask.id]: firstTask.task_type || "" } : {});
   }
 
   function toggleTaskId(id) {
     setSelectedTaskIds((prev) => {
       if (prev.includes(id)) {
-        setBankAccountByTaskId((m) => {
-          const next = { ...m };
-          delete next[id];
-          return next;
-        });
+        setBankAccountByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
+        setRoleByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
+        setTaskTypeByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         return prev.filter((x) => x !== id);
       }
+      // Pre-fill from the template task's own values, still changeable below
+      const t = selectedTemplate && selectedTemplate.tasks.find((x) => x.id === id);
+      setRoleByTaskId((m) => ({ ...m, [id]: t ? t.role || "" : "" }));
+      setTaskTypeByTaskId((m) => ({ ...m, [id]: t ? t.task_type || "" : "" }));
       return [...prev, id];
     });
   }
@@ -575,12 +589,22 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             setBusy(false);
             return;
           }
+          if (!roleByTaskId[t.id]) {
+            setError(`Select a role for "${t.name}"`);
+            setBusy(false);
+            return;
+          }
+          if (!taskTypeByTaskId[t.id]) {
+            setError(`Select a task type for "${t.name}"`);
+            setBusy(false);
+            return;
+          }
         }
         payloads = chosenTasks.map((t) => {
           const account = t.requires_bank_account ? bankAccounts.find((a) => a.id === bankAccountByTaskId[t.id]) : null;
           return {
             client_id: cId, client_name: cName, name: t.name,
-            role: t.role, task_type: t.task_type, owner_id: ownerId,
+            role: roleByTaskId[t.id], task_type: taskTypeByTaskId[t.id], owner_id: ownerId,
             bank_account_id: account ? account.id : null,
             bank_account_name: account ? account.name : "",
             tracks_number_label: t.tracks_number_label || "",
@@ -589,6 +613,16 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
       } else {
         const name = customName.trim();
         if (!name) { setBusy(false); return; }
+        if (!role) {
+          setError("Select a role");
+          setBusy(false);
+          return;
+        }
+        if (!taskType) {
+          setError("Select a task type");
+          setBusy(false);
+          return;
+        }
         payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId }];
       }
 
@@ -663,6 +697,26 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                                 {t.requires_bank_account ? " \u00b7 needs a bank account" : ""}
                                 {t.tracks_number_label ? ` \u00b7 tracks ${t.tracks_number_label.toLowerCase()}` : ""}
                               </div>
+                              {checked && !disabledForNewClient && (
+                                <div className="cb-field-row" style={{ marginTop: 6 }}>
+                                  <select
+                                    className="cb-select"
+                                    value={roleByTaskId[t.id] || ""}
+                                    onChange={(e) => setRoleByTaskId((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                  >
+                                    <option value="">Select a role</option>
+                                    {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                                  </select>
+                                  <select
+                                    className="cb-select"
+                                    value={taskTypeByTaskId[t.id] || ""}
+                                    onChange={(e) => setTaskTypeByTaskId((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                  >
+                                    <option value="">Select a task type</option>
+                                    {taskTypes.map((tt) => <option key={tt.id} value={tt.name}>{tt.name}</option>)}
+                                  </select>
+                                </div>
+                              )}
                               {checked && t.requires_bank_account && !disabledForNewClient && (
                                 <select
                                   className="cb-select"
@@ -696,14 +750,14 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                 <div className="cb-field">
                   <label className="cb-label">Karbon role</label>
                   <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
-                    <option value="">No role</option>
+                    <option value="">Select a role</option>
                     {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
                   </select>
                 </div>
                 <div className="cb-field">
                   <label className="cb-label">Karbon task type</label>
                   <select className="cb-select" value={taskType} onChange={(e) => setTaskType(e.target.value)}>
-                    <option value="">No task type</option>
+                    <option value="">Select a task type</option>
                     {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                   </select>
                 </div>
@@ -1040,8 +1094,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, onAddTask, onUpda
   );
 }
 
-function RoleTaskTypeManager({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType }) {
-  const [expanded, setExpanded] = useState(false);
+function SettingsView({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType }) {
   const [newRole, setNewRole] = useState("");
   const [newTaskType, setNewTaskType] = useState("");
   const [error, setError] = useState("");
@@ -1071,15 +1124,20 @@ function RoleTaskTypeManager({ roles, taskTypes, onAddRole, onDeleteRole, onAddT
   }
 
   return (
-    <div className="cb-tmpl-card">
-      <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
+    <div>
+      <div className="cb-page-head">
         <div>
-          <div className="cb-tmpl-field">Setup</div>
-          <div className="cb-tmpl-name">Roles and task types</div>
+          <div className="cb-page-title cb-serif">Settings</div>
+          <div className="cb-page-sub">The fixed lists everyone picks from when setting up templates or logging a task.</div>
         </div>
-        <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
-      </button>
-      {expanded && (
+      </div>
+      <div className="cb-tmpl-card">
+        <div className="cb-tmpl-head">
+          <div>
+            <div className="cb-tmpl-field">Setup</div>
+            <div className="cb-tmpl-name">Roles and task types</div>
+          </div>
+        </div>
         <div style={{ padding: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Roles</div>
@@ -1111,15 +1169,12 @@ function RoleTaskTypeManager({ roles, taskTypes, onAddRole, onDeleteRole, onAddT
           </div>
           {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
         </div>
-      )}
+      </div>
     </div>
   );
 }
 
-function Templates({
-  templates, isAdmin, roles, taskTypes, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate,
-  onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
-}) {
+function Templates({ templates, isAdmin, roles, taskTypes, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -1142,13 +1197,6 @@ function Templates({
           <button className="cb-btn cb-btn-primary" onClick={() => setShowNew((v) => !v)}><Plus size={15} />New template</button>
         )}
       </div>
-
-      {isAdmin && (
-        <RoleTaskTypeManager
-          roles={roles} taskTypes={taskTypes}
-          onAddRole={onAddRole} onDeleteRole={onDeleteRole} onAddTaskType={onAddTaskType} onDeleteTaskType={onDeleteTaskType}
-        />
-      )}
 
       {showNew && (
         <form className="cb-tmpl-card" onSubmit={submitNew} style={{ padding: 16 }}>
@@ -2096,7 +2144,7 @@ export default function App() {
   return (
     <div className="cb-root">
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} />
         <div className="cb-main">
           <TopBar
             currentUser={currentUser}
@@ -2122,7 +2170,6 @@ export default function App() {
                 templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes}
                 onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
                 onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate}
-                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
               />
             )}
             {view === "clients" && (
@@ -2139,6 +2186,12 @@ export default function App() {
                 members={members} currentUser={currentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onSetCredentials={setMemberCredentials}
+              />
+            )}
+            {view === "settings" && isAdmin && (
+              <SettingsView
+                roles={roles} taskTypes={taskTypes}
+                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
               />
             )}
           </div>
