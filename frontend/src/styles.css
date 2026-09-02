@@ -92,6 +92,11 @@ html, body, #root {
 .cb-user-dropdown-divider { height: 1px; background: var(--line); margin: 4px 0; }
 
 .cb-content { padding: 26px; flex: 1; overflow: auto; }
+
+.cb-notice {
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  background: var(--green-soft); border-bottom: 1px solid #C7DED2; padding: 10px 26px; font-size: 13px; color: var(--ink);
+}
 .cb-page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 18px; gap: 12px; flex-wrap: wrap; }
 .cb-page-title { font-size: 22px; font-weight: 500; }
 .cb-page-sub { font-size: 13px; color: var(--ink-soft); margin-top: 2px; max-width: 620px; }

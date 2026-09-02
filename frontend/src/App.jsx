@@ -777,6 +777,18 @@ function niceDuration(ms) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
+function AlertsBanner({ onEnable, onDismiss }) {
+  return (
+    <div className="cb-notice">
+      <span>Turn on alerts so Clockbook can reach you even if you are on a different tab or app when a timer gets paused.</span>
+      <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+        <button className="cb-btn cb-btn-sm cb-btn-primary" onClick={onEnable}>Enable alerts</button>
+        <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={onDismiss}>Not now</button>
+      </div>
+    </div>
+  );
+}
+
 function SleepAlertModal({ alert, onDismiss, onResume }) {
   const [busy, setBusy] = useState(false);
   return (
@@ -819,6 +831,7 @@ export default function App() {
   const [completingTask, setCompletingTask] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
   const [sleepAlert, setSleepAlert] = useState(null);
+  const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
 
   useEffect(() => {
     const iv = setInterval(() => setNow(Date.now()), 1000);
@@ -904,6 +917,7 @@ export default function App() {
         const n = new Notification("Clockbook", {
           body: `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`,
           tag: "clockbook-sleep-alert",
+          requireInteraction: true,
         });
         n.onclick = () => window.focus();
       } catch (e) {
@@ -968,6 +982,14 @@ export default function App() {
     } catch (err) {
       // Permission denied, unsupported context, or not triggered by a user gesture
     }
+  }
+
+  function handleEnableAlerts() {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+    enableIdleDetection();
+    setAlertsBannerDismissed(true);
   }
 
   async function createMember(name) {
@@ -1131,6 +1153,9 @@ export default function App() {
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
             onComplete={() => myRunningTask && setCompletingTask(myRunningTask)}
           />
+          {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
+            <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
+          )}
           <div className="cb-content">
             {view === "dashboard" && (
               <Dashboard
