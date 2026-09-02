@@ -54,6 +54,26 @@ class ClientCreate(BaseModel):
     name: str
 
 
+class RoleOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class RoleCreate(BaseModel):
+    name: str
+
+
+class TaskTypeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class TaskTypeCreate(BaseModel):
+    name: str
+
+
 class BankAccountOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

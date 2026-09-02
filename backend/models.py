@@ -40,6 +40,18 @@ class BankAccount(Base):
     name = Column(String, nullable=False)
 
 
+class Role(Base):
+    __tablename__ = "roles"
+    id = Column(String, primary_key=True, default=lambda: gen_id("role"))
+    name = Column(String, nullable=False, unique=True)
+
+
+class TaskTypeOption(Base):
+    __tablename__ = "task_type_options"
+    id = Column(String, primary_key=True, default=lambda: gen_id("tto"))
+    name = Column(String, nullable=False, unique=True)
+
+
 class Template(Base):
     __tablename__ = "templates"
     id = Column(String, primary_key=True, default=lambda: gen_id("tpl"))

@@ -29,6 +29,9 @@ DEFAULT_TEMPLATE = {
     ],
 }
 
+DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
+DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query"]
+
 
 def run_startup_migrations():
     # Base.metadata.create_all only creates tables that do not exist yet, it never adds a
@@ -86,6 +89,14 @@ async def lifespan(app: FastAPI):
                 db.add(models.TemplateTask(
                     template_id=tpl.id, name=t["name"], role=t["role"], task_type=t["task_type"]
                 ))
+            db.commit()
+        if db.query(models.Role).count() == 0:
+            for name in DEFAULT_ROLES:
+                db.add(models.Role(name=name))
+            db.commit()
+        if db.query(models.TaskTypeOption).count() == 0:
+            for name in DEFAULT_TASK_TYPES:
+                db.add(models.TaskTypeOption(name=name))
             db.commit()
     finally:
         db.close()
@@ -353,6 +364,66 @@ def delete_bank_account(account_id: str, current_member: models.Member = Depends
     account = db.get(models.BankAccount, account_id)
     if account:
         db.delete(account)
+        db.commit()
+    return None
+
+
+# ---------------------------------------------------------------
+# Roles and task types
+# ---------------------------------------------------------------
+
+@app.get("/api/roles", response_model=list[schemas.RoleOut])
+def list_roles(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return db.query(models.Role).order_by(models.Role.name).all()
+
+
+@app.post("/api/roles", response_model=schemas.RoleOut, status_code=201)
+def create_role(payload: schemas.RoleCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    name = payload.name.strip()
+    if db.query(models.Role).filter(models.Role.name == name).first():
+        raise HTTPException(400, "That role already exists")
+    role = models.Role(name=name)
+    db.add(role)
+    db.commit()
+    db.refresh(role)
+    return role
+
+
+@app.delete("/api/roles/{role_id}", status_code=204)
+def delete_role(role_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    role = db.get(models.Role, role_id)
+    if role:
+        db.delete(role)
+        db.commit()
+    return None
+
+
+@app.get("/api/task-types", response_model=list[schemas.TaskTypeOut])
+def list_task_types(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return db.query(models.TaskTypeOption).order_by(models.TaskTypeOption.name).all()
+
+
+@app.post("/api/task-types", response_model=schemas.TaskTypeOut, status_code=201)
+def create_task_type(payload: schemas.TaskTypeCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    name = payload.name.strip()
+    if db.query(models.TaskTypeOption).filter(models.TaskTypeOption.name == name).first():
+        raise HTTPException(400, "That task type already exists")
+    task_type = models.TaskTypeOption(name=name)
+    db.add(task_type)
+    db.commit()
+    db.refresh(task_type)
+    return task_type
+
+
+@app.delete("/api/task-types/{task_type_id}", status_code=204)
+def delete_task_type(task_type_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    task_type = db.get(models.TaskTypeOption, task_type_id)
+    if task_type:
+        db.delete(task_type)
         db.commit()
     return None
 
