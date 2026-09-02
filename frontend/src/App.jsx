@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
-  ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet,
+  ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList,
 } from "lucide-react";
 import { api, exportCsvUrl } from "./api.js";
@@ -171,6 +171,7 @@ function Sidebar({ view, setView }) {
     { id: "templates", label: "Templates", icon: ListTree },
     { id: "clients", label: "Clients", icon: Building2 },
     { id: "export", label: "Export", icon: FileSpreadsheet },
+    { id: "staff", label: "Staff", icon: Users },
   ];
   return (
     <div className="cb-sidebar">
@@ -191,7 +192,7 @@ function Sidebar({ view, setView }) {
   );
 }
 
-function TopBar({ currentUser, members, onSwitch, onAddMember, onChangeRole, runningTask, now, onPause, onComplete }) {
+function TopBar({ currentUser, members, onSwitch, runningTask, now, onPause, onComplete }) {
   const [open, setOpen] = useState(false);
   const isAdmin = currentUser.role === "admin";
   const elapsed = runningTask ? elapsedSeconds(runningTask, now) : 0;
@@ -223,33 +224,13 @@ function TopBar({ currentUser, members, onSwitch, onAddMember, onChangeRole, run
         {open && (
           <div className="cb-user-dropdown" onMouseLeave={() => setOpen(false)}>
             {members.map((m) => (
-              <div key={m.id} className="cb-user-dropdown-row">
-                <button className="cb-user-dropdown-item" onClick={() => { onSwitch(m.id); setOpen(false); }}>
-                  <Avatar member={m} size={20} />
-                  {m.name}
-                  {m.role === "admin" && <span className="cb-role-badge">Admin</span>}
-                  {m.id === currentUser.id && <CheckCircle2 size={13} style={{ marginLeft: "auto", color: "var(--green)" }} />}
-                </button>
-                {isAdmin && (
-                  <button
-                    className="cb-role-toggle"
-                    title={m.role === "admin" ? "Remove admin" : "Make admin"}
-                    onClick={() => onChangeRole(m.id, m.role === "admin" ? "member" : "admin")}
-                  >
-                    {m.role === "admin" ? "Remove admin" : "Make admin"}
-                  </button>
-                )}
-              </div>
+              <button key={m.id} className="cb-user-dropdown-item" onClick={() => { onSwitch(m.id); setOpen(false); }}>
+                <Avatar member={m} size={20} />
+                {m.name}
+                {m.role === "admin" && <span className="cb-role-badge">Admin</span>}
+                {m.id === currentUser.id && <CheckCircle2 size={13} style={{ marginLeft: "auto", color: "var(--green)" }} />}
+              </button>
             ))}
-            {isAdmin && (
-              <>
-                <div className="cb-user-dropdown-divider" />
-                <button className="cb-user-dropdown-item" onClick={() => { onAddMember(); setOpen(false); }}>
-                  <Plus size={14} />
-                  Add teammate
-                </button>
-              </>
-            )}
           </div>
         )}
       </div>
@@ -1084,6 +1065,43 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   );
 }
 
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole }) {
+  return (
+    <div>
+      <div className="cb-page-head">
+        <div>
+          <div className="cb-page-title cb-serif">Staff</div>
+          <div className="cb-page-sub">Everyone with access to this workspace, and who has admin rights.</div>
+        </div>
+        {isAdmin && (
+          <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Add teammate</button>
+        )}
+      </div>
+      <div className="cb-card-list">
+        {members.map((m) => (
+          <div className="cb-row" key={m.id}>
+            <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <Avatar member={m} size={28} />
+              <div>
+                <div className="cb-row-task">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
+                <div className="cb-row-meta">{m.role === "admin" ? "Admin" : "Member"}</div>
+              </div>
+            </div>
+            {isAdmin && (
+              <button
+                className="cb-role-toggle"
+                onClick={() => onChangeRole(m.id, m.role === "admin" ? "member" : "admin")}
+              >
+                {m.role === "admin" ? "Remove admin" : "Make admin"}
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function niceDuration(ms) {
   const minutes = Math.round(ms / 60000);
   if (minutes < 60) return `${minutes}m`;
@@ -1504,8 +1522,6 @@ export default function App() {
             currentUser={currentUser}
             members={members}
             onSwitch={switchUser}
-            onAddMember={() => setShowAddMember(true)}
-            onChangeRole={changeMemberRole}
             runningTask={myRunningTask}
             now={now}
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
@@ -1534,6 +1550,12 @@ export default function App() {
             )}
             {view === "export" && (
               <ExportView tasks={tasks} members={members} clients={clients} now={now} onTogglePushed={togglePushed} />
+            )}
+            {view === "staff" && (
+              <StaffView
+                members={members} currentUser={currentUser} isAdmin={isAdmin}
+                onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
+              />
             )}
           </div>
         </div>
