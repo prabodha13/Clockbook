@@ -3,7 +3,7 @@ import csv
 import secrets
 import bcrypt
 from io import StringIO
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Header
@@ -576,7 +576,17 @@ def delete_template_task(template_id: str, task_id: str, current_member: models.
 
 @app.get("/api/tasks", response_model=list[schemas.TaskOut])
 def list_tasks(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    query = db.query(models.TaskInstance)
+    # The dashboard only ever needs work that is still active, plus whatever was submitted
+    # recently. Without this, every task ever submitted stays in this response forever, and
+    # this endpoint is polled every few seconds, so that only ever grows. The 3 day window is
+    # deliberately generous, far wider than any single timezone offset could require, so the
+    # frontend's own "is this actually today" check still decides exactly what counts,
+    # unchanged, this just avoids sending months of already-finished history along for no
+    # reason. Historical data is untouched, and Export always reaches it through /api/export.
+    recent_cutoff = datetime.utcnow() - timedelta(days=3)
+    query = db.query(models.TaskInstance).filter(
+        or_(models.TaskInstance.status != "submitted", models.TaskInstance.submitted_at >= recent_cutoff)
+    )
     if current_member.role != "admin":
         query = query.filter(models.TaskInstance.owner_id == current_member.id)
     return query.order_by(models.TaskInstance.created_at.desc()).all()
@@ -772,21 +782,24 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
     members = {m.id: m.name for m in db.query(models.Member).all()}
     rows = []
     for t in tasks:
-        tracked_hours = elapsed_seconds(t.segments) / 3600
+        tracked_seconds = elapsed_seconds(t.segments)
         is_adjusted = t.adjusted_seconds is not None
-        final_hours = (t.adjusted_seconds / 3600) if is_adjusted else tracked_hours
+        final_seconds = t.adjusted_seconds if is_adjusted else tracked_seconds
         change = None
         if t.start_count is not None and t.end_count is not None:
             change = t.end_count - t.start_count
         rows.append({
             "id": t.id,
             "date": t.submitted_at.strftime("%Y-%m-%d") if t.submitted_at else "",
+            "submitted_at": (t.submitted_at.isoformat() + "Z") if t.submitted_at else None,
             "client": t.client_name,
             "task": t.name,
             "role": t.role,
             "task_type": t.task_type,
-            "hours": round(final_hours, 2),
-            "tracked_hours": round(tracked_hours, 2) if is_adjusted else None,
+            "seconds": round(final_seconds, 1),
+            "tracked_seconds": round(tracked_seconds, 1) if is_adjusted else None,
+            "hours": round(final_seconds / 3600, 2),
+            "tracked_hours": round(tracked_seconds / 3600, 2) if is_adjusted else None,
             "adjusted": is_adjusted,
             "note": t.note,
             "tracked_by": members.get(t.submitted_by_id, ""),
