@@ -191,8 +191,9 @@ function Sidebar({ view, setView }) {
   );
 }
 
-function TopBar({ currentUser, members, onSwitch, onAddMember, runningTask, now, onPause, onComplete }) {
+function TopBar({ currentUser, members, onSwitch, onAddMember, onChangeRole, runningTask, now, onPause, onComplete }) {
   const [open, setOpen] = useState(false);
+  const isAdmin = currentUser.role === "admin";
   const elapsed = runningTask ? elapsedSeconds(runningTask, now) : 0;
   return (
     <div className="cb-topbar">
@@ -216,22 +217,39 @@ function TopBar({ currentUser, members, onSwitch, onAddMember, runningTask, now,
         <button className="cb-user-btn" onClick={() => setOpen((o) => !o)}>
           <Avatar member={currentUser} />
           {currentUser.name}
+          {isAdmin && <span className="cb-role-badge">Admin</span>}
           <ChevronDown size={14} />
         </button>
         {open && (
           <div className="cb-user-dropdown" onMouseLeave={() => setOpen(false)}>
             {members.map((m) => (
-              <button key={m.id} className="cb-user-dropdown-item" onClick={() => { onSwitch(m.id); setOpen(false); }}>
-                <Avatar member={m} size={20} />
-                {m.name}
-                {m.id === currentUser.id && <CheckCircle2 size={13} style={{ marginLeft: "auto", color: "var(--green)" }} />}
-              </button>
+              <div key={m.id} className="cb-user-dropdown-row">
+                <button className="cb-user-dropdown-item" onClick={() => { onSwitch(m.id); setOpen(false); }}>
+                  <Avatar member={m} size={20} />
+                  {m.name}
+                  {m.role === "admin" && <span className="cb-role-badge">Admin</span>}
+                  {m.id === currentUser.id && <CheckCircle2 size={13} style={{ marginLeft: "auto", color: "var(--green)" }} />}
+                </button>
+                {isAdmin && (
+                  <button
+                    className="cb-role-toggle"
+                    title={m.role === "admin" ? "Remove admin" : "Make admin"}
+                    onClick={() => onChangeRole(m.id, m.role === "admin" ? "member" : "admin")}
+                  >
+                    {m.role === "admin" ? "Remove admin" : "Make admin"}
+                  </button>
+                )}
+              </div>
             ))}
-            <div className="cb-user-dropdown-divider" />
-            <button className="cb-user-dropdown-item" onClick={() => { onAddMember(); setOpen(false); }}>
-              <Plus size={14} />
-              Add teammate
-            </button>
+            {isAdmin && (
+              <>
+                <div className="cb-user-dropdown-divider" />
+                <button className="cb-user-dropdown-item" onClick={() => { onAddMember(); setOpen(false); }}>
+                  <Plus size={14} />
+                  Add teammate
+                </button>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -241,6 +259,7 @@ function TopBar({ currentUser, members, onSwitch, onAddMember, runningTask, now,
 
 function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign }) {
   const isMine = task.owner_id === currentUser.id;
+  const isAdmin = currentUser.role === "admin";
   const elapsed = elapsedSeconds(task, now);
   const owner = members.find((m) => m.id === task.owner_id);
   return (
@@ -253,14 +272,18 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
           {task.task_type && <span>{task.task_type}</span>}
           <span>
             Owner:{" "}
-            <select
-              className="cb-owner-select"
-              value={task.owner_id || ""}
-              onChange={(e) => onReassign(task.id, e.target.value)}
-              disabled={task.status === "running"}
-            >
-              {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
+            {isAdmin ? (
+              <select
+                className="cb-owner-select"
+                value={task.owner_id || ""}
+                onChange={(e) => onReassign(task.id, e.target.value)}
+                disabled={task.status === "running"}
+              >
+                {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            ) : (
+              owner ? owner.name : "unassigned"
+            )}
           </span>
         </div>
       </div>
@@ -282,7 +305,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             Complete
           </button>
         )}
-        {task.status === "todo" && (
+        {task.status === "todo" && isAdmin && (
           <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => onDelete(task.id)}>
             <Trash2 size={14} />
           </button>
@@ -471,10 +494,15 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
             </div>
 
             <div className="cb-field">
+              <div className="cb-field">
               <label className="cb-label">Assign to</label>
-              <select className="cb-select" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
-                {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-              </select>
+              {currentUser.role === "admin" ? (
+                <select className="cb-select" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+                  {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              ) : (
+                <div className="cb-input" style={{ background: "var(--paper)", color: "var(--ink-soft)" }}>{currentUser.name} (you)</div>
+              )}
             </div>
             {error && <div className="cb-error">{error}</div>}
           </div>
@@ -550,7 +578,7 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
-function TemplateEditor({ template, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
+function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
   const [expanded, setExpanded] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
   const [tName, setTName] = useState("");
@@ -578,19 +606,30 @@ function TemplateEditor({ template, onAddTask, onUpdateTask, onDeleteTask, onDel
       </button>
       {expanded && (
         <>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 16px 0" }}>
-            <button className="cb-btn cb-btn-sm" onClick={() => setAddingTask((v) => !v)}><Plus size={13} />Task</button>
-            <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
-          </div>
-          {template.tasks.map((t) => (
-            <div className="cb-tmpl-task-row" key={t.id}>
-              <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
-              <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
-              <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
-              <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
+          {isAdmin && (
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 16px 0" }}>
+              <button className="cb-btn cb-btn-sm" onClick={() => setAddingTask((v) => !v)}><Plus size={13} />Task</button>
+              <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
             </div>
-          ))}
-          {addingTask && (
+          )}
+          {template.tasks.map((t) =>
+            isAdmin ? (
+              <div className="cb-tmpl-task-row" key={t.id}>
+                <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
+                <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
+                <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
+              </div>
+            ) : (
+              <div className="cb-row" key={t.id}>
+                <div className="cb-row-main">
+                  <div className="cb-row-task">{t.name}</div>
+                  <div className="cb-row-meta">{t.role && <span>{t.role}</span>}{t.task_type && <span>{t.task_type}</span>}</div>
+                </div>
+              </div>
+            )
+          )}
+          {isAdmin && addingTask && (
             <form className="cb-tmpl-task-row" onSubmit={addTask}>
               <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
               <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
@@ -605,7 +644,7 @@ function TemplateEditor({ template, onAddTask, onUpdateTask, onDeleteTask, onDel
   );
 }
 
-function Templates({ templates, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
+function Templates({ templates, isAdmin, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -624,7 +663,9 @@ function Templates({ templates, onAddTask, onUpdateTask, onDeleteTask, onDeleteT
           <div className="cb-page-title cb-serif">Templates</div>
           <div className="cb-page-sub">Standard task lists for each field of work, bookkeeping, payroll, tax, or anything else.</div>
         </div>
-        <button className="cb-btn cb-btn-primary" onClick={() => setShowNew((v) => !v)}><Plus size={15} />New template</button>
+        {isAdmin && (
+          <button className="cb-btn cb-btn-primary" onClick={() => setShowNew((v) => !v)}><Plus size={15} />New template</button>
+        )}
       </div>
 
       {showNew && (
@@ -651,7 +692,7 @@ function Templates({ templates, onAddTask, onUpdateTask, onDeleteTask, onDeleteT
       ) : (
         templates.map((t) => (
           <TemplateEditor
-            key={t.id} template={t}
+            key={t.id} template={t} isAdmin={isAdmin}
             onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onDeleteTemplate={onDeleteTemplate}
           />
         ))
@@ -660,7 +701,7 @@ function Templates({ templates, onAddTask, onUpdateTask, onDeleteTask, onDeleteT
   );
 }
 
-function Clients({ clients, tasks, onAdd, onDelete }) {
+function Clients({ clients, tasks, isAdmin, onAdd, onDelete }) {
   const [name, setName] = useState("");
   const [error, setError] = useState("");
 
@@ -703,14 +744,16 @@ function Clients({ clients, tasks, onAdd, onDelete }) {
                 <div className="cb-row-task">{c.name}</div>
                 <div className="cb-row-meta">{count} task{count === 1 ? "" : "s"} tracked</div>
               </div>
-              <button
-                className="cb-icon-btn cb-btn-danger"
-                title={count > 0 ? "This client has tracked tasks" : "Delete"}
-                disabled={count > 0}
-                onClick={() => handleDelete(c.id)}
-              >
-                <Trash2 size={14} />
-              </button>
+              {isAdmin && (
+                <button
+                  className="cb-icon-btn cb-btn-danger"
+                  title={count > 0 ? "This client has tracked tasks" : "Delete"}
+                  disabled={count > 0}
+                  onClick={() => handleDelete(c.id)}
+                >
+                  <Trash2 size={14} />
+                </button>
+              )}
             </div>
           );
         })}
@@ -978,6 +1021,7 @@ export default function App() {
 
   const currentUser = members.find((m) => m.id === currentUserId) || null;
   const myRunningTask = currentUser ? tasks.find((t) => t.owner_id === currentUser.id && t.status === "running") : null;
+  const isAdmin = currentUser ? currentUser.role === "admin" : false;
 
   // Watches for this computer or tab going away for a while, and pauses any running timer
   // the moment it is detected rather than waiting to ask, since by the time someone is back
@@ -1092,10 +1136,19 @@ export default function App() {
 
   async function createMember(name) {
     try {
-      const member = await api.createMember(name.trim());
+      const member = await api.createMember(name.trim(), currentUser ? currentUser.id : null);
       setMembers((prev) => [...prev, member]);
       setCurrentUserId(member.id);
       localStorage.setItem(MEMBER_ID_KEY, member.id);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function changeMemberRole(memberId, role) {
+    try {
+      const updated = await api.updateMemberRole(memberId, role, currentUser.id);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
       showToast(err.message, true);
     }
@@ -1170,7 +1223,7 @@ export default function App() {
 
   async function deleteTask(taskId) {
     try {
-      await api.deleteTask(taskId);
+      await api.deleteTask(taskId, currentUser.id);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
     } catch (err) {
       showToast(err.message, true);
@@ -1179,7 +1232,7 @@ export default function App() {
 
   async function reassignTask(taskId, ownerId) {
     try {
-      const updated = await api.reassignTask(taskId, ownerId);
+      const updated = await api.reassignTask(taskId, ownerId, currentUser.id);
       mergeTask(updated);
     } catch (err) {
       showToast(err.message, true);
@@ -1202,7 +1255,7 @@ export default function App() {
   }
 
   async function deleteClient(clientId) {
-    await api.deleteClient(clientId);
+    await api.deleteClient(clientId, currentUser.id);
     setClients((prev) => prev.filter((c) => c.id !== clientId));
   }
 
@@ -1218,23 +1271,23 @@ export default function App() {
   }
 
   async function addTemplate(field, name) {
-    await api.createTemplate(field, name);
+    await api.createTemplate(field, name, currentUser.id);
     await refreshTemplates();
   }
   async function deleteTemplate(id) {
-    await api.deleteTemplate(id);
+    await api.deleteTemplate(id, currentUser.id);
     await refreshTemplates();
   }
   async function addTemplateTask(templateId, task) {
-    await api.addTemplateTask(templateId, task);
+    await api.addTemplateTask(templateId, task, currentUser.id);
     await refreshTemplates();
   }
   async function updateTemplateTask(templateId, taskId, task) {
-    await api.updateTemplateTask(templateId, taskId, task);
+    await api.updateTemplateTask(templateId, taskId, task, currentUser.id);
     await refreshTemplates();
   }
   async function deleteTemplateTask(templateId, taskId) {
-    await api.deleteTemplateTask(templateId, taskId);
+    await api.deleteTemplateTask(templateId, taskId, currentUser.id);
     await refreshTemplates();
   }
 
@@ -1268,6 +1321,7 @@ export default function App() {
             members={members}
             onSwitch={switchUser}
             onAddMember={() => setShowAddMember(true)}
+            onChangeRole={changeMemberRole}
             runningTask={myRunningTask}
             now={now}
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
@@ -1286,13 +1340,13 @@ export default function App() {
             )}
             {view === "templates" && (
               <Templates
-                templates={templates}
+                templates={templates} isAdmin={isAdmin}
                 onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
                 onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate}
               />
             )}
             {view === "clients" && (
-              <Clients clients={clients} tasks={tasks} onAdd={addClient} onDelete={deleteClient} />
+              <Clients clients={clients} tasks={tasks} isAdmin={isAdmin} onAdd={addClient} onDelete={deleteClient} />
             )}
             {view === "export" && (
               <ExportView tasks={tasks} members={members} clients={clients} now={now} onTogglePushed={togglePushed} />
