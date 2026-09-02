@@ -542,7 +542,10 @@ def delete_template_task(template_id: str, task_id: str, current_member: models.
 
 @app.get("/api/tasks", response_model=list[schemas.TaskOut])
 def list_tasks(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return db.query(models.TaskInstance).order_by(models.TaskInstance.created_at.desc()).all()
+    query = db.query(models.TaskInstance)
+    if current_member.role != "admin":
+        query = query.filter(models.TaskInstance.owner_id == current_member.id)
+    return query.order_by(models.TaskInstance.created_at.desc()).all()
 
 
 @app.post("/api/tasks", response_model=schemas.TaskOut, status_code=201)
@@ -732,11 +735,15 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
 
 @app.get("/api/export")
 def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "admin":
+        submitted_by = current_member.id
     return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by)
 
 
 @app.get("/api/export.csv")
 def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "admin":
+        submitted_by = current_member.id
     rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by)
     buffer = StringIO()
     writer = csv.writer(buffer)
