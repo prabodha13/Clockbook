@@ -284,21 +284,26 @@ function Sidebar({ view, setView, isAdmin }) {
   );
 }
 
-function TopBar({ currentUser, onLogout, runningTask, now, onPause, onComplete }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete }) {
   const isAdmin = currentUser.role === "admin";
-  const elapsed = runningTask ? elapsedSeconds(runningTask, now) : 0;
+  const isPaused = pinnedTask && pinnedTask.status === "paused";
+  const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
   return (
     <div className="cb-topbar">
-      {runningTask ? (
-        <div className="cb-tracking">
+      {pinnedTask ? (
+        <div className={`cb-tracking${isPaused ? " paused" : ""}`}>
           <div className="cb-tracking-dot" />
           <div className="cb-tracking-text">
-            <div className="cb-tracking-label">Now tracking</div>
-            <div className="cb-tracking-name">{runningTask.client_name}: {runningTask.name}</div>
+            <div className="cb-tracking-label">{isPaused ? "Paused" : "Now tracking"}</div>
+            <div className="cb-tracking-name">{pinnedTask.client_name}: {pinnedTask.name}</div>
           </div>
           <div className="cb-tracking-time cb-mono">{formatHMS(elapsed)}</div>
           <div className="cb-tracking-actions">
-            <button className="cb-btn cb-btn-sm" onClick={onPause}><Pause size={13} />Pause</button>
+            {isPaused ? (
+              <button className="cb-btn cb-btn-sm" onClick={onResume}><Play size={13} />Resume</button>
+            ) : (
+              <button className="cb-btn cb-btn-sm" onClick={onPause}><Pause size={13} />Pause</button>
+            )}
             <button className="cb-btn cb-btn-sm cb-btn-primary" onClick={onComplete}><CheckCircle2 size={13} />Complete</button>
           </div>
         </div>
@@ -1854,6 +1859,23 @@ export default function App() {
   }, []);
 
   const myRunningTask = currentUser ? tasks.find((t) => t.owner_id === currentUser.id && t.status === "running") : null;
+
+  function lastActivityTime(task) {
+    if (!task.segments || task.segments.length === 0) return 0;
+    const last = task.segments[task.segments.length - 1];
+    return new Date(last.end || last.start).getTime();
+  }
+
+  const myMostRecentPaused = (() => {
+    if (!currentUser) return null;
+    const paused = tasks.filter((t) => t.owner_id === currentUser.id && t.status === "paused");
+    if (paused.length === 0) return null;
+    return paused.reduce((a, b) => (lastActivityTime(a) > lastActivityTime(b) ? a : b));
+  })();
+
+  // The header pins whichever task the person was last active on, running or paused, so
+  // pausing does not make it disappear, it only gets replaced once another task starts.
+  const myPinnedTask = myRunningTask || myMostRecentPaused;
   const isAdmin = currentUser ? currentUser.role === "admin" : false;
 
   // Watches for this computer or tab going away for a while, and pauses any running timer
@@ -2207,10 +2229,11 @@ export default function App() {
           <TopBar
             currentUser={currentUser}
             onLogout={handleLogout}
-            runningTask={myRunningTask}
+            pinnedTask={myPinnedTask}
             now={now}
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
-            onComplete={() => myRunningTask && setCompletingTask(myRunningTask)}
+            onResume={() => myPinnedTask && requestStart(myPinnedTask)}
+            onComplete={() => myPinnedTask && setCompletingTask(myPinnedTask)}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />

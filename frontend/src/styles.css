@@ -63,12 +63,16 @@ html, body, #root {
   display: flex; align-items: center; gap: 12px; background: var(--amber-soft);
   border: 1px solid #EBCBA3; border-radius: 6px; padding: 7px 10px 7px 14px; flex: 1; min-width: 0; max-width: 560px;
 }
+.cb-tracking.paused { background: var(--paper); border-color: var(--line-strong); }
 .cb-tracking-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex-shrink: 0; animation: cb-pulse 1.6s ease-in-out infinite; }
+.cb-tracking.paused .cb-tracking-dot { background: var(--ink-faint); animation: none; }
 @keyframes cb-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 .cb-tracking-text { min-width: 0; overflow: hidden; }
 .cb-tracking-label { font-size: 11px; color: var(--amber); font-weight: 600; }
+.cb-tracking.paused .cb-tracking-label { color: var(--ink-soft); }
 .cb-tracking-name { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .cb-tracking-time { font-size: 15px; font-weight: 600; color: var(--amber); margin-left: auto; flex-shrink: 0; }
+.cb-tracking.paused .cb-tracking-time { color: var(--ink-soft); }
 .cb-tracking-actions { display: flex; gap: 6px; flex-shrink: 0; }
 
 .cb-user-menu { position: relative; flex-shrink: 0; }
