@@ -1,7 +1,7 @@
 import os
 import csv
 from io import StringIO
-from datetime import datetime
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException
@@ -313,7 +313,19 @@ def delete_task(task_id: str, db: Session = Depends(get_db)):
 # Export
 # ---------------------------------------------------------------
 
-def build_export_rows(db, client_id, pushed):
+def parse_utc_naive(value):
+    # The browser sends full timestamps ending in Z (UTC). submitted_at is stored as naive
+    # UTC, so this converts to the same naive form for a correct comparison, the same fix
+    # applied earlier to the timer display.
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def build_export_rows(db, client_id, pushed, date_from=None, date_to=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
         query = query.filter(models.TaskInstance.client_id == client_id)
@@ -321,6 +333,12 @@ def build_export_rows(db, client_id, pushed):
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(False))
     elif pushed == "pushed":
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(True))
+    from_dt = parse_utc_naive(date_from)
+    to_dt = parse_utc_naive(date_to)
+    if from_dt:
+        query = query.filter(models.TaskInstance.submitted_at >= from_dt)
+    if to_dt:
+        query = query.filter(models.TaskInstance.submitted_at <= to_dt)
     tasks = query.order_by(models.TaskInstance.submitted_at.desc()).all()
 
     members = {m.id: m.name for m in db.query(models.Member).all()}
@@ -343,13 +361,13 @@ def build_export_rows(db, client_id, pushed):
 
 
 @app.get("/api/export")
-def get_export(client_id: str = "all", pushed: str = "pending", db: Session = Depends(get_db)):
-    return build_export_rows(db, client_id, pushed)
+def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, db: Session = Depends(get_db)):
+    return build_export_rows(db, client_id, pushed, date_from, date_to)
 
 
 @app.get("/api/export.csv")
-def get_export_csv(client_id: str = "all", pushed: str = "pending", db: Session = Depends(get_db)):
-    rows = build_export_rows(db, client_id, pushed)
+def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, db: Session = Depends(get_db)):
+    rows = build_export_rows(db, client_id, pushed, date_from, date_to)
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["Date", "Client", "Task", "Role", "Task Type", "Hours", "Notes", "Tracked by", "Pushed to Karbon"])
