@@ -652,10 +652,12 @@ def parse_utc_naive(value):
     return dt
 
 
-def build_export_rows(db, client_id, pushed, date_from=None, date_to=None):
+def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
         query = query.filter(models.TaskInstance.client_id == client_id)
+    if submitted_by and submitted_by != "all":
+        query = query.filter(models.TaskInstance.submitted_by_id == submitted_by)
     if pushed == "pending":
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(False))
     elif pushed == "pushed":
@@ -696,13 +698,13 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None):
 
 
 @app.get("/api/export")
-def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return build_export_rows(db, client_id, pushed, date_from, date_to)
+def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by)
 
 
 @app.get("/api/export.csv")
-def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    rows = build_export_rows(db, client_id, pushed, date_from, date_to)
+def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by)
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
