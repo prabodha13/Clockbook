@@ -1578,8 +1578,8 @@ function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onD
   );
 }
 
-function SetCredentialsModal({ memberName, onClose, onSubmit }) {
-  const [email, setEmail] = useState("");
+function SetCredentialsModal({ memberName, initialEmail, isReset, onClose, onSubmit }) {
+  const [email, setEmail] = useState(initialEmail || "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1600,7 +1600,7 @@ function SetCredentialsModal({ memberName, onClose, onSubmit }) {
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">Set up login for {memberName}</div>
+          <div className="cb-modal-title">{isReset ? "Reset password for" : "Set up login for"} {memberName}</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <form onSubmit={submit}>
@@ -1610,7 +1610,7 @@ function SetCredentialsModal({ memberName, onClose, onSubmit }) {
               <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
             </div>
             <div className="cb-field">
-              <label className="cb-label">Password</label>
+              <label className="cb-label">{isReset ? "New password" : "Password"}</label>
               <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
             </div>
             <div className="cb-hint">Share this password with them directly.</div>
@@ -1626,9 +1626,21 @@ function SetCredentialsModal({ memberName, onClose, onSubmit }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember }) {
   const [settingUpId, setSettingUpId] = useState(null);
+  const [error, setError] = useState("");
   const settingUpMember = members.find((m) => m.id === settingUpId);
+
+  async function handleDelete(m) {
+    if (!window.confirm(`Delete ${m.name}? This cannot be undone.`)) return;
+    try {
+      await onDeleteMember(m.id);
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 5000);
+    }
+  }
+
   return (
     <div>
       <div className="cb-page-head">
@@ -1640,6 +1652,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
           <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Add teammate</button>
         )}
       </div>
+      {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
       <div className="cb-card-list">
         {members.map((m) => (
           <div className="cb-row" key={m.id}>
@@ -1654,8 +1667,10 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {isAdmin && !m.email && (
-                <button className="cb-role-toggle" onClick={() => setSettingUpId(m.id)}>Set up login</button>
+              {isAdmin && (
+                <button className="cb-role-toggle" onClick={() => setSettingUpId(m.id)}>
+                  {m.email ? "Reset password" : "Set up login"}
+                </button>
               )}
               {isAdmin && (
                 <button
@@ -1665,6 +1680,11 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                   {m.role === "admin" ? "Remove admin" : "Make admin"}
                 </button>
               )}
+              {isAdmin && m.id !== currentUser.id && (
+                <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(m)}>
+                  <Trash2 size={14} />
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -1672,6 +1692,8 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
       {settingUpMember && (
         <SetCredentialsModal
           memberName={settingUpMember.name}
+          initialEmail={settingUpMember.email}
+          isReset={!!settingUpMember.email}
           onClose={() => setSettingUpId(null)}
           onSubmit={async (email, password) => {
             await onSetCredentials(settingUpMember.id, email, password);
@@ -2004,6 +2026,11 @@ export default function App() {
     setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
   }
 
+  async function deleteMember(memberId) {
+    await api.deleteMember(memberId);
+    setMembers((prev) => prev.filter((m) => m.id !== memberId));
+  }
+
   async function changeMemberRole(memberId, role) {
     try {
       const updated = await api.updateMemberRole(memberId, role);
@@ -2274,7 +2301,7 @@ export default function App() {
               <StaffView
                 members={members} currentUser={currentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
-                onSetCredentials={setMemberCredentials}
+                onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
               />
             )}
             {view === "settings" && isAdmin && (
