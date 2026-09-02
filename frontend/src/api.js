@@ -89,19 +89,20 @@ export const api = {
   deleteTask: (id) => request(`/tasks/${id}`, { method: "DELETE" }),
 };
 
-export function exportCsvUrl(clientId, pushed, dateFrom, dateTo) {
+export function exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy) {
   const params = new URLSearchParams({ client_id: clientId, pushed });
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
+  if (submittedBy) params.set("submitted_by", submittedBy);
   return `${BASE}/export.csv?${params.toString()}`;
 }
 
 // Export now requires a login, and a plain browser navigation cannot carry the
 // Authorization header, so the CSV is fetched here and turned into a real download
 // instead of just pointing the browser at the URL.
-export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filename) {
+export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filename, submittedBy) {
   const token = getToken();
-  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo), {
+  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
@@ -116,9 +117,9 @@ export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filena
   URL.revokeObjectURL(url);
 }
 
-export async function fetchCsvText(clientId, pushed, dateFrom, dateTo) {
+export async function fetchCsvText(clientId, pushed, dateFrom, dateTo, submittedBy) {
   const token = getToken();
-  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo), {
+  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`Request failed (${res.status})`);

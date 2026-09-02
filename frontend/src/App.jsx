@@ -367,7 +367,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             Complete
           </button>
         )}
-        {task.status !== "submitted" && isAdmin && (
+        {isAdmin && (
           <button
             className="cb-icon-btn cb-btn-danger"
             title="Delete"
@@ -1355,9 +1355,10 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onDelete, onAdd
   );
 }
 
-function ExportView({ tasks, members, clients, now, onTogglePushed }) {
+function ExportView({ tasks, members, clients, now, isAdmin, onTogglePushed, onDeleteTask }) {
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
+  const [staffFilter, setStaffFilter] = useState("all");
   const [datePreset, setDatePreset] = useState("this_week");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -1373,6 +1374,7 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   const rows = useMemo(() => {
     return submitted
       .filter((t) => (clientFilter === "all" ? true : t.client_id === clientFilter))
+      .filter((t) => (staffFilter === "all" ? true : t.submitted_by_id === staffFilter))
       .filter((t) => {
         if (pushFilter === "all") return true;
         if (pushFilter === "pending") return !t.pushed_to_karbon;
@@ -1407,7 +1409,7 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
           change: hasCount ? t.end_count - t.start_count : null,
         };
       });
-  }, [submitted, clientFilter, pushFilter, dateRange, members, now]);
+  }, [submitted, clientFilter, staffFilter, pushFilter, dateRange, members, now]);
 
   const totalHours = rows.reduce((sum, r) => sum + parseFloat(r.decHours), 0);
 
@@ -1423,13 +1425,19 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   async function downloadCSV() {
     const fromIso = dateRange ? dateRange.fromIso : null;
     const toIso = dateRange ? dateRange.toIso : null;
-    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`);
+    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`, staffFilter);
   }
   async function copyCSV() {
     const fromIso = dateRange ? dateRange.fromIso : null;
     const toIso = dateRange ? dateRange.toIso : null;
-    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso);
+    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso, staffFilter);
     copyToClipboard(text);
+  }
+
+  async function handleDelete(r) {
+    if (window.confirm(`Delete this submitted entry for ${r.client}: ${r.task} (${r.hm})? This cannot be undone.`)) {
+      await onDeleteTask(r.id);
+    }
   }
 
   return (
@@ -1474,6 +1482,10 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
           <option value="all">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
+        <select className="cb-select" style={{ width: 200 }} value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)}>
+          <option value="all">All staff</option>
+          {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
         <div style={{ marginLeft: "auto", fontSize: 13, color: "var(--ink-soft)" }}>
           {rows.length} entr{rows.length === 1 ? "y" : "ies"}, <span className="cb-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>{totalHours.toFixed(2)}h</span> total
         </div>
@@ -1485,12 +1497,12 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th>
               <th className="num">Duration</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
-              <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>
+              <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={13}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
+              <tr><td colSpan={isAdmin ? 14 : 13}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
             {rows.map((r) => (
               <tr key={r.id}>
@@ -1513,6 +1525,13 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
                     {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
                   </button>
                 </td>
+                {isAdmin && (
+                  <td>
+                    <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(r)}>
+                      <Trash2 size={14} />
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -2179,7 +2198,10 @@ export default function App() {
               />
             )}
             {view === "export" && (
-              <ExportView tasks={tasks} members={members} clients={clients} now={now} onTogglePushed={togglePushed} />
+              <ExportView
+                tasks={tasks} members={members} clients={clients} now={now} isAdmin={isAdmin}
+                onTogglePushed={togglePushed} onDeleteTask={deleteTask}
+              />
             )}
             {view === "staff" && (
               <StaffView
