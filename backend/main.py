@@ -105,12 +105,26 @@ def list_members(db: Session = Depends(get_db)):
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
 def create_member(payload: schemas.MemberCreate, db: Session = Depends(get_db)):
     count = db.query(models.Member).count()
+
     if count == 0:
         # The first person to ever open the app becomes its first admin
-        member = models.Member(name=payload.name.strip(), color_idx=0, role="admin")
+        member = models.Member(
+            name=payload.name.strip(),
+            color_idx=0,
+            role="admin"
+        )
     else:
         require_admin(payload.created_by, db)
-        member = models.Member(name=payload.name.strip(), color_idx=count, role="member")
+
+        if payload.role not in ("admin", "member"):
+            raise HTTPException(400, "Role must be admin or member")
+
+        member = models.Member(
+            name=payload.name.strip(),
+            color_idx=count,
+            role=payload.role
+        )
+
     db.add(member)
     db.commit()
     db.refresh(member)
