@@ -21,31 +21,33 @@ async function request(path, options = {}) {
 
 export const api = {
   getMembers: () => request("/members"),
-  createMember: (name) => request("/members", { method: "POST", body: JSON.stringify({ name }) }),
+  createMember: (name, createdBy) => request("/members", { method: "POST", body: JSON.stringify({ name, created_by: createdBy || null }) }),
+  updateMemberRole: (memberId, role, actorId) =>
+    request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role, actor_id: actorId }) }),
 
   getClients: () => request("/clients"),
   createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
-  deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
+  deleteClient: (id, actorId) => request(`/clients/${id}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
 
   getTemplates: () => request("/templates"),
-  createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
-  deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
-  addTemplateTask: (templateId, task) =>
-    request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify(task) }),
-  updateTemplateTask: (templateId, taskId, task) =>
-    request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify(task) }),
-  deleteTemplateTask: (templateId, taskId) =>
-    request(`/templates/${templateId}/tasks/${taskId}`, { method: "DELETE" }),
+  createTemplate: (field, name, actorId) => request("/templates", { method: "POST", body: JSON.stringify({ field, name, actor_id: actorId }) }),
+  deleteTemplate: (id, actorId) => request(`/templates/${id}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
+  addTemplateTask: (templateId, task, actorId) =>
+    request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify({ ...task, actor_id: actorId }) }),
+  updateTemplateTask: (templateId, taskId, task, actorId) =>
+    request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify({ ...task, actor_id: actorId }) }),
+  deleteTemplateTask: (templateId, taskId, actorId) =>
+    request(`/templates/${templateId}/tasks/${taskId}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
 
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
   startTask: (id, ownerId) => request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify({ owner_id: ownerId }) }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   submitTask: (id, note) => request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note }) }),
-  reassignTask: (id, ownerId) =>
-    request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId }) }),
+  reassignTask: (id, ownerId, actorId) =>
+    request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId, actor_id: actorId }) }),
   togglePushed: (id) => request(`/tasks/${id}/toggle-pushed`, { method: "PATCH" }),
-  deleteTask: (id) => request(`/tasks/${id}`, { method: "DELETE" }),
+  deleteTask: (id, actorId) => request(`/tasks/${id}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
 
   exportRows: (clientId, pushed) => request(`/export?client_id=${clientId}&pushed=${pushed}`),
 };
