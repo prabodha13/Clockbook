@@ -27,9 +27,26 @@ DEFAULT_TEMPLATE = {
 }
 
 
+def run_startup_migrations():
+    # Base.metadata.create_all only creates tables that do not exist yet, it never adds a
+    # new column to a table that is already there. Since this app has no separate migration
+    # tool, this checks for columns the current code expects and adds any that are missing,
+    # so a schema change like adding "role" does not need a manual database step to deploy.
+    inspector = inspect(engine)
+    if "members" in inspector.get_table_names():
+        existing_columns = {c["name"] for c in inspector.get_columns("members")}
+        if "role" not in existing_columns:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE members ADD COLUMN role VARCHAR DEFAULT 'member'"))
+                conn.execute(text(
+                    "UPDATE members SET role = 'admin' WHERE color_idx = (SELECT MIN(color_idx) FROM members)"
+                ))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    run_startup_migrations()
     db = next(get_db())
     try:
         if db.query(models.Template).count() == 0:
