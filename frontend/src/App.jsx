@@ -366,8 +366,16 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             Complete
           </button>
         )}
-        {task.status === "todo" && isAdmin && (
-          <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => onDelete(task.id)}>
+        {task.status !== "submitted" && isAdmin && (
+          <button
+            className="cb-icon-btn cb-btn-danger"
+            title="Delete"
+            onClick={() => {
+              if (task.status === "todo" || window.confirm(`This task has ${formatHM(elapsed)} tracked on it. Delete it anyway?`)) {
+                onDelete(task.id);
+              }
+            }}
+          >
             <Trash2 size={14} />
           </button>
         )}
