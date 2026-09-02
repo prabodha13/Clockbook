@@ -91,6 +91,10 @@ class TaskCreate(BaseModel):
     owner_id: Optional[str] = None
 
 
+class TaskPause(BaseModel):
+    end_at: Optional[str] = None
+
+
 class TaskSubmit(BaseModel):
     note: str = ""
 

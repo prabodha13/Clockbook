@@ -58,14 +58,15 @@ app.add_middleware(
 )
 
 
-def close_open_segment(segments):
+def close_open_segment(segments, end_override=None):
     segments = list(segments or [])
     if not segments:
         return segments
     last = segments[-1]
     if last.get("end"):
         return segments
-    segments[-1] = {**last, "end": datetime.utcnow().isoformat() + "Z"}
+    end_value = end_override if end_override else datetime.utcnow().isoformat() + "Z"
+    segments[-1] = {**last, "end": end_value}
     return segments
 
 
@@ -247,11 +248,11 @@ def start_task(task_id: str, payload: schemas.TaskStart, db: Session = Depends(g
 
 
 @app.post("/api/tasks/{task_id}/pause", response_model=schemas.TaskOut)
-def pause_task(task_id: str, db: Session = Depends(get_db)):
+def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    task.segments = close_open_segment(task.segments)
+    task.segments = close_open_segment(task.segments, payload.end_at)
     task.status = "paused"
     db.commit()
     db.refresh(task)
