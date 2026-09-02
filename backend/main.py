@@ -31,6 +31,7 @@ DEFAULT_TEMPLATE = {
 
 DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
 DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query"]
+DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
 
 
 def run_startup_migrations():
@@ -97,6 +98,10 @@ async def lifespan(app: FastAPI):
         if db.query(models.TaskTypeOption).count() == 0:
             for name in DEFAULT_TASK_TYPES:
                 db.add(models.TaskTypeOption(name=name))
+            db.commit()
+        if db.query(models.TrackedMetric).count() == 0:
+            for name in DEFAULT_TRACKED_METRICS:
+                db.add(models.TrackedMetric(name=name))
             db.commit()
     finally:
         db.close()
@@ -424,6 +429,34 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
     task_type = db.get(models.TaskTypeOption, task_type_id)
     if task_type:
         db.delete(task_type)
+        db.commit()
+    return None
+
+
+@app.get("/api/tracked-metrics", response_model=list[schemas.TrackedMetricOut])
+def list_tracked_metrics(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return db.query(models.TrackedMetric).order_by(models.TrackedMetric.name).all()
+
+
+@app.post("/api/tracked-metrics", response_model=schemas.TrackedMetricOut, status_code=201)
+def create_tracked_metric(payload: schemas.TrackedMetricCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    name = payload.name.strip()
+    if db.query(models.TrackedMetric).filter(models.TrackedMetric.name == name).first():
+        raise HTTPException(400, "That metric already exists")
+    metric = models.TrackedMetric(name=name)
+    db.add(metric)
+    db.commit()
+    db.refresh(metric)
+    return metric
+
+
+@app.delete("/api/tracked-metrics/{metric_id}", status_code=204)
+def delete_tracked_metric(metric_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    metric = db.get(models.TrackedMetric, metric_id)
+    if metric:
+        db.delete(metric)
         db.commit()
     return None
 

@@ -74,6 +74,16 @@ class TaskTypeCreate(BaseModel):
     name: str
 
 
+class TrackedMetricOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class TrackedMetricCreate(BaseModel):
+    name: str
+
+
 class BankAccountOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

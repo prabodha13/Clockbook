@@ -52,6 +52,12 @@ class TaskTypeOption(Base):
     name = Column(String, nullable=False, unique=True)
 
 
+class TrackedMetric(Base):
+    __tablename__ = "tracked_metrics"
+    id = Column(String, primary_key=True, default=lambda: gen_id("metric"))
+    name = Column(String, nullable=False, unique=True)
+
+
 class Template(Base):
     __tablename__ = "templates"
     id = Column(String, primary_key=True, default=lambda: gen_id("tpl"))
