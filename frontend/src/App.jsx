@@ -489,7 +489,7 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
   );
 }
 
-function NewTaskModal({ clients, templates, members, bankAccounts, currentUser, onClose, onCreate, onAddClient }) {
+function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState(clients[0] ? clients[0].id : "");
   const [newClientName, setNewClientName] = useState("");
@@ -695,11 +695,17 @@ function NewTaskModal({ clients, templates, members, bankAccounts, currentUser, 
               <div className="cb-field-row">
                 <div className="cb-field">
                   <label className="cb-label">Karbon role</label>
-                  <input className="cb-input" placeholder="e.g. Bookkeeper" value={role} onChange={(e) => setRole(e.target.value)} />
+                  <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
+                    <option value="">No role</option>
+                    {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                  </select>
                 </div>
                 <div className="cb-field">
                   <label className="cb-label">Karbon task type</label>
-                  <input className="cb-input" placeholder="e.g. Reconciliation" value={taskType} onChange={(e) => setTaskType(e.target.value)} />
+                  <select className="cb-select" value={taskType} onChange={(e) => setTaskType(e.target.value)}>
+                    <option value="">No task type</option>
+                    {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  </select>
                 </div>
               </div>
             )}
@@ -868,35 +874,31 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
-function TemplateTaskEditor({ template, task, onUpdateTask, onDeleteTask }) {
+function TemplateTaskEditor({ template, task, roles, taskTypes, onUpdateTask, onDeleteTask }) {
   const [name, setName] = useState(task.name);
-  const [role, setRole] = useState(task.role);
-  const [taskType, setTaskType] = useState(task.task_type);
   const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
 
   useEffect(() => { setName(task.name); }, [task.name]);
-  useEffect(() => { setRole(task.role); }, [task.role]);
-  useEffect(() => { setTaskType(task.task_type); }, [task.task_type]);
   useEffect(() => { setTracksLabel(task.tracks_number_label); }, [task.tracks_number_label]);
 
   function saveField(field, value) {
     if (value === task[field]) return; // nothing actually changed, skip a wasted request
     onUpdateTask(template.id, task.id, {
       name: field === "name" ? value : name,
-      role: field === "role" ? value : role,
-      task_type: field === "task_type" ? value : taskType,
+      role: field === "role" ? value : task.role,
+      task_type: field === "task_type" ? value : task.task_type,
       requires_bank_account: task.requires_bank_account,
       tracks_number_label: field === "tracks_number_label" ? value : tracksLabel,
     });
   }
 
-  function saveOnEnter(e, field, value) {
+  function saveOnEnter(e) {
     if (e.key === "Enter") e.target.blur();
   }
 
   function toggleRequiresBankAccount(checked) {
     onUpdateTask(template.id, task.id, {
-      name, role, task_type: taskType, requires_bank_account: checked, tracks_number_label: tracksLabel,
+      name, role: task.role, task_type: task.task_type, requires_bank_account: checked, tracks_number_label: tracksLabel,
     });
   }
 
@@ -905,16 +907,22 @@ function TemplateTaskEditor({ template, task, onUpdateTask, onDeleteTask }) {
       <div className="cb-tmpl-task-row">
         <input
           className="cb-input" value={name} onChange={(e) => setName(e.target.value)}
-          onBlur={(e) => saveField("name", e.target.value)} onKeyDown={(e) => saveOnEnter(e, "name")}
+          onBlur={(e) => saveField("name", e.target.value)} onKeyDown={saveOnEnter}
         />
-        <input
-          className="cb-input" placeholder="Role" value={role} onChange={(e) => setRole(e.target.value)}
-          onBlur={(e) => saveField("role", e.target.value)} onKeyDown={(e) => saveOnEnter(e, "role")}
-        />
-        <input
-          className="cb-input" placeholder="Task type" value={taskType} onChange={(e) => setTaskType(e.target.value)}
-          onBlur={(e) => saveField("task_type", e.target.value)} onKeyDown={(e) => saveOnEnter(e, "task_type")}
-        />
+        <select className="cb-select" value={task.role} onChange={(e) => saveField("role", e.target.value)}>
+          <option value="">No role</option>
+          {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+          {task.role && !roles.some((r) => r.name === task.role) && (
+            <option value={task.role}>{task.role}</option>
+          )}
+        </select>
+        <select className="cb-select" value={task.task_type} onChange={(e) => saveField("task_type", e.target.value)}>
+          <option value="">No task type</option>
+          {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+          {task.task_type && !taskTypes.some((t) => t.name === task.task_type) && (
+            <option value={task.task_type}>{task.task_type}</option>
+          )}
+        </select>
         <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
       </div>
       <div className="cb-tmpl-task-options">
@@ -938,7 +946,7 @@ function TemplateTaskEditor({ template, task, onUpdateTask, onDeleteTask }) {
   );
 }
 
-function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
+function TemplateEditor({ template, isAdmin, roles, taskTypes, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
   const [expanded, setExpanded] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
   const [tName, setTName] = useState("");
@@ -979,7 +987,10 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
           )}
           {template.tasks.map((t) =>
             isAdmin ? (
-              <TemplateTaskEditor key={t.id} template={template} task={t} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} />
+              <TemplateTaskEditor
+                key={t.id} template={template} task={t} roles={roles} taskTypes={taskTypes}
+                onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask}
+              />
             ) : (
               <div className="cb-row" key={t.id}>
                 <div className="cb-row-main">
@@ -998,8 +1009,14 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
             <form className="cb-tmpl-task-block" onSubmit={addTask}>
               <div className="cb-tmpl-task-row">
                 <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
-                <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
-                <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
+                <select className="cb-select" value={tRole} onChange={(e) => setTRole(e.target.value)}>
+                  <option value="">No role</option>
+                  {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                </select>
+                <select className="cb-select" value={tType} onChange={(e) => setTType(e.target.value)}>
+                  <option value="">No task type</option>
+                  {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                </select>
                 <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
               </div>
               <div className="cb-tmpl-task-options">
@@ -1023,7 +1040,86 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
   );
 }
 
-function Templates({ templates, isAdmin, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
+function RoleTaskTypeManager({ roles, taskTypes, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType }) {
+  const [expanded, setExpanded] = useState(false);
+  const [newRole, setNewRole] = useState("");
+  const [newTaskType, setNewTaskType] = useState("");
+  const [error, setError] = useState("");
+
+  async function submitRole(e) {
+    e.preventDefault();
+    if (!newRole.trim()) return;
+    try {
+      await onAddRole(newRole);
+      setNewRole("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function submitTaskType(e) {
+    e.preventDefault();
+    if (!newTaskType.trim()) return;
+    try {
+      await onAddTaskType(newTaskType);
+      setNewTaskType("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  return (
+    <div className="cb-tmpl-card">
+      <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
+        <div>
+          <div className="cb-tmpl-field">Setup</div>
+          <div className="cb-tmpl-name">Roles and task types</div>
+        </div>
+        <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+      </button>
+      {expanded && (
+        <div style={{ padding: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div className="cb-label" style={{ marginBottom: 8 }}>Roles</div>
+            {roles.map((r) => (
+              <div key={r.id} className="cb-client-account-row">
+                <div style={{ fontSize: 13.5 }}>{r.name}</div>
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteRole(r.id)}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            {roles.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No roles added yet.</div>}
+            <form onSubmit={submitRole} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input className="cb-input" placeholder="e.g. Manager" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
+              <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
+            </form>
+          </div>
+          <div style={{ flex: 1, minWidth: 220 }}>
+            <div className="cb-label" style={{ marginBottom: 8 }}>Task types</div>
+            {taskTypes.map((t) => (
+              <div key={t.id} className="cb-client-account-row">
+                <div style={{ fontSize: 13.5 }}>{t.name}</div>
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTaskType(t.id)}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            {taskTypes.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No task types added yet.</div>}
+            <form onSubmit={submitTaskType} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+              <input className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
+              <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
+            </form>
+          </div>
+          {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Templates({
+  templates, isAdmin, roles, taskTypes, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate,
+  onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
+}) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -1046,6 +1142,13 @@ function Templates({ templates, isAdmin, onAddTask, onUpdateTask, onDeleteTask, 
           <button className="cb-btn cb-btn-primary" onClick={() => setShowNew((v) => !v)}><Plus size={15} />New template</button>
         )}
       </div>
+
+      {isAdmin && (
+        <RoleTaskTypeManager
+          roles={roles} taskTypes={taskTypes}
+          onAddRole={onAddRole} onDeleteRole={onDeleteRole} onAddTaskType={onAddTaskType} onDeleteTaskType={onDeleteTaskType}
+        />
+      )}
 
       {showNew && (
         <form className="cb-tmpl-card" onSubmit={submitNew} style={{ padding: 16 }}>
@@ -1071,7 +1174,7 @@ function Templates({ templates, isAdmin, onAddTask, onUpdateTask, onDeleteTask, 
       ) : (
         templates.map((t) => (
           <TemplateEditor
-            key={t.id} template={t} isAdmin={isAdmin}
+            key={t.id} template={t} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes}
             onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onDeleteTemplate={onDeleteTemplate}
           />
         ))
@@ -1530,6 +1633,8 @@ export default function App() {
   const [members, setMembers] = useState([]);
   const [clients, setClients] = useState([]);
   const [bankAccounts, setBankAccounts] = useState([]);
+  const [roles, setRoles] = useState([]);
+  const [taskTypes, setTaskTypes] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState("dashboard");
@@ -1584,14 +1689,17 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [m, c, t, tk, b] = await Promise.all([
+      const [m, c, t, tk, b, r, tt] = await Promise.all([
         api.getMembers(), api.getClients(), api.getTemplates(), api.getTasks(), api.getBankAccounts(),
+        api.getRoles(), api.getTaskTypes(),
       ]);
       setMembers(m);
       setClients(c);
       setTemplates(t);
       setTasks(tk);
       setBankAccounts(b);
+      setRoles(r);
+      setTaskTypes(tt);
       setLoadError("");
     } catch (err) {
       setLoadError(err.message || "Could not reach the server");
@@ -1903,6 +2011,26 @@ export default function App() {
     setBankAccounts((prev) => prev.filter((a) => a.id !== accountId));
   }
 
+  async function addRole(name) {
+    const role = await api.createRole(name.trim());
+    setRoles((prev) => [...prev, role]);
+  }
+
+  async function deleteRole(id) {
+    await api.deleteRole(id);
+    setRoles((prev) => prev.filter((r) => r.id !== id));
+  }
+
+  async function addTaskType(name) {
+    const taskType = await api.createTaskType(name.trim());
+    setTaskTypes((prev) => [...prev, taskType]);
+  }
+
+  async function deleteTaskType(id) {
+    await api.deleteTaskType(id);
+    setTaskTypes((prev) => prev.filter((t) => t.id !== id));
+  }
+
   async function createTasks(payloads) {
     const created = [];
     for (const payload of payloads) {
@@ -1991,9 +2119,10 @@ export default function App() {
             )}
             {view === "templates" && (
               <Templates
-                templates={templates} isAdmin={isAdmin}
+                templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes}
                 onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
                 onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate}
+                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
               />
             )}
             {view === "clients" && (
@@ -2018,7 +2147,8 @@ export default function App() {
 
       {showNewTask && (
         <NewTaskModal
-          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts} currentUser={currentUser}
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes} currentUser={currentUser}
           onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
         />
       )}

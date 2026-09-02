@@ -58,6 +58,14 @@ export const api = {
     request("/bank-accounts", { method: "POST", body: JSON.stringify({ client_id: clientId, name }) }),
   deleteBankAccount: (id) => request(`/bank-accounts/${id}`, { method: "DELETE" }),
 
+  getRoles: () => request("/roles"),
+  createRole: (name) => request("/roles", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteRole: (id) => request(`/roles/${id}`, { method: "DELETE" }),
+
+  getTaskTypes: () => request("/task-types"),
+  createTaskType: (name) => request("/task-types", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteTaskType: (id) => request(`/task-types/${id}`, { method: "DELETE" }),
+
   getTemplates: () => request("/templates"),
   createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
