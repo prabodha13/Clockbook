@@ -148,6 +148,7 @@ class TaskOut(BaseModel):
     tracks_number_label: str = ""
     start_count: Optional[int] = None
     end_count: Optional[int] = None
+    adjusted_seconds: Optional[float] = None
 
     @field_serializer("created_at", "submitted_at")
     def serialize_as_utc(self, value: Optional[datetime], _info):
@@ -177,6 +178,7 @@ class TaskPause(BaseModel):
 class TaskSubmit(BaseModel):
     note: str = ""
     end_count: Optional[int] = None
+    adjusted_seconds: Optional[float] = None
 
 
 class TaskStart(BaseModel):

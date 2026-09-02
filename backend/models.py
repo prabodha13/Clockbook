@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, JSON, Text
+from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Float, JSON, Text
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -104,3 +104,4 @@ class TaskInstance(Base):
     tracks_number_label = Column(String, default="")  # copied from the template task at creation time
     start_count = Column(Integer, nullable=True)
     end_count = Column(Integer, nullable=True)
+    adjusted_seconds = Column(Float, nullable=True)  # only set when the person edits the tracked time at submit

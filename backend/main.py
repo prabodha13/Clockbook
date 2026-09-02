@@ -74,6 +74,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN start_count INTEGER"))
             if "end_count" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN end_count INTEGER"))
+            if "adjusted_seconds" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN adjusted_seconds FLOAT"))
 
 
 @asynccontextmanager
@@ -671,8 +673,17 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         raise HTTPException(403, "This task belongs to someone else")
     if task.tracks_number_label and payload.end_count is None:
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
+    if payload.adjusted_seconds is not None and payload.adjusted_seconds < 0:
+        raise HTTPException(400, "Adjusted time cannot be negative")
     if task.status == "running":
         task.segments = close_open_segment(task.segments)
+    tracked_seconds = elapsed_seconds(task.segments)
+    # Only actually record an adjustment if it genuinely differs from what was tracked,
+    # a coincidental match should not get flagged as an edit
+    if payload.adjusted_seconds is not None and abs(payload.adjusted_seconds - tracked_seconds) >= 1:
+        task.adjusted_seconds = payload.adjusted_seconds
+    else:
+        task.adjusted_seconds = None
     task.status = "submitted"
     task.note = payload.note
     task.end_count = payload.end_count
@@ -753,7 +764,9 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
     members = {m.id: m.name for m in db.query(models.Member).all()}
     rows = []
     for t in tasks:
-        hours = elapsed_seconds(t.segments) / 3600
+        tracked_hours = elapsed_seconds(t.segments) / 3600
+        is_adjusted = t.adjusted_seconds is not None
+        final_hours = (t.adjusted_seconds / 3600) if is_adjusted else tracked_hours
         change = None
         if t.start_count is not None and t.end_count is not None:
             change = t.end_count - t.start_count
@@ -764,7 +777,9 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             "task": t.name,
             "role": t.role,
             "task_type": t.task_type,
-            "hours": round(hours, 2),
+            "hours": round(final_hours, 2),
+            "tracked_hours": round(tracked_hours, 2) if is_adjusted else None,
+            "adjusted": is_adjusted,
             "note": t.note,
             "tracked_by": members.get(t.submitted_by_id, ""),
             "pushed": t.pushed_to_karbon,
@@ -792,13 +807,14 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        "Date", "Client", "Task", "Role", "Task Type", "Hours", "Notes", "Tracked by", "Pushed to Karbon",
+        "Date", "Client", "Task", "Role", "Task Type", "Hours", "Tracked Hours", "Notes", "Tracked by", "Pushed to Karbon",
         "Bank Account", "Metric", "Start Count", "End Count", "Change",
     ])
     for r in rows:
         writer.writerow([
             r["date"], r["client"], r["task"], r["role"], r["task_type"],
-            r["hours"], r["note"], r["tracked_by"], "Yes" if r["pushed"] else "No",
+            r["hours"], r["tracked_hours"] if r["tracked_hours"] is not None else "",
+            r["note"], r["tracked_by"], "Yes" if r["pushed"] else "No",
             r["bank_account"], r["metric"],
             r["start_count"] if r["start_count"] is not None else "",
             r["end_count"] if r["end_count"] is not None else "",
