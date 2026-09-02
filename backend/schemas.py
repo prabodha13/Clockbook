@@ -13,10 +13,17 @@ class MemberOut(BaseModel):
     id: str
     name: str
     color_idx: int
+    role: str
 
 
 class MemberCreate(BaseModel):
     name: str
+    created_by: Optional[str] = None
+
+
+class MemberRoleUpdate(BaseModel):
+    role: str
+    actor_id: str
 
 
 class ClientOut(BaseModel):
@@ -41,6 +48,7 @@ class TemplateTaskCreate(BaseModel):
     name: str
     role: str = ""
     task_type: str = ""
+    actor_id: str
 
 
 class TemplateOut(BaseModel):
@@ -54,6 +62,7 @@ class TemplateOut(BaseModel):
 class TemplateCreate(BaseModel):
     field: str
     name: str
+    actor_id: str
 
 
 class TaskOut(BaseModel):
