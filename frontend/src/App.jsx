@@ -494,6 +494,7 @@ function AddMemberModal({ onClose, onAdd }) {
 }
 
 function TemplateEditor({ template, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
+  const [expanded, setExpanded] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
   const [tName, setTName] = useState("");
   const [tRole, setTRole] = useState("");
@@ -508,33 +509,41 @@ function TemplateEditor({ template, onAddTask, onUpdateTask, onDeleteTask, onDel
 
   return (
     <div className="cb-tmpl-card">
-      <div className="cb-tmpl-head">
+      <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
         <div>
           <div className="cb-tmpl-field">{template.field}</div>
           <div className="cb-tmpl-name">{template.name}</div>
         </div>
-        <div style={{ display: "flex", gap: 6 }}>
-          <button className="cb-btn cb-btn-sm" onClick={() => setAddingTask((v) => !v)}><Plus size={13} />Task</button>
-          <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}</span>
+          <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
         </div>
-      </div>
-      {template.tasks.map((t) => (
-        <div className="cb-tmpl-task-row" key={t.id}>
-          <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
-          <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
-          <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
-          <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
-        </div>
-      ))}
-      {addingTask && (
-        <form className="cb-tmpl-task-row" onSubmit={addTask}>
-          <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
-          <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
-          <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
-          <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
-        </form>
+      </button>
+      {expanded && (
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 16px 0" }}>
+            <button className="cb-btn cb-btn-sm" onClick={() => setAddingTask((v) => !v)}><Plus size={13} />Task</button>
+            <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
+          </div>
+          {template.tasks.map((t) => (
+            <div className="cb-tmpl-task-row" key={t.id}>
+              <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
+              <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
+              <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
+              <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
+            </div>
+          ))}
+          {addingTask && (
+            <form className="cb-tmpl-task-row" onSubmit={addTask}>
+              <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
+              <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
+              <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
+              <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
+            </form>
+          )}
+          {template.tasks.length === 0 && !addingTask && <div className="cb-empty">No tasks yet in this template.</div>}
+        </>
       )}
-      {template.tasks.length === 0 && !addingTask && <div className="cb-empty">No tasks yet in this template.</div>}
     </div>
   );
 }
