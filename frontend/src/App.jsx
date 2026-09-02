@@ -899,17 +899,95 @@ export default function App() {
   const lastAlertRef = useRef(0);
   const SLEEP_THRESHOLD_MS = 20000;
 
-  async function reportGap(gapMs, sleepStartMs) {
-    if (gapMs < SLEEP_THRESHOLD_MS) return;
-    if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
-    lastAlertRef.current = Date.now();
-    const task = runningTaskRef.current;
-    if (!task) return;
+  async function refreshTasks() {
+    const tk = await api.getTasks();
+    setTasks(tk);
+  }
+
+  async function startTask(taskId) {
+    if (!currentUser) return;
+    if ("Notification" in window && Notification.permission === "default") {
+      // Tied to this click so the browser treats it as a genuine user request, not spam
+      Notification.requestPermission();
+    }
+    enableIdleDetection();
+    const previouslyRunning = tasks.find(
+      (t) => t.owner_id === currentUser.id && t.status === "running" && t.id !== taskId
+    );
     try {
-      await api.pauseTask(task.id, new Date(sleepStartMs).toISOString());
+      await api.startTask(taskId, currentUser.id);
+      await refreshTasks();
+      if (previouslyRunning) {
+        showToast(`Paused "${previouslyRunning.client_name}: ${previouslyRunning.name}" to start this task`);
+      }
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function pauseTask(taskId, endAt) {
+    try {
+      await api.pauseTask(taskId, endAt);
       await refreshTasks();
     } catch (err) {
-      // if this fails, still tell the person below so they know to check the task themselves
+      showToast(err.message, true);
+    }
+  }
+
+  async function submitCompletion(taskId, note) {
+    try {
+      await api.submitTask(taskId, note || "");
+      await refreshTasks();
+      setCompletingTask(null);
+      showToast("Task submitted");
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function deleteTask(taskId) {
+    try {
+      await api.deleteTask(taskId);
+      await refreshTasks();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function reassignTask(taskId, ownerId) {
+    try {
+      await api.reassignTask(taskId, ownerId);
+      await refreshTasks();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function togglePushed(taskId) {
+    try {
+      await api.togglePushed(taskId);
+      await refreshTasks();
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function addClient(name) {
+    const client = await api.createClient(name.trim());
+    setClients((prev) => [...prev, client]);
+    return client;
+  }
+
+  async function deleteClient(clientId) {
+    await api.deleteClient(clientId);
+    setClients((prev) => prev.filter((c) => c.id !== clientId));
+  }
+
+  async function createTask(payload) {
+    await api.createTask(payload);
+    await refreshTasks();
+    setShowNewTask(false);
+  }
     }
     setSleepAlert({ task, gapMs, sleepStartMs });
     if ("Notification" in window && Notification.permission === "granted") {
