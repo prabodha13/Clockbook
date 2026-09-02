@@ -352,7 +352,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
       <div className="cb-row-time cb-mono">{elapsed > 0 ? formatHM(elapsed) : "0m"}</div>
       <div className="cb-row-actions">
         {task.status !== "running" && (
-          <button className="cb-icon-btn" title={isMine ? "Start" : `Owned by ${owner ? owner.name : "someone else"}`} disabled={!isMine} onClick={() => onStart(task.id)}>
+          <button className="cb-icon-btn" title={isMine ? "Start" : `Owned by ${owner ? owner.name : "someone else"}`} disabled={!isMine} onClick={() => onStart(task)}>
             <Play size={14} />
           </button>
         )}
@@ -481,7 +481,7 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
   );
 }
 
-function NewTaskModal({ clients, templates, members, currentUser, onClose, onCreate, onAddClient }) {
+function NewTaskModal({ clients, templates, members, bankAccounts, currentUser, onClose, onCreate, onAddClient }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState(clients[0] ? clients[0].id : "");
   const [newClientName, setNewClientName] = useState("");
@@ -492,6 +492,7 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
     const first = templates[0];
     return first && first.tasks[0] ? [first.tasks[0].id] : [];
   });
+  const [bankAccountByTaskId, setBankAccountByTaskId] = useState({});
 
   const [customName, setCustomName] = useState("");
   const [role, setRole] = useState("");
@@ -502,15 +503,38 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
   const [error, setError] = useState("");
 
   const selectedTemplate = templates.find((t) => t.id === templateId) || null;
+  const clientAccounts = clientMode === "existing" ? bankAccounts.filter((a) => a.client_id === clientId) : [];
+
+  useEffect(() => {
+    if (clientMode !== "new") return;
+    setSelectedTaskIds((prev) =>
+      prev.filter((id) => {
+        const t = selectedTemplate && selectedTemplate.tasks.find((x) => x.id === id);
+        return !(t && t.requires_bank_account);
+      })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [clientMode]);
 
   function pickTemplate(id) {
     setTemplateId(id);
     const tpl = templates.find((t) => t.id === id);
     setSelectedTaskIds(tpl && tpl.tasks[0] ? [tpl.tasks[0].id] : []);
+    setBankAccountByTaskId({});
   }
 
   function toggleTaskId(id) {
-    setSelectedTaskIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+    setSelectedTaskIds((prev) => {
+      if (prev.includes(id)) {
+        setBankAccountByTaskId((m) => {
+          const next = { ...m };
+          delete next[id];
+          return next;
+        });
+        return prev.filter((x) => x !== id);
+      }
+      return [...prev, id];
+    });
   }
 
   async function handleSubmit(e) {
@@ -536,12 +560,24 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
           setBusy(false);
           return;
         }
-        payloads = selectedTemplate.tasks
-          .filter((t) => selectedTaskIds.includes(t.id))
-          .map((t) => ({
+        const chosenTasks = selectedTemplate.tasks.filter((t) => selectedTaskIds.includes(t.id));
+        for (const t of chosenTasks) {
+          if (t.requires_bank_account && !bankAccountByTaskId[t.id]) {
+            setError(`Select a bank account for "${t.name}"`);
+            setBusy(false);
+            return;
+          }
+        }
+        payloads = chosenTasks.map((t) => {
+          const account = t.requires_bank_account ? bankAccounts.find((a) => a.id === bankAccountByTaskId[t.id]) : null;
+          return {
             client_id: cId, client_name: cName, name: t.name,
             role: t.role, task_type: t.task_type, owner_id: ownerId,
-          }));
+            bank_account_id: account ? account.id : null,
+            bank_account_name: account ? account.name : "",
+            tracks_number_label: t.tracks_number_label || "",
+          };
+        });
       } else {
         const name = customName.trim();
         if (!name) { setBusy(false); return; }
@@ -600,20 +636,45 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
                       {selectedTemplate.tasks.length === 0 && (
                         <div className="cb-hint" style={{ padding: 10 }}>This template has no tasks yet.</div>
                       )}
-                      {selectedTemplate.tasks.map((t) => (
-                        <label className="cb-checklist-item" key={t.id}>
-                          <input
-                            type="checkbox"
-                            className="cb-checkbox"
-                            checked={selectedTaskIds.includes(t.id)}
-                            onChange={() => toggleTaskId(t.id)}
-                          />
-                          <div>
-                            <div className="cb-checklist-name">{t.name}</div>
-                            <div className="cb-checklist-meta">{t.role || "no role"}{t.task_type ? ` \u00b7 ${t.task_type}` : ""}</div>
+                      {selectedTemplate.tasks.map((t) => {
+                        const checked = selectedTaskIds.includes(t.id);
+                        const disabledForNewClient = t.requires_bank_account && clientMode === "new";
+                        return (
+                          <div className="cb-checklist-item" key={t.id}>
+                            <input
+                              type="checkbox"
+                              className="cb-checkbox"
+                              checked={checked}
+                              disabled={disabledForNewClient}
+                              onChange={() => toggleTaskId(t.id)}
+                            />
+                            <div style={{ flex: 1 }}>
+                              <div className="cb-checklist-name">{t.name}</div>
+                              <div className="cb-checklist-meta">
+                                {t.role || "no role"}{t.task_type ? ` \u00b7 ${t.task_type}` : ""}
+                                {t.requires_bank_account ? " \u00b7 needs a bank account" : ""}
+                                {t.tracks_number_label ? ` \u00b7 tracks ${t.tracks_number_label.toLowerCase()}` : ""}
+                              </div>
+                              {checked && t.requires_bank_account && !disabledForNewClient && (
+                                <select
+                                  className="cb-select"
+                                  style={{ marginTop: 6 }}
+                                  value={bankAccountByTaskId[t.id] || ""}
+                                  onChange={(e) => setBankAccountByTaskId((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                >
+                                  <option value="">Select a bank account</option>
+                                  {clientAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                                </select>
+                              )}
+                              {checked && disabledForNewClient && (
+                                <div className="cb-hint" style={{ marginTop: 4 }}>
+                                  Add the client first, then add a bank account, then create this task.
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </label>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </>
@@ -659,10 +720,50 @@ function NewTaskModal({ clients, templates, members, currentUser, onClose, onCre
   );
 }
 
+function StartCountModal({ task, onClose, onSubmit }) {
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const label = task.tracks_number_label;
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Before you start</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
+            <div style={{ fontSize: 16, fontWeight: 500 }}>{task.name}</div>
+          </div>
+          <div className="cb-field">
+            <label className="cb-label">Starting {label.toLowerCase()}</label>
+            <input
+              type="number" className="cb-input" value={value} onChange={(e) => setValue(e.target.value)}
+              autoFocus required
+            />
+          </div>
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+          <button
+            className="cb-btn cb-btn-primary" disabled={busy || value === ""}
+            onClick={async () => { setBusy(true); await onSubmit(parseInt(value, 10)); }}
+          >
+            Start timer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CompleteModal({ task, now, onClose, onSubmit }) {
   const [note, setNote] = useState(task.note || "");
+  const [endCount, setEndCount] = useState(task.end_count != null ? String(task.end_count) : "");
   const [busy, setBusy] = useState(false);
   const total = elapsedSeconds(task, now);
+  const needsCount = !!task.tracks_number_label;
   return (
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal">
@@ -672,11 +773,20 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
         </div>
         <div className="cb-modal-body">
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}</div>
+            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 500 }}>{task.name}</div>
             <div className="cb-mono" style={{ fontSize: 24, fontWeight: 600, marginTop: 8, color: "var(--green)" }}>{formatHM(total)}</div>
             <div style={{ fontSize: 12, color: "var(--ink-faint)" }}>{decimalHours(total)} hours, {task.role || "no role set"}, {task.task_type || "no task type set"}</div>
           </div>
+          {needsCount && (
+            <div className="cb-field">
+              <label className="cb-label">Ending {task.tracks_number_label.toLowerCase()}</label>
+              <input type="number" className="cb-input" value={endCount} onChange={(e) => setEndCount(e.target.value)} required />
+              {task.start_count != null && (
+                <div className="cb-hint">Started at {task.start_count}</div>
+              )}
+            </div>
+          )}
           <div className="cb-field">
             <label className="cb-label"><StickyNote size={12} style={{ verticalAlign: -1, marginRight: 4 }} />Note (optional)</label>
             <textarea className="cb-textarea" placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -684,7 +794,10 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onSubmit(task.id, note); }}>
+          <button
+            className="cb-btn cb-btn-primary" disabled={busy || (needsCount && endCount === "")}
+            onClick={async () => { setBusy(true); await onSubmit(task.id, note, needsCount ? parseInt(endCount, 10) : null); }}
+          >
             <CheckCircle2 size={14} />Submit
           </button>
         </div>
@@ -753,12 +866,25 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
   const [tName, setTName] = useState("");
   const [tRole, setTRole] = useState("");
   const [tType, setTType] = useState("");
+  const [tRequiresBank, setTRequiresBank] = useState(false);
+  const [tTracksLabel, setTTracksLabel] = useState("");
+
+  function patchTask(t, patch) {
+    onUpdateTask(template.id, t.id, {
+      name: t.name, role: t.role, task_type: t.task_type,
+      requires_bank_account: t.requires_bank_account, tracks_number_label: t.tracks_number_label,
+      ...patch,
+    });
+  }
 
   async function addTask(e) {
     e.preventDefault();
     if (!tName.trim()) return;
-    await onAddTask(template.id, { name: tName.trim(), role: tRole.trim(), task_type: tType.trim() });
-    setTName(""); setTRole(""); setTType(""); setAddingTask(false);
+    await onAddTask(template.id, {
+      name: tName.trim(), role: tRole.trim(), task_type: tType.trim(),
+      requires_bank_account: tRequiresBank, tracks_number_label: tTracksLabel.trim(),
+    });
+    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTTracksLabel(""); setAddingTask(false);
   }
 
   return (
@@ -783,27 +909,63 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
           )}
           {template.tasks.map((t) =>
             isAdmin ? (
-              <div className="cb-tmpl-task-row" key={t.id}>
-                <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
-                <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
-                <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
-                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
+              <div key={t.id} className="cb-tmpl-task-block">
+                <div className="cb-tmpl-task-row">
+                  <input className="cb-input" value={t.name} onChange={(e) => patchTask(t, { name: e.target.value })} />
+                  <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => patchTask(t, { role: e.target.value })} />
+                  <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => patchTask(t, { task_type: e.target.value })} />
+                  <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
+                </div>
+                <div className="cb-tmpl-task-options">
+                  <label className="cb-tmpl-task-option-checkbox">
+                    <input
+                      type="checkbox" className="cb-checkbox" checked={!!t.requires_bank_account}
+                      onChange={(e) => patchTask(t, { requires_bank_account: e.target.checked })}
+                    />
+                    Requires a bank account
+                  </label>
+                  <input
+                    className="cb-input cb-tmpl-task-tracks-input"
+                    placeholder="Tracks a number, e.g. Unreconciled transactions"
+                    value={t.tracks_number_label}
+                    onChange={(e) => patchTask(t, { tracks_number_label: e.target.value })}
+                  />
+                </div>
               </div>
             ) : (
               <div className="cb-row" key={t.id}>
                 <div className="cb-row-main">
                   <div className="cb-row-task">{t.name}</div>
-                  <div className="cb-row-meta">{t.role && <span>{t.role}</span>}{t.task_type && <span>{t.task_type}</span>}</div>
+                  <div className="cb-row-meta">
+                    {t.role && <span>{t.role}</span>}
+                    {t.task_type && <span>{t.task_type}</span>}
+                    {t.requires_bank_account && <span>Needs a bank account</span>}
+                    {t.tracks_number_label && <span>Tracks: {t.tracks_number_label}</span>}
+                  </div>
                 </div>
               </div>
             )
           )}
           {isAdmin && addingTask && (
-            <form className="cb-tmpl-task-row" onSubmit={addTask}>
-              <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
-              <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
-              <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
-              <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
+            <form className="cb-tmpl-task-block" onSubmit={addTask}>
+              <div className="cb-tmpl-task-row">
+                <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
+                <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
+                <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
+                <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
+              </div>
+              <div className="cb-tmpl-task-options">
+                <label className="cb-tmpl-task-option-checkbox">
+                  <input type="checkbox" className="cb-checkbox" checked={tRequiresBank} onChange={(e) => setTRequiresBank(e.target.checked)} />
+                  Requires a bank account
+                </label>
+                <input
+                  className="cb-input cb-tmpl-task-tracks-input"
+                  placeholder="Tracks a number, e.g. Unreconciled transactions"
+                  value={tTracksLabel}
+                  onChange={(e) => setTTracksLabel(e.target.value)}
+                />
+              </div>
             </form>
           )}
           {template.tasks.length === 0 && !addingTask && <div className="cb-empty">No tasks yet in this template.</div>}
@@ -870,20 +1032,39 @@ function Templates({ templates, isAdmin, onAddTask, onUpdateTask, onDeleteTask, 
   );
 }
 
-function Clients({ clients, tasks, isAdmin, onAdd, onDelete }) {
+function ClientRow({ client, taskCount, bankAccounts, isAdmin, onDeleteClient, onAddAccount, onDeleteAccount }) {
+  const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  async function submit(e) {
+  async function submitAccount(e) {
     e.preventDefault();
     if (!name.trim()) return;
-    await onAdd(name);
-    setName("");
+    setBusy(true);
+    try {
+      await onAddAccount(client.id, name);
+      setName("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function handleDelete(id) {
+  async function handleDeleteClient() {
     try {
-      await onDelete(id);
+      await onDeleteClient(client.id);
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function handleDeleteAccount(id) {
+    try {
+      await onDeleteAccount(id);
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
@@ -892,38 +1073,82 @@ function Clients({ clients, tasks, isAdmin, onAdd, onDelete }) {
 
   return (
     <div>
+      <button className="cb-client-row-toggle" onClick={() => setExpanded((v) => !v)}>
+        <div className="cb-row-main">
+          <div className="cb-row-task">{client.name}</div>
+          <div className="cb-row-meta">
+            {taskCount} task{taskCount === 1 ? "" : "s"} tracked, {bankAccounts.length} bank account{bankAccounts.length === 1 ? "" : "s"}
+          </div>
+        </div>
+        <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+      </button>
+      {expanded && (
+        <div className="cb-client-detail">
+          <div className="cb-hint" style={{ marginBottom: 8 }}>Bank accounts</div>
+          {bankAccounts.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No bank accounts added yet.</div>}
+          {bankAccounts.map((a) => (
+            <div key={a.id} className="cb-client-account-row">
+              <div style={{ fontSize: 13.5 }}>{a.name}</div>
+              {isAdmin && (
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => handleDeleteAccount(a.id)}><Trash2 size={13} /></button>
+              )}
+            </div>
+          ))}
+          <form onSubmit={submitAccount} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <input className="cb-input" placeholder="e.g. ANZ Business Checking" value={name} onChange={(e) => setName(e.target.value)} />
+            <button type="submit" className="cb-btn cb-btn-sm" disabled={busy} style={{ flexShrink: 0 }}><Plus size={13} />Add account</button>
+          </form>
+          {isAdmin && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              <button
+                className="cb-btn cb-btn-sm cb-btn-danger"
+                title={taskCount > 0 ? "This client has tracked tasks" : "Delete client"}
+                disabled={taskCount > 0}
+                onClick={handleDeleteClient}
+              >
+                <Trash2 size={13} />Delete client
+              </button>
+            </div>
+          )}
+          {error && <div className="cb-error" style={{ marginTop: 8 }}>{error}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onDelete, onAddAccount, onDeleteAccount }) {
+  const [name, setName] = useState("");
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    await onAdd(name);
+    setName("");
+  }
+
+  return (
+    <div>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Clients</div>
-          <div className="cb-page-sub">Every task on the dashboard is tracked against one of these.</div>
+          <div className="cb-page-sub">Every task on the dashboard is tracked against one of these. Click a client to manage its bank accounts.</div>
         </div>
       </div>
       <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 10, maxWidth: 420 }}>
         <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} />
         <button type="submit" className="cb-btn cb-btn-primary" style={{ flexShrink: 0 }}><Plus size={15} />Add</button>
       </form>
-      {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
       <div className="cb-card-list">
         {clients.length === 0 && <div className="cb-empty">No clients yet. Add your first one above.</div>}
         {clients.map((c) => {
           const count = tasks.filter((t) => t.client_id === c.id).length;
+          const accounts = bankAccounts.filter((a) => a.client_id === c.id);
           return (
-            <div className="cb-row" key={c.id}>
-              <div className="cb-row-main">
-                <div className="cb-row-task">{c.name}</div>
-                <div className="cb-row-meta">{count} task{count === 1 ? "" : "s"} tracked</div>
-              </div>
-              {isAdmin && (
-                <button
-                  className="cb-icon-btn cb-btn-danger"
-                  title={count > 0 ? "This client has tracked tasks" : "Delete"}
-                  disabled={count > 0}
-                  onClick={() => handleDelete(c.id)}
-                >
-                  <Trash2 size={14} />
-                </button>
-              )}
-            </div>
+            <ClientRow
+              key={c.id} client={c} taskCount={count} bankAccounts={accounts} isAdmin={isAdmin}
+              onDeleteClient={onDelete} onAddAccount={onAddAccount} onDeleteAccount={onDeleteAccount}
+            />
           );
         })}
       </div>
@@ -963,6 +1188,7 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
       .map((t) => {
         const secs = elapsedSeconds(t, now);
         const trackedBy = (members.find((m) => m.id === t.submitted_by_id) || {}).name || "none";
+        const hasCount = t.start_count != null && t.end_count != null;
         return {
           id: t.id,
           date: formatDate(t.submitted_at),
@@ -975,6 +1201,11 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
           note: t.note,
           trackedBy,
           pushed: !!t.pushed_to_karbon,
+          bankAccount: t.bank_account_name || "",
+          metric: t.tracks_number_label || "",
+          startCount: t.start_count,
+          endCount: t.end_count,
+          change: hasCount ? t.end_count - t.start_count : null,
         };
       });
   }, [submitted, clientFilter, pushFilter, dateRange, members, now]);
@@ -982,7 +1213,9 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   const totalHours = rows.reduce((sum, r) => sum + parseFloat(r.decHours), 0);
 
   function copyRow(r) {
-    const text = `${r.client}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.taskType || "none"} | ${r.hm} (${r.decHours}h)${r.note ? ` | Note: ${r.note}` : ""}`;
+    const countPart = r.change != null ? ` | ${r.metric}: ${r.startCount} to ${r.endCount} (${r.change > 0 ? "+" : ""}${r.change})` : "";
+    const bankPart = r.bankAccount ? ` | ${r.bankAccount}` : "";
+    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.taskType || "none"} | ${r.hm} (${r.decHours}h)${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1600); }
     });
@@ -1052,12 +1285,13 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
           <thead>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th>
-              <th className="num">Duration</th><th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>
+              <th className="num">Duration</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
+              <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={10}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
+              <tr><td colSpan={13}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
             {rows.map((r) => (
               <tr key={r.id}>
@@ -1067,6 +1301,11 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
                 <td>{r.role || "none"}</td>
                 <td>{r.taskType || "none"}</td>
                 <td className="num cb-mono">{r.hm}</td>
+                <td>{r.bankAccount || "none"}</td>
+                <td>{r.metric || "none"}</td>
+                <td className="num cb-mono">
+                  {r.change != null ? `${r.startCount} \u2192 ${r.endCount} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
+                </td>
                 <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
                 <td>{r.trackedBy}</td>
                 <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => onTogglePushed(r.id)} /></td>
@@ -1242,6 +1481,7 @@ export default function App() {
   const [loadError, setLoadError] = useState("");
   const [members, setMembers] = useState([]);
   const [clients, setClients] = useState([]);
+  const [bankAccounts, setBankAccounts] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState("dashboard");
@@ -1249,6 +1489,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
   const [completingTask, setCompletingTask] = useState(null);
+  const [startCountPrompt, setStartCountPrompt] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
   const [sleepAlert, setSleepAlert] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
@@ -1295,13 +1536,14 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [m, c, t, tk] = await Promise.all([
-        api.getMembers(), api.getClients(), api.getTemplates(), api.getTasks(),
+      const [m, c, t, tk, b] = await Promise.all([
+        api.getMembers(), api.getClients(), api.getTemplates(), api.getTasks(), api.getBankAccounts(),
       ]);
       setMembers(m);
       setClients(c);
       setTemplates(t);
       setTasks(tk);
+      setBankAccounts(b);
       setLoadError("");
     } catch (err) {
       setLoadError(err.message || "Could not reach the server");
@@ -1501,7 +1743,7 @@ export default function App() {
     setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
   }
 
-  async function startTask(taskId) {
+  async function startTask(taskId, startCount) {
     if (!currentUser) return;
     if ("Notification" in window && Notification.permission === "default") {
       // Tied to this click so the browser treats it as a genuine user request, not spam
@@ -1512,7 +1754,7 @@ export default function App() {
       (t) => t.owner_id === currentUser.id && t.status === "running" && t.id !== taskId
     );
     try {
-      const updated = await api.startTask(taskId);
+      const updated = await api.startTask(taskId, startCount != null ? startCount : null);
       setTasks((prev) =>
         prev.map((t) => {
           if (t.id === updated.id) return updated;
@@ -1534,6 +1776,16 @@ export default function App() {
     }
   }
 
+  // A task that tracks a number needs that starting figure once, the first time it is
+  // started. Once start_count is set, resuming after a pause skips straight to starting.
+  function requestStart(task) {
+    if (task.tracks_number_label && task.start_count == null) {
+      setStartCountPrompt(task);
+    } else {
+      startTask(task.id, null);
+    }
+  }
+
   async function pauseTask(taskId, endAt) {
     try {
       const updated = await api.pauseTask(taskId, endAt);
@@ -1543,9 +1795,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note) {
+  async function submitCompletion(taskId, note, endCount) {
     try {
-      const updated = await api.submitTask(taskId, note || "");
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
@@ -1590,6 +1842,17 @@ export default function App() {
   async function deleteClient(clientId) {
     await api.deleteClient(clientId);
     setClients((prev) => prev.filter((c) => c.id !== clientId));
+  }
+
+  async function addBankAccount(clientId, name) {
+    const account = await api.createBankAccount(clientId, name.trim());
+    setBankAccounts((prev) => [...prev, account]);
+    return account;
+  }
+
+  async function deleteBankAccount(accountId) {
+    await api.deleteBankAccount(accountId);
+    setBankAccounts((prev) => prev.filter((a) => a.id !== accountId));
   }
 
   async function createTasks(payloads) {
@@ -1674,7 +1937,7 @@ export default function App() {
             {view === "dashboard" && (
               <Dashboard
                 tasks={tasks} now={now} currentUser={currentUser} members={members}
-                onStart={startTask} onPause={pauseTask} onComplete={setCompletingTask}
+                onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onNewTask={() => setShowNewTask(true)}
               />
             )}
@@ -1686,7 +1949,10 @@ export default function App() {
               />
             )}
             {view === "clients" && (
-              <Clients clients={clients} tasks={tasks} isAdmin={isAdmin} onAdd={addClient} onDelete={deleteClient} />
+              <Clients
+                clients={clients} tasks={tasks} bankAccounts={bankAccounts} isAdmin={isAdmin}
+                onAdd={addClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
+              />
             )}
             {view === "export" && (
               <ExportView tasks={tasks} members={members} clients={clients} now={now} onTogglePushed={togglePushed} />
@@ -1704,8 +1970,18 @@ export default function App() {
 
       {showNewTask && (
         <NewTaskModal
-          clients={clients} templates={templates} members={members} currentUser={currentUser}
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts} currentUser={currentUser}
           onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
+        />
+      )}
+      {startCountPrompt && (
+        <StartCountModal
+          task={startCountPrompt}
+          onClose={() => setStartCountPrompt(null)}
+          onSubmit={async (count) => {
+            await startTask(startCountPrompt.id, count);
+            setStartCountPrompt(null);
+          }}
         />
       )}
       {completingTask && (
@@ -1719,7 +1995,7 @@ export default function App() {
           alert={sleepAlert}
           onDismiss={() => setSleepAlert(null)}
           onResume={async () => {
-            await startTask(sleepAlert.task.id);
+            requestStart(sleepAlert.task);
             setSleepAlert(null);
           }}
         />

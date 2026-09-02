@@ -53,6 +53,11 @@ export const api = {
   createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
   deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
 
+  getBankAccounts: () => request("/bank-accounts"),
+  createBankAccount: (clientId, name) =>
+    request("/bank-accounts", { method: "POST", body: JSON.stringify({ client_id: clientId, name }) }),
+  deleteBankAccount: (id) => request(`/bank-accounts/${id}`, { method: "DELETE" }),
+
   getTemplates: () => request("/templates"),
   createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
@@ -65,9 +70,11 @@ export const api = {
 
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
-  startTask: (id) => request(`/tasks/${id}/start`, { method: "POST" }),
+  startTask: (id, startCount) =>
+    request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(startCount != null ? { start_count: startCount } : {}) }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
-  submitTask: (id, note) => request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note }) }),
+  submitTask: (id, note, endCount) =>
+    request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note, end_count: endCount != null ? endCount : null }) }),
   reassignTask: (id, ownerId) =>
     request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId }) }),
   togglePushed: (id) => request(`/tasks/${id}/toggle-pushed`, { method: "PATCH" }),
