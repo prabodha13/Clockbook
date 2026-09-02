@@ -1313,13 +1313,21 @@ export default function App() {
       role,
       currentUser ? currentUser.id : null
     );
-      setMembers((prev) => [...prev, member]);
+
+    setMembers((prev) => [...prev, member]);
+
+    // Only switch to the created user during the very first setup.
+    // When an admin adds a teammate, keep the admin logged in.
+    if (!currentUser) {
       setCurrentUserId(member.id);
       localStorage.setItem(MEMBER_ID_KEY, member.id);
-    } catch (err) {
-      showToast(err.message, true);
     }
+
+    return member;
+  } catch (err) {
+    showToast(err.message, true);
   }
+}
 
   async function changeMemberRole(memberId, role) {
     try {
