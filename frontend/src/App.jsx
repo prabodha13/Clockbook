@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "rea
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
-  CheckCircle2, StickyNote, ClipboardList, LogOut, Settings,
+  CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -327,9 +327,10 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
   );
 }
 
-function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, hideClient }) {
+function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onReset, hideClient }) {
   const isMine = task.owner_id === currentUser.id;
   const isAdmin = currentUser.role === "admin";
+  const canReset = isMine || isAdmin;
   const elapsed = elapsedSeconds(task, now);
   const owner = members.find((m) => m.id === task.owner_id);
   return (
@@ -370,6 +371,19 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             <Pause size={14} />
           </button>
         )}
+        {(task.status === "running" || task.status === "paused") && canReset && (
+          <button
+            className="cb-icon-btn"
+            title="Reset time"
+            onClick={() => {
+              if (window.confirm(`Reset "${task.client_name}: ${task.name}"? This clears ${formatHM(elapsed)} of tracked time back to zero and moves it back to To do.`)) {
+                onReset(task.id);
+              }
+            }}
+          >
+            <RotateCcw size={14} />
+          </button>
+        )}
         {(task.status === "running" || task.status === "paused") && (
           <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={!isMine} onClick={() => onComplete(task)}>
             Complete
@@ -393,7 +407,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onNewTask }) {
+function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask }) {
   const todo = tasks.filter((t) => t.status === "todo");
   const inProgress = tasks.filter((t) => t.status === "running" || t.status === "paused");
   const submittedToday = tasks
@@ -436,7 +450,7 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
           ) : (
             items.map((t) => (
               <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
-                onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} />
+                onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset} />
             ))
           )}
         </div>
@@ -483,7 +497,7 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
                 <div className="cb-client-subgroup-head"><Building2 size={12} />{group.clientName}</div>
                 {group.items.map((t) => (
                   <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
-                    onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign}
+                    onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset}
                     hideClient />
                 ))}
               </Fragment>
@@ -1905,16 +1919,16 @@ export default function App() {
   const myPinnedTask = myRunningTask || myMostRecentPaused;
   const isAdmin = currentUser ? currentUser.role === "admin" : false;
 
-  // Watches for this computer or tab going away for a while, and pauses any running timer
-  // the moment it is detected rather than waiting to ask, since by the time someone is back
-  // at their desk to answer a prompt the point of catching it immediately is already lost.
-  // Browsers give web pages no single reliable "the machine is locked" event, so three
-  // signals are combined:
+  // Watches for this computer actually going to sleep or having its screen locked, and
+  // pauses any running timer the moment it is detected rather than waiting to ask, since by
+  // the time someone is back at their desk to answer a prompt the point of catching it
+  // immediately is already lost. Deliberately does NOT react to switching tabs or apps,
+  // since normal work involves moving between Clockbook, Excel, Xero, and email constantly,
+  // and treating every one of those switches as "away" would pause people far too often.
+  // Two signals are combined:
   //  1. A heartbeat gap: if far more time passed than expected between checks, the process
   //     itself was suspended, which happens during actual system sleep.
-  //  2. Tab visibility: catches switching away or minimizing, though this does not reliably
-  //     fire for an OS screen lock on every browser.
-  //  3. The Idle Detection API: reports the OS screen lock state directly, but only on
+  //  2. The Idle Detection API: reports the OS screen lock state directly, but only on
   //     Chrome and Edge, and needs a one time permission grant, and only reports after the
   //     screen has been locked for at least a minute.
   const runningTaskRef = useRef(null);
@@ -1961,22 +1975,6 @@ export default function App() {
       reportGap(gap, sleepStart);
     }, HEARTBEAT_MS);
     return () => clearInterval(iv);
-  }, []);
-
-  useEffect(() => {
-    let hiddenSince = null;
-    function handleVisibility() {
-      if (document.hidden) {
-        hiddenSince = Date.now();
-      } else if (hiddenSince) {
-        const gap = Date.now() - hiddenSince;
-        const sleepStart = hiddenSince;
-        hiddenSince = null;
-        reportGap(gap, sleepStart);
-      }
-    }
-    document.addEventListener("visibilitychange", handleVisibility);
-    return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
   const idleDetectorStartedRef = useRef(false);
@@ -2096,6 +2094,16 @@ export default function App() {
     try {
       const updated = await api.pauseTask(taskId, endAt);
       mergeTask(updated);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function resetTask(taskId) {
+    try {
+      const updated = await api.resetTask(taskId);
+      mergeTask(updated);
+      showToast("Time reset");
     } catch (err) {
       showToast(err.message, true);
     }
@@ -2275,7 +2283,7 @@ export default function App() {
               <Dashboard
                 tasks={tasks} now={now} currentUser={currentUser} members={members}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
-                onDelete={deleteTask} onReassign={reassignTask} onNewTask={() => setShowNewTask(true)}
+                onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
               />
             )}
             {view === "templates" && (

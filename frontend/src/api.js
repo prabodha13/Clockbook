@@ -48,6 +48,7 @@ export const api = {
     request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
   setMemberCredentials: (memberId, email, password) =>
     request(`/members/${memberId}/credentials`, { method: "PATCH", body: JSON.stringify({ email, password }) }),
+  deleteMember: (memberId) => request(`/members/${memberId}`, { method: "DELETE" }),
 
   getClients: () => request("/clients"),
   createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
@@ -85,6 +86,7 @@ export const api = {
   startTask: (id, startCount) =>
     request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(startCount != null ? { start_count: startCount } : {}) }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
+  resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
   submitTask: (id, note, endCount) =>
     request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note, end_count: endCount != null ? endCount : null }) }),
   reassignTask: (id, ownerId) =>
