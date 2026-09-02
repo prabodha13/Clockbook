@@ -12,19 +12,36 @@ class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
+    email: Optional[str] = None
     color_idx: int
-    role: str = "staff"
+    role: str
 
 
 class MemberCreate(BaseModel):
     name: str
-    role: str = "member"
-    created_by: Optional[str] = None
+    email: str
+    password: str
 
 
 class MemberRoleUpdate(BaseModel):
     role: str
-    actor_id: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    token: str
+    member: MemberOut
+
+
+class ClaimAccountRequest(BaseModel):
+    member_id: Optional[str] = None
+    name: Optional[str] = None
+    email: str
+    password: str
 
 
 class ClientOut(BaseModel):
@@ -49,7 +66,6 @@ class TemplateTaskCreate(BaseModel):
     name: str
     role: str = ""
     task_type: str = ""
-    actor_id: str
 
 
 class TemplateOut(BaseModel):
@@ -63,7 +79,6 @@ class TemplateOut(BaseModel):
 class TemplateCreate(BaseModel):
     field: str
     name: str
-    actor_id: str
 
 
 class TaskOut(BaseModel):
@@ -110,8 +125,4 @@ class TaskSubmit(BaseModel):
 
 
 class TaskReassign(BaseModel):
-    owner_id: str
-
-
-class TaskStart(BaseModel):
     owner_id: str

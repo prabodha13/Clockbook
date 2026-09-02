@@ -1,10 +1,12 @@
 import os
 import csv
+import secrets
+import bcrypt
 from io import StringIO
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,16 +34,20 @@ def run_startup_migrations():
     # Base.metadata.create_all only creates tables that do not exist yet, it never adds a
     # new column to a table that is already there. Since this app has no separate migration
     # tool, this checks for columns the current code expects and adds any that are missing,
-    # so a schema change like adding "role" does not need a manual database step to deploy.
+    # so a schema change does not need a manual database step to deploy.
     inspector = inspect(engine)
     if "members" in inspector.get_table_names():
         existing_columns = {c["name"] for c in inspector.get_columns("members")}
-        if "role" not in existing_columns:
-            with engine.begin() as conn:
+        with engine.begin() as conn:
+            if "role" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN role VARCHAR DEFAULT 'member'"))
                 conn.execute(text(
                     "UPDATE members SET role = 'admin' WHERE color_idx = (SELECT MIN(color_idx) FROM members)"
                 ))
+            if "email" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN email VARCHAR"))
+            if "password_hash" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN password_hash VARCHAR"))
 
 
 @asynccontextmanager
@@ -76,6 +82,35 @@ app.add_middleware(
 )
 
 
+def hash_password(password):
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(password, password_hash):
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
+    except Exception:
+        return False
+
+
+def get_current_member(authorization: str = Header(None), db: Session = Depends(get_db)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not logged in")
+    token = authorization[len("Bearer "):]
+    session = db.get(models.Session, token)
+    if not session:
+        raise HTTPException(401, "Session expired, please log in again")
+    member = db.get(models.Member, session.member_id)
+    if not member:
+        raise HTTPException(401, "Account no longer exists")
+    return member
+
+
+def require_admin(member):
+    if member.role != "admin":
+        raise HTTPException(403, "This action requires an admin")
+
+
 def close_open_segment(segments, end_override=None):
     segments = list(segments or [])
     if not segments:
@@ -98,17 +133,80 @@ def elapsed_seconds(segments):
     return total
 
 
-def require_admin(actor_id, db):
-    # There is no real login yet, so this checks the role of whichever member id the
-    # browser says is acting, rather than a verified session. It stops accidental misuse
-    # through the app itself, not a determined attempt to bypass it directly through the
-    # API. Real enforcement arrives with proper authentication later.
-    if not actor_id:
-        raise HTTPException(403, "This action requires an admin")
-    actor = db.get(models.Member, actor_id)
-    if not actor or actor.role != "admin":
-        raise HTTPException(403, "This action requires an admin")
-    return actor
+# ---------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------
+
+@app.get("/api/auth/status")
+def auth_status(db: Session = Depends(get_db)):
+    # Once at least one account has a password, this bootstrap path closes and everyone
+    # must log in normally. Before that, this tells the frontend whether to show a plain
+    # sign up screen (brand new install) or a claim screen (upgrading an older workspace
+    # that had passwordless accounts already in it).
+    any_secured = db.query(models.Member).filter(models.Member.password_hash.isnot(None)).count()
+    if any_secured > 0:
+        return {"setup_needed": False, "unclaimed": []}
+    unclaimed = db.query(models.Member).filter(models.Member.password_hash.is_(None)).all()
+    return {"setup_needed": True, "unclaimed": [{"id": m.id, "name": m.name} for m in unclaimed]}
+
+
+@app.post("/api/auth/claim", response_model=schemas.LoginResponse)
+def claim_account(payload: schemas.ClaimAccountRequest, db: Session = Depends(get_db)):
+    any_secured = db.query(models.Member).filter(models.Member.password_hash.isnot(None)).count()
+    if any_secured > 0:
+        raise HTTPException(400, "Accounts are already set up, please log in")
+    email = payload.email.strip().lower()
+    if db.query(models.Member).filter(models.Member.email == email).first():
+        raise HTTPException(400, "That email is already registered")
+    if payload.member_id:
+        member = db.get(models.Member, payload.member_id)
+        if not member or member.password_hash:
+            raise HTTPException(400, "That account cannot be claimed")
+        member.email = email
+        member.password_hash = hash_password(payload.password)
+        member.role = "admin"
+    else:
+        count = db.query(models.Member).count()
+        member = models.Member(
+            name=(payload.name or "Admin").strip() or "Admin",
+            email=email, color_idx=count, role="admin",
+            password_hash=hash_password(payload.password),
+        )
+        db.add(member)
+    db.commit()
+    db.refresh(member)
+    token = secrets.token_urlsafe(32)
+    db.add(models.Session(token=token, member_id=member.id))
+    db.commit()
+    return schemas.LoginResponse(token=token, member=member)
+
+
+@app.post("/api/auth/login", response_model=schemas.LoginResponse)
+def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+    email = payload.email.strip().lower()
+    member = db.query(models.Member).filter(models.Member.email == email).first()
+    if not member or not member.password_hash or not verify_password(payload.password, member.password_hash):
+        raise HTTPException(401, "Incorrect email or password")
+    token = secrets.token_urlsafe(32)
+    db.add(models.Session(token=token, member_id=member.id))
+    db.commit()
+    return schemas.LoginResponse(token=token, member=member)
+
+
+@app.post("/api/auth/logout", status_code=204)
+def logout(authorization: str = Header(None), db: Session = Depends(get_db)):
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization[len("Bearer "):]
+        session = db.get(models.Session, token)
+        if session:
+            db.delete(session)
+            db.commit()
+    return None
+
+
+@app.get("/api/auth/me", response_model=schemas.MemberOut)
+def get_me(current_member: models.Member = Depends(get_current_member)):
+    return current_member
 
 
 # ---------------------------------------------------------------
@@ -116,33 +214,21 @@ def require_admin(actor_id, db):
 # ---------------------------------------------------------------
 
 @app.get("/api/members", response_model=list[schemas.MemberOut])
-def list_members(db: Session = Depends(get_db)):
+def list_members(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     return db.query(models.Member).all()
 
 
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
-def create_member(payload: schemas.MemberCreate, db: Session = Depends(get_db)):
+def create_member(payload: schemas.MemberCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    email = payload.email.strip().lower()
+    if db.query(models.Member).filter(models.Member.email == email).first():
+        raise HTTPException(400, "That email is already registered")
     count = db.query(models.Member).count()
-
-    if count == 0:
-        # The first person to ever open the app becomes its first admin
-        member = models.Member(
-            name=payload.name.strip(),
-            color_idx=0,
-            role="admin"
-        )
-    else:
-        require_admin(payload.created_by, db)
-
-        if payload.role not in ("admin", "member"):
-            raise HTTPException(400, "Role must be admin or member")
-
-        member = models.Member(
-            name=payload.name.strip(),
-            color_idx=count,
-            role=payload.role
-        )
-
+    member = models.Member(
+        name=payload.name.strip(), email=email, color_idx=count, role="member",
+        password_hash=hash_password(payload.password),
+    )
     db.add(member)
     db.commit()
     db.refresh(member)
@@ -150,8 +236,8 @@ def create_member(payload: schemas.MemberCreate, db: Session = Depends(get_db)):
 
 
 @app.patch("/api/members/{member_id}/role", response_model=schemas.MemberOut)
-def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, db: Session = Depends(get_db)):
-    require_admin(payload.actor_id, db)
+def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     if payload.role not in ("admin", "member"):
         raise HTTPException(400, "Role must be admin or member")
     member = db.get(models.Member, member_id)
@@ -167,17 +253,37 @@ def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, db: Se
     return member
 
 
+@app.patch("/api/members/{member_id}/credentials", response_model=schemas.MemberOut)
+def set_member_credentials(member_id: str, payload: schemas.LoginRequest, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Lets an admin give login access to a legacy passwordless account, or reset someone's
+    # password if they are locked out. There is no email delivery in this app, so whatever
+    # password is set here needs to be shared with that person directly.
+    require_admin(current_member)
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    email = payload.email.strip().lower()
+    existing = db.query(models.Member).filter(models.Member.email == email, models.Member.id != member_id).first()
+    if existing:
+        raise HTTPException(400, "That email is already registered")
+    member.email = email
+    member.password_hash = hash_password(payload.password)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
 # ---------------------------------------------------------------
 # Clients
 # ---------------------------------------------------------------
 
 @app.get("/api/clients", response_model=list[schemas.ClientOut])
-def list_clients(db: Session = Depends(get_db)):
+def list_clients(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     return db.query(models.Client).all()
 
 
 @app.post("/api/clients", response_model=schemas.ClientOut, status_code=201)
-def create_client(payload: schemas.ClientCreate, db: Session = Depends(get_db)):
+def create_client(payload: schemas.ClientCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     client = models.Client(name=payload.name.strip())
     db.add(client)
     db.commit()
@@ -186,8 +292,8 @@ def create_client(payload: schemas.ClientCreate, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/clients/{client_id}", status_code=204)
-def delete_client(client_id: str, actor_id: str = None, db: Session = Depends(get_db)):
-    require_admin(actor_id, db)
+def delete_client(client_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     used = db.query(models.TaskInstance).filter(models.TaskInstance.client_id == client_id).count()
     if used > 0:
         raise HTTPException(400, "This client has tracked tasks and cannot be deleted")
@@ -203,13 +309,13 @@ def delete_client(client_id: str, actor_id: str = None, db: Session = Depends(ge
 # ---------------------------------------------------------------
 
 @app.get("/api/templates", response_model=list[schemas.TemplateOut])
-def list_templates(db: Session = Depends(get_db)):
+def list_templates(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     return db.query(models.Template).all()
 
 
 @app.post("/api/templates", response_model=schemas.TemplateOut, status_code=201)
-def create_template(payload: schemas.TemplateCreate, db: Session = Depends(get_db)):
-    require_admin(payload.actor_id, db)
+def create_template(payload: schemas.TemplateCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     tpl = models.Template(field=payload.field.strip(), name=payload.name.strip())
     db.add(tpl)
     db.commit()
@@ -218,8 +324,8 @@ def create_template(payload: schemas.TemplateCreate, db: Session = Depends(get_d
 
 
 @app.delete("/api/templates/{template_id}", status_code=204)
-def delete_template(template_id: str, actor_id: str = None, db: Session = Depends(get_db)):
-    require_admin(actor_id, db)
+def delete_template(template_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     tpl = db.get(models.Template, template_id)
     if tpl:
         db.delete(tpl)
@@ -228,8 +334,8 @@ def delete_template(template_id: str, actor_id: str = None, db: Session = Depend
 
 
 @app.post("/api/templates/{template_id}/tasks", response_model=schemas.TemplateTaskOut, status_code=201)
-def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, db: Session = Depends(get_db)):
-    require_admin(payload.actor_id, db)
+def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     tpl = db.get(models.Template, template_id)
     if not tpl:
         raise HTTPException(404, "Template not found")
@@ -246,8 +352,8 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, db:
 
 
 @app.put("/api/templates/{template_id}/tasks/{task_id}", response_model=schemas.TemplateTaskOut)
-def update_template_task(template_id: str, task_id: str, payload: schemas.TemplateTaskCreate, db: Session = Depends(get_db)):
-    require_admin(payload.actor_id, db)
+def update_template_task(template_id: str, task_id: str, payload: schemas.TemplateTaskCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     task = db.get(models.TemplateTask, task_id)
     if not task or task.template_id != template_id:
         raise HTTPException(404, "Task not found")
@@ -260,8 +366,8 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
 
 
 @app.delete("/api/templates/{template_id}/tasks/{task_id}", status_code=204)
-def delete_template_task(template_id: str, task_id: str, actor_id: str = None, db: Session = Depends(get_db)):
-    require_admin(actor_id, db)
+def delete_template_task(template_id: str, task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     task = db.get(models.TemplateTask, task_id)
     if task and task.template_id == template_id:
         db.delete(task)
@@ -274,19 +380,22 @@ def delete_template_task(template_id: str, task_id: str, actor_id: str = None, d
 # ---------------------------------------------------------------
 
 @app.get("/api/tasks", response_model=list[schemas.TaskOut])
-def list_tasks(db: Session = Depends(get_db)):
+def list_tasks(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     return db.query(models.TaskInstance).order_by(models.TaskInstance.created_at.desc()).all()
 
 
 @app.post("/api/tasks", response_model=schemas.TaskOut, status_code=201)
-def create_task(payload: schemas.TaskCreate, db: Session = Depends(get_db)):
+def create_task(payload: schemas.TaskCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    owner_id = payload.owner_id or current_member.id
+    if owner_id != current_member.id and current_member.role != "admin":
+        raise HTTPException(403, "Only an admin can assign a task to someone else")
     task = models.TaskInstance(
         client_id=payload.client_id,
         client_name=payload.client_name,
         name=payload.name.strip(),
         role=payload.role.strip(),
         task_type=payload.task_type.strip(),
-        owner_id=payload.owner_id,
+        owner_id=owner_id,
         status="todo",
         segments=[],
     )
@@ -297,14 +406,16 @@ def create_task(payload: schemas.TaskCreate, db: Session = Depends(get_db)):
 
 
 @app.post("/api/tasks/{task_id}/start", response_model=schemas.TaskOut)
-def start_task(task_id: str, payload: schemas.TaskStart, db: Session = Depends(get_db)):
+def start_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    if task.owner_id and task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
 
     # Enforce the one running timer per person rule on the server, not just in the browser
     others = db.query(models.TaskInstance).filter(
-        models.TaskInstance.owner_id == payload.owner_id,
+        models.TaskInstance.owner_id == current_member.id,
         models.TaskInstance.status == "running",
         models.TaskInstance.id != task_id,
     ).all()
@@ -313,7 +424,7 @@ def start_task(task_id: str, payload: schemas.TaskStart, db: Session = Depends(g
         other.status = "paused"
 
     if not task.owner_id:
-        task.owner_id = payload.owner_id
+        task.owner_id = current_member.id
     task.segments = [*(task.segments or []), {"start": datetime.utcnow().isoformat() + "Z", "end": None}]
     task.status = "running"
     db.commit()
@@ -322,10 +433,12 @@ def start_task(task_id: str, payload: schemas.TaskStart, db: Session = Depends(g
 
 
 @app.post("/api/tasks/{task_id}/pause", response_model=schemas.TaskOut)
-def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), db: Session = Depends(get_db)):
+def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    if task.owner_id and task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
     task.segments = close_open_segment(task.segments, payload.end_at)
     task.status = "paused"
     db.commit()
@@ -334,16 +447,18 @@ def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), d
 
 
 @app.post("/api/tasks/{task_id}/submit", response_model=schemas.TaskOut)
-def submit_task(task_id: str, payload: schemas.TaskSubmit, db: Session = Depends(get_db)):
+def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
+    if task.owner_id and task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
     if task.status == "running":
         task.segments = close_open_segment(task.segments)
     task.status = "submitted"
     task.note = payload.note
     task.submitted_at = datetime.utcnow()
-    task.submitted_by_id = task.owner_id
+    task.submitted_by_id = current_member.id
     task.pushed_to_karbon = False
     db.commit()
     db.refresh(task)
@@ -351,8 +466,8 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, db: Session = Depends
 
 
 @app.patch("/api/tasks/{task_id}/reassign", response_model=schemas.TaskOut)
-def reassign_task(task_id: str, payload: schemas.TaskReassign, db: Session = Depends(get_db)):
-    require_admin(payload.actor_id, db)
+def reassign_task(task_id: str, payload: schemas.TaskReassign, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -365,7 +480,7 @@ def reassign_task(task_id: str, payload: schemas.TaskReassign, db: Session = Dep
 
 
 @app.patch("/api/tasks/{task_id}/toggle-pushed", response_model=schemas.TaskOut)
-def toggle_pushed(task_id: str, db: Session = Depends(get_db)):
+def toggle_pushed(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -376,8 +491,8 @@ def toggle_pushed(task_id: str, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/tasks/{task_id}", status_code=204)
-def delete_task(task_id: str, actor_id: str = None, db: Session = Depends(get_db)):
-    require_admin(actor_id, db)
+def delete_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
     task = db.get(models.TaskInstance, task_id)
     if task:
         db.delete(task)
@@ -390,9 +505,6 @@ def delete_task(task_id: str, actor_id: str = None, db: Session = Depends(get_db
 # ---------------------------------------------------------------
 
 def parse_utc_naive(value):
-    # The browser sends full timestamps ending in Z (UTC). submitted_at is stored as naive
-    # UTC, so this converts to the same naive form for a correct comparison, the same fix
-    # applied earlier to the timer display.
     if not value:
         return None
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -437,12 +549,12 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None):
 
 
 @app.get("/api/export")
-def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, db: Session = Depends(get_db)):
+def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     return build_export_rows(db, client_id, pushed, date_from, date_to)
 
 
 @app.get("/api/export.csv")
-def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, db: Session = Depends(get_db)):
+def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     rows = build_export_rows(db, client_id, pushed, date_from, date_to)
     buffer = StringIO()
     writer = csv.writer(buffer)

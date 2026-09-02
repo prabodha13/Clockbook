@@ -14,8 +14,17 @@ class Member(Base):
     __tablename__ = "members"
     id = Column(String, primary_key=True, default=lambda: gen_id("mem"))
     name = Column(String, nullable=False)
+    email = Column(String, unique=True, nullable=True)
+    password_hash = Column(String, nullable=True)
     color_idx = Column(Integer, default=0)
-    role = Column(String, nullable=False, default="member")
+    role = Column(String, default="member")  # "admin" or "member"
+
+
+class Session(Base):
+    __tablename__ = "sessions"
+    token = Column(String, primary_key=True)
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 
 class Client(Base):
