@@ -119,7 +119,10 @@ async function copyToClipboard(text) {
 
 function Avatar({ member, size }) {
   const tint = MEMBER_TINTS[member.color_idx % MEMBER_TINTS.length];
-  const initials = member.name.trim().slice(0, 2).toUpperCase();
+  const parts = member.name.trim().split(/\s+/);
+  const initials = parts.length > 1
+    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    : member.name.trim().slice(0, 2).toUpperCase();
   return (
     <div className="cb-avatar" style={{ background: tint, width: size || 24, height: size || 24, fontSize: size ? size * 0.42 : 11 }}>
       {initials}
