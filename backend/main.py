@@ -80,6 +80,19 @@ def elapsed_seconds(segments):
     return total
 
 
+def require_admin(actor_id, db):
+    # There is no real login yet, so this checks the role of whichever member id the
+    # browser says is acting, rather than a verified session. It stops accidental misuse
+    # through the app itself, not a determined attempt to bypass it directly through the
+    # API. Real enforcement arrives with proper authentication later.
+    if not actor_id:
+        raise HTTPException(403, "This action requires an admin")
+    actor = db.get(models.Member, actor_id)
+    if not actor or actor.role != "admin":
+        raise HTTPException(403, "This action requires an admin")
+    return actor
+
+
 # ---------------------------------------------------------------
 # Members
 # ---------------------------------------------------------------
@@ -92,8 +105,31 @@ def list_members(db: Session = Depends(get_db)):
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
 def create_member(payload: schemas.MemberCreate, db: Session = Depends(get_db)):
     count = db.query(models.Member).count()
-    member = models.Member(name=payload.name.strip(), color_idx=count)
+    if count == 0:
+        # The first person to ever open the app becomes its first admin
+        member = models.Member(name=payload.name.strip(), color_idx=0, role="admin")
+    else:
+        require_admin(payload.created_by, db)
+        member = models.Member(name=payload.name.strip(), color_idx=count, role="member")
     db.add(member)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@app.patch("/api/members/{member_id}/role", response_model=schemas.MemberOut)
+def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, db: Session = Depends(get_db)):
+    require_admin(payload.actor_id, db)
+    if payload.role not in ("admin", "member"):
+        raise HTTPException(400, "Role must be admin or member")
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    if member.role == "admin" and payload.role == "member":
+        admin_count = db.query(models.Member).filter(models.Member.role == "admin").count()
+        if admin_count <= 1:
+            raise HTTPException(400, "At least one admin is required")
+    member.role = payload.role
     db.commit()
     db.refresh(member)
     return member
@@ -118,7 +154,8 @@ def create_client(payload: schemas.ClientCreate, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/clients/{client_id}", status_code=204)
-def delete_client(client_id: str, db: Session = Depends(get_db)):
+def delete_client(client_id: str, actor_id: str = None, db: Session = Depends(get_db)):
+    require_admin(actor_id, db)
     used = db.query(models.TaskInstance).filter(models.TaskInstance.client_id == client_id).count()
     if used > 0:
         raise HTTPException(400, "This client has tracked tasks and cannot be deleted")
@@ -140,6 +177,7 @@ def list_templates(db: Session = Depends(get_db)):
 
 @app.post("/api/templates", response_model=schemas.TemplateOut, status_code=201)
 def create_template(payload: schemas.TemplateCreate, db: Session = Depends(get_db)):
+    require_admin(payload.actor_id, db)
     tpl = models.Template(field=payload.field.strip(), name=payload.name.strip())
     db.add(tpl)
     db.commit()
@@ -148,7 +186,8 @@ def create_template(payload: schemas.TemplateCreate, db: Session = Depends(get_d
 
 
 @app.delete("/api/templates/{template_id}", status_code=204)
-def delete_template(template_id: str, db: Session = Depends(get_db)):
+def delete_template(template_id: str, actor_id: str = None, db: Session = Depends(get_db)):
+    require_admin(actor_id, db)
     tpl = db.get(models.Template, template_id)
     if tpl:
         db.delete(tpl)
@@ -158,6 +197,7 @@ def delete_template(template_id: str, db: Session = Depends(get_db)):
 
 @app.post("/api/templates/{template_id}/tasks", response_model=schemas.TemplateTaskOut, status_code=201)
 def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, db: Session = Depends(get_db)):
+    require_admin(payload.actor_id, db)
     tpl = db.get(models.Template, template_id)
     if not tpl:
         raise HTTPException(404, "Template not found")
@@ -175,6 +215,7 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, db:
 
 @app.put("/api/templates/{template_id}/tasks/{task_id}", response_model=schemas.TemplateTaskOut)
 def update_template_task(template_id: str, task_id: str, payload: schemas.TemplateTaskCreate, db: Session = Depends(get_db)):
+    require_admin(payload.actor_id, db)
     task = db.get(models.TemplateTask, task_id)
     if not task or task.template_id != template_id:
         raise HTTPException(404, "Task not found")
@@ -187,7 +228,8 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
 
 
 @app.delete("/api/templates/{template_id}/tasks/{task_id}", status_code=204)
-def delete_template_task(template_id: str, task_id: str, db: Session = Depends(get_db)):
+def delete_template_task(template_id: str, task_id: str, actor_id: str = None, db: Session = Depends(get_db)):
+    require_admin(actor_id, db)
     task = db.get(models.TemplateTask, task_id)
     if task and task.template_id == template_id:
         db.delete(task)
@@ -278,6 +320,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, db: Session = Depends
 
 @app.patch("/api/tasks/{task_id}/reassign", response_model=schemas.TaskOut)
 def reassign_task(task_id: str, payload: schemas.TaskReassign, db: Session = Depends(get_db)):
+    require_admin(payload.actor_id, db)
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
@@ -301,7 +344,8 @@ def toggle_pushed(task_id: str, db: Session = Depends(get_db)):
 
 
 @app.delete("/api/tasks/{task_id}", status_code=204)
-def delete_task(task_id: str, db: Session = Depends(get_db)):
+def delete_task(task_id: str, actor_id: str = None, db: Session = Depends(get_db)):
+    require_admin(actor_id, db)
     task = db.get(models.TaskInstance, task_id)
     if task:
         db.delete(task)
