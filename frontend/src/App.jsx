@@ -52,6 +52,63 @@ function isToday(iso) {
   return d.getFullYear() === n.getFullYear() && d.getMonth() === n.getMonth() && d.getDate() === n.getDate();
 }
 
+// Start of the Monday to Sunday week containing d, at local midnight
+function startOfWeek(d) {
+  const date = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = date.getDay(); // 0 = Sunday
+  const diff = day === 0 ? -6 : 1 - day;
+  date.setDate(date.getDate() + diff);
+  return date;
+}
+
+function localDayStart(y, m, d) {
+  return new Date(y, m, d, 0, 0, 0, 0);
+}
+function localDayEnd(y, m, d) {
+  return new Date(y, m, d, 23, 59, 59, 999);
+}
+
+function dateRangeForPreset(preset) {
+  const now = new Date();
+  let start, end;
+  if (preset === "this_week") {
+    start = startOfWeek(now);
+    end = new Date(start); end.setDate(end.getDate() + 6);
+  } else if (preset === "last_week") {
+    start = startOfWeek(now); start.setDate(start.getDate() - 7);
+    end = new Date(start); end.setDate(end.getDate() + 6);
+  } else if (preset === "this_month") {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  } else if (preset === "last_month") {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    end = new Date(now.getFullYear(), now.getMonth(), 0);
+  } else {
+    return null;
+  }
+  const from = localDayStart(start.getFullYear(), start.getMonth(), start.getDate());
+  const to = localDayEnd(end.getFullYear(), end.getMonth(), end.getDate());
+  return {
+    fromIso: from.toISOString(),
+    toIso: to.toISOString(),
+    label: `${from.toLocaleDateString(undefined, { month: "short", day: "numeric" })} to ${to.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
+  };
+}
+
+// Custom range comes from <input type="date"> as plain YYYY-MM-DD strings with no timezone.
+// Adding the time portion without a Z tells the browser to read it as local time, so the
+// day boundaries line up with what the person actually picked rather than shifting with UTC.
+function dateRangeForCustom(fromStr, toStr) {
+  if (!fromStr || !toStr) return null;
+  const from = new Date(`${fromStr}T00:00:00`);
+  const to = new Date(`${toStr}T23:59:59.999`);
+  return {
+    fromIso: from.toISOString(),
+    toIso: to.toISOString(),
+    label: `${from.toLocaleDateString(undefined, { month: "short", day: "numeric" })} to ${to.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`,
+  };
+}
+
 async function copyToClipboard(text) {
   try {
     await navigator.clipboard.writeText(text);
@@ -665,7 +722,15 @@ function Clients({ clients, tasks, onAdd, onDelete }) {
 function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
+  const [datePreset, setDatePreset] = useState("this_week");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [copiedId, setCopiedId] = useState(null);
+
+  const dateRange = useMemo(() => {
+    if (datePreset === "custom") return dateRangeForCustom(customFrom, customTo);
+    return dateRangeForPreset(datePreset);
+  }, [datePreset, customFrom, customTo]);
 
   const submitted = tasks.filter((t) => t.status === "submitted");
 
@@ -676,6 +741,11 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
         if (pushFilter === "all") return true;
         if (pushFilter === "pending") return !t.pushed_to_karbon;
         return !!t.pushed_to_karbon;
+      })
+      .filter((t) => {
+        if (!dateRange || !t.submitted_at) return true;
+        const submittedMs = new Date(t.submitted_at).getTime();
+        return submittedMs >= new Date(dateRange.fromIso).getTime() && submittedMs <= new Date(dateRange.toIso).getTime();
       })
       .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at))
       .map((t) => {
@@ -695,7 +765,7 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
           pushed: !!t.pushed_to_karbon,
         };
       });
-  }, [submitted, clientFilter, pushFilter, members, now]);
+  }, [submitted, clientFilter, pushFilter, dateRange, members, now]);
 
   const totalHours = rows.reduce((sum, r) => sum + parseFloat(r.decHours), 0);
 
@@ -707,10 +777,10 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   }
 
   function downloadCSV() {
-    window.location.href = exportCsvUrl(clientFilter, pushFilter);
+    window.location.href = exportCsvUrl(clientFilter, pushFilter, dateRange ? dateRange.fromIso : null, dateRange ? dateRange.toIso : null);
   }
   async function copyCSV() {
-    const res = await fetch(exportCsvUrl(clientFilter, pushFilter));
+    const res = await fetch(exportCsvUrl(clientFilter, pushFilter, dateRange ? dateRange.fromIso : null, dateRange ? dateRange.toIso : null));
     const text = await res.text();
     copyToClipboard(text);
   }
@@ -726,6 +796,25 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
           <button className="cb-btn" onClick={copyCSV}><Copy size={14} />Copy CSV</button>
           <button className="cb-btn cb-btn-primary" onClick={downloadCSV}><Download size={14} />Download CSV</button>
         </div>
+      </div>
+
+      <div className="cb-filter-bar">
+        <div className="cb-tabs">
+          <button className={`cb-tab ${datePreset === "this_week" ? "active" : ""}`} onClick={() => setDatePreset("this_week")}>This week</button>
+          <button className={`cb-tab ${datePreset === "last_week" ? "active" : ""}`} onClick={() => setDatePreset("last_week")}>Last week</button>
+          <button className={`cb-tab ${datePreset === "this_month" ? "active" : ""}`} onClick={() => setDatePreset("this_month")}>This month</button>
+          <button className={`cb-tab ${datePreset === "last_month" ? "active" : ""}`} onClick={() => setDatePreset("last_month")}>Last month</button>
+          <button className={`cb-tab ${datePreset === "custom" ? "active" : ""}`} onClick={() => setDatePreset("custom")}>Custom</button>
+        </div>
+        {datePreset === "custom" ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <input type="date" className="cb-input" style={{ width: 150 }} value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+            <span style={{ color: "var(--ink-faint)" }}>to</span>
+            <input type="date" className="cb-input" style={{ width: 150 }} value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+          </div>
+        ) : (
+          dateRange && <div style={{ fontSize: 12.5, color: "var(--ink-soft)" }}>{dateRange.label}</div>
+        )}
       </div>
 
       <div className="cb-filter-bar">
