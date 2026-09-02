@@ -641,6 +641,27 @@ def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), c
     return task
 
 
+@app.post("/api/tasks/{task_id}/reset", response_model=schemas.TaskOut)
+def reset_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # For a mistaken click, wipes all tracked time back to zero and returns the task to
+    # To do, rather than deleting the task itself. The owner can fix their own mistake, and
+    # an admin can step in too if someone needs help undoing it.
+    task = db.get(models.TaskInstance, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.owner_id and task.owner_id != current_member.id and current_member.role != "admin":
+        raise HTTPException(403, "This task belongs to someone else")
+    if task.status not in ("running", "paused"):
+        raise HTTPException(400, "Only a running or paused task can be reset")
+    task.segments = []
+    task.status = "todo"
+    task.start_count = None
+    task.end_count = None
+    db.commit()
+    db.refresh(task)
+    return task
+
+
 @app.post("/api/tasks/{task_id}/submit", response_model=schemas.TaskOut)
 def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
