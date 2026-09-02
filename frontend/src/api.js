@@ -21,7 +21,14 @@ async function request(path, options = {}) {
 
 export const api = {
   getMembers: () => request("/members"),
-  createMember: (name, createdBy) => request("/members", { method: "POST", body: JSON.stringify({ name, created_by: createdBy || null }) }),
+  createMember: (name, role, createdBy) => request("/members", {
+  method: "POST",
+  body: JSON.stringify({
+    name,
+    role,
+    created_by: createdBy || null
+  })
+}),
   updateMemberRole: (memberId, role, actorId) =>
     request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role, actor_id: actorId }) }),
 
