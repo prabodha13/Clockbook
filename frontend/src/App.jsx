@@ -777,26 +777,26 @@ function niceDuration(ms) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-function SleepAlertModal({ alert, onKeep, onRemoveIdleTime }) {
+function SleepAlertModal({ alert, onDismiss, onResume }) {
   const [busy, setBusy] = useState(false);
   return (
     <div className="cb-overlay">
       <div className="cb-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">Welcome back</div>
+          <div className="cb-modal-title">Timer paused automatically</div>
         </div>
         <div className="cb-modal-body">
-          <div style={{ marginBottom: 14, lineHeight: 1.5 }}>
-            This computer looks like it was asleep, or away from this tab, for about{" "}
+          <div style={{ lineHeight: 1.5 }}>
+            This computer looks like it was locked, asleep, or away from this tab for about{" "}
             <strong>{niceDuration(alert.gapMs)}</strong>. The timer for{" "}
-            <strong>{alert.task.client_name}: {alert.task.name}</strong> kept running the whole time.
+            <strong>{alert.task.client_name}: {alert.task.name}</strong> was paused the moment it went away,
+            so that time was not tracked.
           </div>
-          <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>Keep that time as tracked, or remove the time it was away?</div>
         </div>
         <div className="cb-modal-foot">
-          <button className="cb-btn" disabled={busy} onClick={onKeep}>Keep this time</button>
-          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onRemoveIdleTime(); }}>
-            Remove the idle time
+          <button className="cb-btn" disabled={busy} onClick={onDismiss}>Got it</button>
+          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onResume(); }}>
+            Resume timer
           </button>
         </div>
       </div>
@@ -868,42 +868,107 @@ export default function App() {
   const currentUser = members.find((m) => m.id === currentUserId) || null;
   const myRunningTask = currentUser ? tasks.find((t) => t.owner_id === currentUser.id && t.status === "running") : null;
 
-  // Tracks whether this computer or tab appears to have been asleep or inactive for a while.
-  // Browsers give web pages no direct "the machine slept" event, so this compares how much
-  // time actually passed against how much was expected between checks. A gap far larger than
-  // expected almost always means the laptop slept or the browser was fully backgrounded.
+  // Watches for this computer or tab going away for a while, and pauses any running timer
+  // the moment it is detected rather than waiting to ask, since by the time someone is back
+  // at their desk to answer a prompt the point of catching it immediately is already lost.
+  // Browsers give web pages no single reliable "the machine is locked" event, so three
+  // signals are combined:
+  //  1. A heartbeat gap: if far more time passed than expected between checks, the process
+  //     itself was suspended, which happens during actual system sleep.
+  //  2. Tab visibility: catches switching away or minimizing, though this does not reliably
+  //     fire for an OS screen lock on every browser.
+  //  3. The Idle Detection API: reports the OS screen lock state directly, but only on
+  //     Chrome and Edge, and needs a one time permission grant, and only reports after the
+  //     screen has been locked for at least a minute.
   const runningTaskRef = useRef(null);
   useEffect(() => { runningTaskRef.current = myRunningTask || null; }, [myRunningTask]);
 
+  const lastAlertRef = useRef(0);
+  const SLEEP_THRESHOLD_MS = 20000;
+
+  async function reportGap(gapMs, sleepStartMs) {
+    if (gapMs < SLEEP_THRESHOLD_MS) return;
+    if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
+    lastAlertRef.current = Date.now();
+    const task = runningTaskRef.current;
+    if (!task) return;
+    try {
+      await api.pauseTask(task.id, new Date(sleepStartMs).toISOString());
+      await refreshTasks();
+    } catch (err) {
+      // if this fails, still tell the person below so they know to check the task themselves
+    }
+    setSleepAlert({ task, gapMs, sleepStartMs });
+    if ("Notification" in window && Notification.permission === "granted") {
+      try {
+        const n = new Notification("Clockbook", {
+          body: `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`,
+          tag: "clockbook-sleep-alert",
+        });
+        n.onclick = () => window.focus();
+      } catch (e) {
+        // Some platforms restrict the Notification constructor, safe to ignore
+      }
+    }
+  }
+
   useEffect(() => {
     const HEARTBEAT_MS = 3000;
-    const SLEEP_THRESHOLD_MS = 20000;
     let lastTick = Date.now();
     const iv = setInterval(() => {
       const nowTick = Date.now();
       const gap = nowTick - lastTick;
       const sleepStart = lastTick;
       lastTick = nowTick;
-      if (gap > SLEEP_THRESHOLD_MS) {
-        const task = runningTaskRef.current;
-        if (task) {
-          setSleepAlert({ task, gapMs: gap, sleepStartMs: sleepStart });
-          if ("Notification" in window && Notification.permission === "granted") {
-            try {
-              const n = new Notification("Clockbook", {
-                body: `Timer for ${task.client_name}: ${task.name} kept running for about ${niceDuration(gap)} while this computer was away.`,
-                tag: "clockbook-sleep-alert",
-              });
-              n.onclick = () => window.focus();
-            } catch (e) {
-              // Some platforms restrict the Notification constructor, safe to ignore
-            }
-          }
-        }
-      }
+      reportGap(gap, sleepStart);
     }, HEARTBEAT_MS);
     return () => clearInterval(iv);
   }, []);
+
+  useEffect(() => {
+    let hiddenSince = null;
+    function handleVisibility() {
+      if (document.hidden) {
+        hiddenSince = Date.now();
+      } else if (hiddenSince) {
+        const gap = Date.now() - hiddenSince;
+        const sleepStart = hiddenSince;
+        hiddenSince = null;
+        reportGap(gap, sleepStart);
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
+  const idleDetectorStartedRef = useRef(false);
+
+  async function enableIdleDetection() {
+    if (idleDetectorStartedRef.current) return;
+    if (!("IdleDetector" in window)) return; // Not supported outside Chrome and Edge
+    idleDetectorStartedRef.current = true;
+    try {
+      const permission = await window.IdleDetector.requestPermission();
+      if (permission !== "granted") return;
+      const controller = new AbortController();
+      const detector = new window.IdleDetector();
+      let lockedSince = null;
+      detector.addEventListener("change", () => {
+        if (detector.screenState === "locked") {
+          lockedSince = Date.now();
+        } else if (detector.screenState === "unlocked" && lockedSince) {
+          const gap = Date.now() - lockedSince;
+          const sleepStart = lockedSince;
+          lockedSince = null;
+          reportGap(gap, sleepStart);
+        }
+      });
+      // Chrome enforces a minimum threshold of 60000ms for this API
+      await detector.start({ threshold: 60000, signal: controller.signal });
+    } catch (err) {
+      // Permission denied, unsupported context, or not triggered by a user gesture
+    }
+  }
 
   async function createMember(name) {
     try {
@@ -932,6 +997,7 @@ export default function App() {
       // Tied to this click so the browser treats it as a genuine user request, not spam
       Notification.requestPermission();
     }
+    enableIdleDetection();
     try {
       await api.startTask(taskId, currentUser.id);
       await refreshTasks();
@@ -1105,11 +1171,10 @@ export default function App() {
       {sleepAlert && (
         <SleepAlertModal
           alert={sleepAlert}
-          onKeep={() => setSleepAlert(null)}
-          onRemoveIdleTime={async () => {
-            await pauseTask(sleepAlert.task.id, new Date(sleepAlert.sleepStartMs).toISOString());
+          onDismiss={() => setSleepAlert(null)}
+          onResume={async () => {
+            await startTask(sleepAlert.task.id);
             setSleepAlert(null);
-            showToast("Idle time removed from the timer");
           }}
         />
       )}
