@@ -1020,9 +1020,15 @@ export default function App() {
       Notification.requestPermission();
     }
     enableIdleDetection();
+    const previouslyRunning = tasks.find(
+      (t) => t.owner_id === currentUser.id && t.status === "running" && t.id !== taskId
+    );
     try {
       await api.startTask(taskId, currentUser.id);
       await refreshTasks();
+      if (previouslyRunning) {
+        showToast(`Paused "${previouslyRunning.client_name}: ${previouslyRunning.name}" to start this task`);
+      }
     } catch (err) {
       showToast(err.message, true);
     }
