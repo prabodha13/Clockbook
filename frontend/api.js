@@ -48,6 +48,7 @@ export const api = {
     request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
   setMemberCredentials: (memberId, email, password) =>
     request(`/members/${memberId}/credentials`, { method: "PATCH", body: JSON.stringify({ email, password }) }),
+  deleteMember: (memberId) => request(`/members/${memberId}`, { method: "DELETE" }),
 
   getClients: () => request("/clients"),
   createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
