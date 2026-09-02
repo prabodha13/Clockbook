@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_serializer
 
 
 class Segment(BaseModel):
@@ -72,6 +72,14 @@ class TaskOut(BaseModel):
     submitted_at: Optional[datetime] = None
     submitted_by_id: Optional[str] = None
     pushed_to_karbon: bool
+
+    @field_serializer("created_at", "submitted_at")
+    def serialize_as_utc(self, value: Optional[datetime], _info):
+        # Stored as naive UTC in the database, this marks it as UTC for the browser
+        # so it is not mistaken for local time
+        if value is None:
+            return None
+        return value.isoformat() + "Z"
 
 
 class TaskCreate(BaseModel):

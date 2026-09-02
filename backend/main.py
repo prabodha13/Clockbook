@@ -65,7 +65,7 @@ def close_open_segment(segments):
     last = segments[-1]
     if last.get("end"):
         return segments
-    segments[-1] = {**last, "end": datetime.utcnow().isoformat()}
+    segments[-1] = {**last, "end": datetime.utcnow().isoformat() + "Z"}
     return segments
 
 
@@ -239,7 +239,7 @@ def start_task(task_id: str, payload: schemas.TaskStart, db: Session = Depends(g
 
     if not task.owner_id:
         task.owner_id = payload.owner_id
-    task.segments = [*(task.segments or []), {"start": datetime.utcnow().isoformat(), "end": None}]
+    task.segments = [*(task.segments or []), {"start": datetime.utcnow().isoformat() + "Z", "end": None}]
     task.status = "running"
     db.commit()
     db.refresh(task)
