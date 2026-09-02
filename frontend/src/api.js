@@ -1,10 +1,23 @@
 const BASE = "/api";
+const TOKEN_KEY = "clockbook-token";
+
+export function getToken() {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token) {
+  localStorage.setItem(TOKEN_KEY, token);
+}
+
+export function clearToken() {
+  localStorage.removeItem(TOKEN_KEY);
+}
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
+  const token = getToken();
+  const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const res = await fetch(`${BASE}${path}`, { ...options, headers });
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {
@@ -13,50 +26,52 @@ async function request(path, options = {}) {
     } catch (e) {
       // response had no JSON body, keep the generic message
     }
-    throw new Error(message);
+    const err = new Error(message);
+    err.status = res.status;
+    throw err;
   }
   if (res.status === 204) return null;
   return res.json();
 }
 
 export const api = {
+  getAuthStatus: () => request("/auth/status"),
+  claimAccount: (payload) => request("/auth/claim", { method: "POST", body: JSON.stringify(payload) }),
+  login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  logout: () => request("/auth/logout", { method: "POST" }),
+  getMe: () => request("/auth/me"),
+
   getMembers: () => request("/members"),
-  createMember: (name, role, createdBy) => request("/members", {
-  method: "POST",
-  body: JSON.stringify({
-    name,
-    role,
-    created_by: createdBy || null
-  })
-}),
-  updateMemberRole: (memberId, role, actorId) =>
-    request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role, actor_id: actorId }) }),
+  createMember: (name, email, password) =>
+    request("/members", { method: "POST", body: JSON.stringify({ name, email, password }) }),
+  updateMemberRole: (memberId, role) =>
+    request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
+  setMemberCredentials: (memberId, email, password) =>
+    request(`/members/${memberId}/credentials`, { method: "PATCH", body: JSON.stringify({ email, password }) }),
 
   getClients: () => request("/clients"),
   createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
-  deleteClient: (id, actorId) => request(`/clients/${id}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
+  deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
 
   getTemplates: () => request("/templates"),
-  createTemplate: (field, name, actorId) => request("/templates", { method: "POST", body: JSON.stringify({ field, name, actor_id: actorId }) }),
-  deleteTemplate: (id, actorId) => request(`/templates/${id}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
-  addTemplateTask: (templateId, task, actorId) =>
-    request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify({ ...task, actor_id: actorId }) }),
-  updateTemplateTask: (templateId, taskId, task, actorId) =>
-    request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify({ ...task, actor_id: actorId }) }),
-  deleteTemplateTask: (templateId, taskId, actorId) =>
-    request(`/templates/${templateId}/tasks/${taskId}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
+  createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
+  deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
+  addTemplateTask: (templateId, task) =>
+    request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify(task) }),
+  updateTemplateTask: (templateId, taskId, task) =>
+    request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify(task) }),
+  deleteTemplateTask: (templateId, taskId) =>
+    request(`/templates/${templateId}/tasks/${taskId}`, { method: "DELETE" }),
 
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
-  startTask: (id, ownerId) => request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify({ owner_id: ownerId }) }),
+  startTask: (id) => request(`/tasks/${id}/start`, { method: "POST" }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   submitTask: (id, note) => request(`/tasks/${id}/submit`, { method: "POST", body: JSON.stringify({ note }) }),
-  reassignTask: (id, ownerId, actorId) =>
-    request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId, actor_id: actorId }) }),
+  reassignTask: (id, ownerId) =>
+    request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId }) }),
   togglePushed: (id) => request(`/tasks/${id}/toggle-pushed`, { method: "PATCH" }),
-  deleteTask: (id, actorId) => request(`/tasks/${id}?actor_id=${encodeURIComponent(actorId)}`, { method: "DELETE" }),
-
-  exportRows: (clientId, pushed) => request(`/export?client_id=${clientId}&pushed=${pushed}`),
+  deleteTask: (id) => request(`/tasks/${id}`, { method: "DELETE" }),
 };
 
 export function exportCsvUrl(clientId, pushed, dateFrom, dateTo) {
@@ -64,4 +79,33 @@ export function exportCsvUrl(clientId, pushed, dateFrom, dateTo) {
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
   return `${BASE}/export.csv?${params.toString()}`;
+}
+
+// Export now requires a login, and a plain browser navigation cannot carry the
+// Authorization header, so the CSV is fetched here and turned into a real download
+// instead of just pointing the browser at the URL.
+export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filename) {
+  const token = getToken();
+  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+export async function fetchCsvText(clientId, pushed, dateFrom, dateTo) {
+  const token = getToken();
+  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo), {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Request failed (${res.status})`);
+  return res.text();
 }

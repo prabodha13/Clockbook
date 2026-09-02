@@ -2,12 +2,11 @@ import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
-  CheckCircle2, StickyNote, ClipboardList,
+  CheckCircle2, StickyNote, ClipboardList, LogOut,
 } from "lucide-react";
-import { api, exportCsvUrl } from "./api.js";
+import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
 const MEMBER_TINTS = ["#245C43", "#B5590F", "#5B6660", "#5C4A8C", "#8C2F3A", "#2E5C7A"];
-const MEMBER_ID_KEY = "clockbook-member-id";
 
 function elapsedSeconds(task, nowMs) {
   let total = 0;
@@ -143,21 +142,113 @@ function LoadingScreen() {
   );
 }
 
-function FirstRun({ onCreate }) {
-  const [name, setName] = useState("");
+function LoginScreen({ onLogin }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await onLogin(email, password);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="cb-center-screen">
       <div className="cb-welcome">
         <div className="cb-welcome-mark"><Clock size={22} /></div>
-        <div className="cb-welcome-title cb-serif">Welcome to Clockbook</div>
-        <div className="cb-welcome-sub">Time tracking built around clients and tasks, with a clean handoff into Karbon. What is your name?</div>
-        <form onSubmit={async (e) => { e.preventDefault(); if (name.trim() && !busy) { setBusy(true); await onCreate(name); } }}>
+        <div className="cb-welcome-title cb-serif">Log in to Clockbook</div>
+        <div className="cb-welcome-sub">Time tracking built around clients and tasks, with a clean handoff into Karbon.</div>
+        <form onSubmit={submit}>
           <div className="cb-field" style={{ textAlign: "left" }}>
-            <input className="cb-input" placeholder="e.g. Marcus Okonkwo" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            <label className="cb-label">Email</label>
+            <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
           </div>
-          <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={!name.trim() || busy}>
-            Get started
+          <div className="cb-field" style={{ textAlign: "left" }}>
+            <label className="cb-label">Password</label>
+            <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+          </div>
+          {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
+          <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={busy}>
+            Log in
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function ClaimScreen({ unclaimed, onClaim }) {
+  const [mode, setMode] = useState(unclaimed.length ? "existing" : "new");
+  const [memberId, setMemberId] = useState(unclaimed[0] ? unclaimed[0].id : "");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await onClaim({
+        memberId: mode === "existing" ? memberId : null,
+        name: mode === "new" ? name : null,
+        email, password,
+      });
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-center-screen">
+      <div className="cb-welcome" style={{ maxWidth: 420 }}>
+        <div className="cb-welcome-mark"><Clock size={22} /></div>
+        <div className="cb-welcome-title cb-serif">Set up your login</div>
+        <div className="cb-welcome-sub">
+          This workspace has data already but no passwords yet. The first person to set one up becomes the admin.
+        </div>
+        <form onSubmit={submit}>
+          {unclaimed.length > 0 && (
+            <div className="cb-tabs" style={{ marginBottom: 14, width: "fit-content", marginLeft: "auto", marginRight: "auto" }}>
+              <button type="button" className={`cb-tab ${mode === "existing" ? "active" : ""}`} onClick={() => setMode("existing")}>I am already listed</button>
+              <button type="button" className={`cb-tab ${mode === "new" ? "active" : ""}`} onClick={() => setMode("new")}>I am new</button>
+            </div>
+          )}
+          {mode === "existing" ? (
+            <div className="cb-field" style={{ textAlign: "left" }}>
+              <label className="cb-label">Which one are you?</label>
+              <select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)}>
+                {unclaimed.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+          ) : (
+            <div className="cb-field" style={{ textAlign: "left" }}>
+              <label className="cb-label">Your name</label>
+              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+          )}
+          <div className="cb-field" style={{ textAlign: "left" }}>
+            <label className="cb-label">Email</label>
+            <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+          </div>
+          <div className="cb-field" style={{ textAlign: "left" }}>
+            <label className="cb-label">Choose a password</label>
+            <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
+          </div>
+          {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
+          <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={busy}>
+            Set up and continue
           </button>
         </form>
       </div>
@@ -192,8 +283,7 @@ function Sidebar({ view, setView }) {
   );
 }
 
-function TopBar({ currentUser, members, onSwitch, runningTask, now, onPause, onComplete }) {
-  const [open, setOpen] = useState(false);
+function TopBar({ currentUser, onLogout, runningTask, now, onPause, onComplete }) {
   const isAdmin = currentUser.role === "admin";
   const elapsed = runningTask ? elapsedSeconds(runningTask, now) : 0;
   return (
@@ -214,25 +304,15 @@ function TopBar({ currentUser, members, onSwitch, runningTask, now, onPause, onC
       ) : (
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
-      <div className="cb-user-menu">
-        <button className="cb-user-btn" onClick={() => setOpen((o) => !o)}>
+      <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="cb-user-btn" style={{ cursor: "default" }}>
           <Avatar member={currentUser} />
           {currentUser.name}
           {isAdmin && <span className="cb-role-badge">Admin</span>}
-          <ChevronDown size={14} />
+        </div>
+        <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={onLogout} title="Log out">
+          <LogOut size={13} />Log out
         </button>
-        {open && (
-          <div className="cb-user-dropdown" onMouseLeave={() => setOpen(false)}>
-            {members.map((m) => (
-              <button key={m.id} className="cb-user-dropdown-item" onClick={() => { onSwitch(m.id); setOpen(false); }}>
-                <Avatar member={m} size={20} />
-                {m.name}
-                {m.role === "admin" && <span className="cb-role-badge">Admin</span>}
-                {m.id === currentUser.id && <CheckCircle2 size={13} style={{ marginLeft: "auto", color: "var(--green)" }} />}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -532,84 +612,51 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
 
 function AddMemberModal({ onClose, onAdd }) {
   const [name, setName] = useState("");
-  const [role, setRole] = useState("member");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await onAdd(name, email, password);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
   return (
-    <div
-      className="cb-overlay"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal">
         <div className="cb-modal-head">
           <div className="cb-modal-title">Add teammate</div>
-          <button className="cb-icon-btn" onClick={onClose}>
-            <X size={16} />
-          </button>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
-
-        <form
-          onSubmit={async (e) => {
-            e.preventDefault();
-
-            if (name.trim() && !busy) {
-              setBusy(true);
-              await onAdd(name, role);
-              onClose();
-            }
-          }}
-        >
+        <form onSubmit={submit}>
           <div className="cb-modal-body">
-
             <div className="cb-field">
               <label className="cb-label">Name</label>
-              <input
-                className="cb-input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                autoFocus
-                placeholder="e.g. Priya Nair"
-              />
+              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
             </div>
-
             <div className="cb-field">
-              <label className="cb-label">Access level</label>
-
-              <select
-                className="cb-select"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-              >
-                <option value="member">Staff</option>
-                <option value="admin">Admin</option>
-              </select>
+              <label className="cb-label">Email</label>
+              <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="e.g. priya@firm.com" required />
             </div>
-
-            <div className="cb-hint">
-              Staff can track and complete their assigned work.
-              Admins can manage teammates, templates, clients and task assignments.
+            <div className="cb-field">
+              <label className="cb-label">Set a password for them</label>
+              <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
             </div>
-
+            <div className="cb-hint">Share this password with them directly, there is no email sent automatically. They can log in with it right away.</div>
+            {error && <div className="cb-error">{error}</div>}
           </div>
-
           <div className="cb-modal-foot">
-            <button
-              type="button"
-              className="cb-btn cb-btn-ghost"
-              onClick={onClose}
-            >
-              Cancel
-            </button>
-
-            <button
-              type="submit"
-              className="cb-btn cb-btn-primary"
-              disabled={busy}
-            >
-              Add
-            </button>
+            <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>Add</button>
           </div>
         </form>
       </div>
@@ -627,170 +674,56 @@ function TemplateEditor({ template, isAdmin, onAddTask, onUpdateTask, onDeleteTa
   async function addTask(e) {
     e.preventDefault();
     if (!tName.trim()) return;
-
-    await onAddTask(template.id, {
-      name: tName.trim(),
-      role: tRole.trim(),
-      task_type: tType.trim()
-    });
-
-    setTName("");
-    setTRole("");
-    setTType("");
-    setAddingTask(false);
+    await onAddTask(template.id, { name: tName.trim(), role: tRole.trim(), task_type: tType.trim() });
+    setTName(""); setTRole(""); setTType(""); setAddingTask(false);
   }
 
   return (
     <div className="cb-tmpl-card">
-      <button
-        className="cb-tmpl-head cb-tmpl-head-toggle"
-        onClick={() => setExpanded((v) => !v)}
-      >
+      <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
         <div>
           <div className="cb-tmpl-field">{template.field}</div>
           <div className="cb-tmpl-name">{template.name}</div>
         </div>
-
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>
-            {template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}
-          </span>
-
-          <ChevronDown
-            size={16}
-            style={{
-              transform: expanded ? "rotate(180deg)" : "none",
-              transition: "transform 0.15s"
-            }}
-          />
+          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}</span>
+          <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
         </div>
       </button>
-
       {expanded && (
         <>
           {isAdmin && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 6,
-                padding: "10px 16px 0"
-              }}
-            >
-              <button
-                className="cb-btn cb-btn-sm"
-                onClick={() => setAddingTask((v) => !v)}
-              >
-                <Plus size={13} />
-                Task
-              </button>
-
-              <button
-                className="cb-icon-btn cb-btn-danger"
-                title="Delete template"
-                onClick={() => onDeleteTemplate(template.id)}
-              >
-                <Trash2 size={14} />
-              </button>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 6, padding: "10px 16px 0" }}>
+              <button className="cb-btn cb-btn-sm" onClick={() => setAddingTask((v) => !v)}><Plus size={13} />Task</button>
+              <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
             </div>
           )}
-
           {template.tasks.map((t) =>
             isAdmin ? (
               <div className="cb-tmpl-task-row" key={t.id}>
-                <input
-                  className="cb-input"
-                  value={t.name}
-                  onChange={(e) =>
-                    onUpdateTask(template.id, t.id, {
-                      name: e.target.value,
-                      role: t.role,
-                      task_type: t.task_type
-                    })
-                  }
-                />
-
-                <input
-                  className="cb-input"
-                  placeholder="Role"
-                  value={t.role}
-                  onChange={(e) =>
-                    onUpdateTask(template.id, t.id, {
-                      name: t.name,
-                      role: e.target.value,
-                      task_type: t.task_type
-                    })
-                  }
-                />
-
-                <input
-                  className="cb-input"
-                  placeholder="Task type"
-                  value={t.task_type}
-                  onChange={(e) =>
-                    onUpdateTask(template.id, t.id, {
-                      name: t.name,
-                      role: t.role,
-                      task_type: e.target.value
-                    })
-                  }
-                />
-
-                <button
-                  className="cb-icon-btn cb-btn-danger"
-                  onClick={() => onDeleteTask(template.id, t.id)}
-                >
-                  <Trash2 size={13} />
-                </button>
+                <input className="cb-input" value={t.name} onChange={(e) => onUpdateTask(template.id, t.id, { name: e.target.value, role: t.role, task_type: t.task_type })} />
+                <input className="cb-input" placeholder="Role" value={t.role} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: e.target.value, task_type: t.task_type })} />
+                <input className="cb-input" placeholder="Task type" value={t.task_type} onChange={(e) => onUpdateTask(template.id, t.id, { name: t.name, role: t.role, task_type: e.target.value })} />
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, t.id)}><Trash2 size={13} /></button>
               </div>
             ) : (
               <div className="cb-row" key={t.id}>
                 <div className="cb-row-main">
                   <div className="cb-row-task">{t.name}</div>
-                  <div className="cb-row-meta">
-                    {t.role && <span>{t.role}</span>}
-                    {t.task_type && <span>{t.task_type}</span>}
-                  </div>
+                  <div className="cb-row-meta">{t.role && <span>{t.role}</span>}{t.task_type && <span>{t.task_type}</span>}</div>
                 </div>
               </div>
             )
           )}
-
           {isAdmin && addingTask && (
             <form className="cb-tmpl-task-row" onSubmit={addTask}>
-              <input
-                className="cb-input"
-                placeholder="New task name"
-                value={tName}
-                onChange={(e) => setTName(e.target.value)}
-                autoFocus
-              />
-
-              <input
-                className="cb-input"
-                placeholder="Role"
-                value={tRole}
-                onChange={(e) => setTRole(e.target.value)}
-              />
-
-              <input
-                className="cb-input"
-                placeholder="Task type"
-                value={tType}
-                onChange={(e) => setTType(e.target.value)}
-              />
-
-              <button type="submit" className="cb-icon-btn">
-                <Plus size={13} />
-              </button>
+              <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
+              <input className="cb-input" placeholder="Role" value={tRole} onChange={(e) => setTRole(e.target.value)} />
+              <input className="cb-input" placeholder="Task type" value={tType} onChange={(e) => setTType(e.target.value)} />
+              <button type="submit" className="cb-icon-btn"><Plus size={13} /></button>
             </form>
           )}
-
-          {template.tasks.length === 0 && !addingTask && (
-            <div className="cb-empty">
-              No tasks yet in this template.
-            </div>
-          )}
+          {template.tasks.length === 0 && !addingTask && <div className="cb-empty">No tasks yet in this template.</div>}
         </>
       )}
     </div>
@@ -972,12 +905,15 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
     });
   }
 
-  function downloadCSV() {
-    window.location.href = exportCsvUrl(clientFilter, pushFilter, dateRange ? dateRange.fromIso : null, dateRange ? dateRange.toIso : null);
+  async function downloadCSV() {
+    const fromIso = dateRange ? dateRange.fromIso : null;
+    const toIso = dateRange ? dateRange.toIso : null;
+    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`);
   }
   async function copyCSV() {
-    const res = await fetch(exportCsvUrl(clientFilter, pushFilter, dateRange ? dateRange.fromIso : null, dateRange ? dateRange.toIso : null));
-    const text = await res.text();
+    const fromIso = dateRange ? dateRange.fromIso : null;
+    const toIso = dateRange ? dateRange.toIso : null;
+    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso);
     copyToClipboard(text);
   }
 
@@ -1065,7 +1001,57 @@ function ExportView({ tasks, members, clients, now, onTogglePushed }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole }) {
+function SetCredentialsModal({ memberName, onClose, onSubmit }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    setBusy(true);
+    try {
+      await onSubmit(email, password);
+    } catch (err) {
+      setError(err.message);
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Set up login for {memberName}</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <form onSubmit={submit}>
+          <div className="cb-modal-body">
+            <div className="cb-field">
+              <label className="cb-label">Email</label>
+              <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
+            </div>
+            <div className="cb-field">
+              <label className="cb-label">Password</label>
+              <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
+            </div>
+            <div className="cb-hint">Share this password with them directly.</div>
+            {error && <div className="cb-error">{error}</div>}
+          </div>
+          <div className="cb-modal-foot">
+            <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials }) {
+  const [settingUpId, setSettingUpId] = useState(null);
+  const settingUpMember = members.find((m) => m.id === settingUpId);
   return (
     <div>
       <div className="cb-page-head">
@@ -1084,20 +1070,38 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole })
               <Avatar member={m} size={28} />
               <div>
                 <div className="cb-row-task">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
-                <div className="cb-row-meta">{m.role === "admin" ? "Admin" : "Member"}</div>
+                <div className="cb-row-meta">
+                  {m.role === "admin" ? "Admin" : "Member"}
+                  {!m.email && " \u00b7 No login set up yet"}
+                </div>
               </div>
             </div>
-            {isAdmin && (
-              <button
-                className="cb-role-toggle"
-                onClick={() => onChangeRole(m.id, m.role === "admin" ? "member" : "admin")}
-              >
-                {m.role === "admin" ? "Remove admin" : "Make admin"}
-              </button>
-            )}
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {isAdmin && !m.email && (
+                <button className="cb-role-toggle" onClick={() => setSettingUpId(m.id)}>Set up login</button>
+              )}
+              {isAdmin && (
+                <button
+                  className="cb-role-toggle"
+                  onClick={() => onChangeRole(m.id, m.role === "admin" ? "member" : "admin")}
+                >
+                  {m.role === "admin" ? "Remove admin" : "Make admin"}
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
+      {settingUpMember && (
+        <SetCredentialsModal
+          memberName={settingUpMember.name}
+          onClose={() => setSettingUpId(null)}
+          onSubmit={async (email, password) => {
+            await onSetCredentials(settingUpMember.id, email, password);
+            setSettingUpId(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1148,13 +1152,15 @@ function SleepAlertModal({ alert, onDismiss, onResume }) {
 }
 
 export default function App() {
-  const [loading, setLoading] = useState(true);
+  const [authState, setAuthState] = useState("loading"); // loading | claim | login | ready
+  const [unclaimedMembers, setUnclaimedMembers] = useState([]);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [members, setMembers] = useState([]);
   const [clients, setClients] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const [currentUserId, setCurrentUserId] = useState(localStorage.getItem(MEMBER_ID_KEY) || null);
   const [view, setView] = useState("dashboard");
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
@@ -1174,6 +1180,36 @@ export default function App() {
     setTimeout(() => setToast(null), 3600);
   }, []);
 
+  // Checks for a saved login on load. If it is missing or no longer valid, this finds out
+  // whether the workspace already has passwords set up (show the login screen) or is being
+  // upgraded from the old passwordless version (show the one time claim screen instead).
+  useEffect(() => {
+    (async () => {
+      const token = getToken();
+      if (token) {
+        try {
+          const me = await api.getMe();
+          setCurrentUser(me);
+          setAuthState("ready");
+          return;
+        } catch (err) {
+          clearToken();
+        }
+      }
+      try {
+        const status = await api.getAuthStatus();
+        if (status.setup_needed) {
+          setUnclaimedMembers(status.unclaimed);
+          setAuthState("claim");
+        } else {
+          setAuthState("login");
+        }
+      } catch (err) {
+        setAuthState("login");
+      }
+    })();
+  }, []);
+
   const loadAll = useCallback(async () => {
     try {
       const [m, c, t, tk] = await Promise.all([
@@ -1190,11 +1226,42 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (authState !== "ready") return;
     (async () => {
       await loadAll();
-      setLoading(false);
+      setDataLoading(false);
     })();
-  }, [loadAll]);
+  }, [authState, loadAll]);
+
+  async function handleLogin(email, password) {
+    const res = await api.login(email, password);
+    setToken(res.token);
+    setCurrentUser(res.member);
+    setAuthState("ready");
+  }
+
+  async function handleClaim({ memberId, name, email, password }) {
+    const res = await api.claimAccount({ member_id: memberId, name, email, password });
+    setToken(res.token);
+    setCurrentUser(res.member);
+    setAuthState("ready");
+  }
+
+  async function handleLogout() {
+    try {
+      await api.logout();
+    } catch (err) {
+      // proceed with a local logout even if the server call fails
+    }
+    clearToken();
+    setCurrentUser(null);
+    setMembers([]);
+    setClients([]);
+    setTemplates([]);
+    setTasks([]);
+    setDataLoading(true);
+    setAuthState("login");
+  }
 
   // Keeps the dashboard in step with teammates working at the same time
   useEffect(() => {
@@ -1209,7 +1276,6 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  const currentUser = members.find((m) => m.id === currentUserId) || null;
   const myRunningTask = currentUser ? tasks.find((t) => t.owner_id === currentUser.id && t.status === "running") : null;
   const isAdmin = currentUser ? currentUser.role === "admin" : false;
 
@@ -1324,41 +1390,23 @@ export default function App() {
     setAlertsBannerDismissed(true);
   }
 
-  async function createMember(name, role = "member") {
-  try {
-    const member = await api.createMember(
-      name.trim(),
-      role,
-      currentUser ? currentUser.id : null
-    );
-
+  async function addTeammate(name, email, password) {
+    const member = await api.createMember(name.trim(), email.trim(), password);
     setMembers((prev) => [...prev, member]);
-
-    // Only switch to the created user during the very first setup.
-    // When an admin adds a teammate, keep the admin logged in.
-    if (!currentUser) {
-      setCurrentUserId(member.id);
-      localStorage.setItem(MEMBER_ID_KEY, member.id);
-    }
-
-    return member;
-  } catch (err) {
-    showToast(err.message, true);
   }
-}
+
+  async function setMemberCredentials(memberId, email, password) {
+    const updated = await api.setMemberCredentials(memberId, email.trim(), password);
+    setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+  }
 
   async function changeMemberRole(memberId, role) {
     try {
-      const updated = await api.updateMemberRole(memberId, role, currentUser.id);
+      const updated = await api.updateMemberRole(memberId, role);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
       showToast(err.message, true);
     }
-  }
-
-  function switchUser(id) {
-    setCurrentUserId(id);
-    localStorage.setItem(MEMBER_ID_KEY, id);
   }
 
   async function refreshTasks() {
@@ -1381,7 +1429,7 @@ export default function App() {
       (t) => t.owner_id === currentUser.id && t.status === "running" && t.id !== taskId
     );
     try {
-      const updated = await api.startTask(taskId, currentUser.id);
+      const updated = await api.startTask(taskId);
       setTasks((prev) =>
         prev.map((t) => {
           if (t.id === updated.id) return updated;
@@ -1425,7 +1473,7 @@ export default function App() {
 
   async function deleteTask(taskId) {
     try {
-      await api.deleteTask(taskId, currentUser.id);
+      await api.deleteTask(taskId);
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
     } catch (err) {
       showToast(err.message, true);
@@ -1434,7 +1482,7 @@ export default function App() {
 
   async function reassignTask(taskId, ownerId) {
     try {
-      const updated = await api.reassignTask(taskId, ownerId, currentUser.id);
+      const updated = await api.reassignTask(taskId, ownerId);
       mergeTask(updated);
     } catch (err) {
       showToast(err.message, true);
@@ -1457,7 +1505,7 @@ export default function App() {
   }
 
   async function deleteClient(clientId) {
-    await api.deleteClient(clientId, currentUser.id);
+    await api.deleteClient(clientId);
     setClients((prev) => prev.filter((c) => c.id !== clientId));
   }
 
@@ -1473,27 +1521,36 @@ export default function App() {
   }
 
   async function addTemplate(field, name) {
-    await api.createTemplate(field, name, currentUser.id);
+    await api.createTemplate(field, name);
     await refreshTemplates();
   }
   async function deleteTemplate(id) {
-    await api.deleteTemplate(id, currentUser.id);
+    await api.deleteTemplate(id);
     await refreshTemplates();
   }
   async function addTemplateTask(templateId, task) {
-    await api.addTemplateTask(templateId, task, currentUser.id);
+    await api.addTemplateTask(templateId, task);
     await refreshTemplates();
   }
   async function updateTemplateTask(templateId, taskId, task) {
-    await api.updateTemplateTask(templateId, taskId, task, currentUser.id);
+    await api.updateTemplateTask(templateId, taskId, task);
     await refreshTemplates();
   }
   async function deleteTemplateTask(templateId, taskId) {
-    await api.deleteTemplateTask(templateId, taskId, currentUser.id);
+    await api.deleteTemplateTask(templateId, taskId);
     await refreshTemplates();
   }
 
-  if (loading) {
+  if (authState === "loading") {
+    return <div className="cb-root"><LoadingScreen /></div>;
+  }
+  if (authState === "claim") {
+    return <div className="cb-root"><ClaimScreen unclaimed={unclaimedMembers} onClaim={handleClaim} /></div>;
+  }
+  if (authState === "login") {
+    return <div className="cb-root"><LoginScreen onLogin={handleLogin} /></div>;
+  }
+  if (dataLoading) {
     return <div className="cb-root"><LoadingScreen /></div>;
   }
   if (loadError) {
@@ -1509,9 +1566,6 @@ export default function App() {
       </div>
     );
   }
-  if (!currentUser) {
-    return <div className="cb-root"><FirstRun onCreate={createMember} /></div>;
-  }
 
   return (
     <div className="cb-root">
@@ -1520,8 +1574,7 @@ export default function App() {
         <div className="cb-main">
           <TopBar
             currentUser={currentUser}
-            members={members}
-            onSwitch={switchUser}
+            onLogout={handleLogout}
             runningTask={myRunningTask}
             now={now}
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
@@ -1555,6 +1608,7 @@ export default function App() {
               <StaffView
                 members={members} currentUser={currentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
+                onSetCredentials={setMemberCredentials}
               />
             )}
           </div>
@@ -1571,7 +1625,7 @@ export default function App() {
         <CompleteModal task={completingTask} now={now} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
       )}
       {showAddMember && (
-        <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={createMember} />
+        <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={addTeammate} />
       )}
       {sleepAlert && (
         <SleepAlertModal
