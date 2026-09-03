@@ -1725,7 +1725,7 @@ function roleLabel(role) {
   return "Member";
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const settingUpMember = members.find((m) => m.id === settingUpId);
@@ -1762,10 +1762,18 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                 <div className="cb-row-meta">
                   {roleLabel(m.role)}
                   {!m.email && " \u00b7 No login set up yet"}
+                  {m.google_calendar_connected && " \u00b7 Calendar connected"}
                 </div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {m.id === currentUser.id && (
+                m.google_calendar_connected ? (
+                  <button className="cb-role-toggle" onClick={onDisconnectCalendar}>Disconnect calendar</button>
+                ) : (
+                  <button className="cb-role-toggle" onClick={onConnectCalendar}>Connect Google Calendar</button>
+                )
+              )}
               {isAdmin && (
                 <button className="cb-role-toggle" onClick={() => setSettingUpId(m.id)}>
                   {m.email ? "Reset password" : "Set up login"}
@@ -1846,6 +1854,31 @@ function SleepAlertModal({ alert, onDismiss, onResume }) {
   );
 }
 
+function MeetingAlertModal({ alert, onDismiss, onPause }) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <div className="cb-overlay">
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">You have a meeting starting</div>
+        </div>
+        <div className="cb-modal-body">
+          <div style={{ lineHeight: 1.5 }}>
+            <strong>{alert.summary}</strong> looks like it's happening right now on your calendar.
+            Want to pause the timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> while you're in it?
+          </div>
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn" disabled={busy} onClick={onDismiss}>Keep it running</button>
+          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onPause(); }}>
+            Pause timer
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [authState, setAuthState] = useState("loading"); // loading | claim | login | ready
   const [unclaimedMembers, setUnclaimedMembers] = useState([]);
@@ -1868,6 +1901,7 @@ export default function App() {
   const [startCountPrompt, setStartCountPrompt] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
   const [sleepAlert, setSleepAlert] = useState(null);
+  const [meetingAlert, setMeetingAlert] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
 
   // Every timestamp actually saved comes from the server, so what gets recorded is always
@@ -2192,6 +2226,82 @@ export default function App() {
     setAlertsBannerDismissed(true);
   }
 
+  // ---------------------------------------------------------------
+  // Google Calendar meeting check (optional, per person, entirely separate from the sleep
+  // and lock detection above). Only ever runs at all for someone who has connected their own
+  // calendar, and only ever checks while they have a timer of their own running.
+  // ---------------------------------------------------------------
+
+  // Shows a one-time toast for the result of the Google OAuth redirect, then removes the
+  // query param so refreshing the page does not show it again
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const calendarResult = params.get("calendar");
+    if (!calendarResult) return;
+    if (calendarResult === "connected") {
+      showToast("Google Calendar connected");
+      loadAll();
+    } else if (calendarResult === "error") {
+      showToast("Could not connect Google Calendar, please try again", true);
+    }
+    params.delete("calendar");
+    const newSearch = params.toString();
+    window.history.replaceState({}, "", window.location.pathname + (newSearch ? `?${newSearch}` : ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const promptedMeetingIdsRef = useRef(new Set());
+
+  useEffect(() => {
+    const iv = setInterval(async () => {
+      if (!currentUser || !currentUser.google_calendar_connected) return;
+      const task = runningTaskRef.current;
+      if (!task) return;
+      try {
+        const { meeting } = await api.getMeetingNow();
+        if (meeting && !promptedMeetingIdsRef.current.has(meeting.id)) {
+          promptedMeetingIdsRef.current.add(meeting.id);
+          setMeetingAlert({ task, summary: meeting.summary });
+          if ("Notification" in window && Notification.permission === "granted") {
+            try {
+              const n = new Notification("Clockbook", {
+                body: `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`,
+                tag: "clockbook-meeting-alert",
+                requireInteraction: true,
+              });
+              n.onclick = () => window.focus();
+            } catch (e) {
+              // Some platforms restrict the Notification constructor, safe to ignore
+            }
+          }
+        }
+      } catch (err) {
+        // a missed check is not worth interrupting the person, it will retry on the next tick
+      }
+    }, 60000);
+    return () => clearInterval(iv);
+  }, [currentUser]);
+
+  async function connectGoogleCalendar() {
+    try {
+      const { url } = await api.getGoogleConnectUrl();
+      window.location.href = url;
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function disconnectGoogleCalendar() {
+    try {
+      const updated = await api.disconnectGoogleCalendar();
+      setCurrentUser(updated);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      showToast("Google Calendar disconnected");
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
   async function addTeammate(name, email, password) {
     const member = await api.createMember(name.trim(), email.trim(), password);
     setMembers((prev) => [...prev, member]);
@@ -2488,6 +2598,7 @@ export default function App() {
                 members={members} currentUser={currentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
+                onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
               />
             )}
             {view === "settings" && isAdmin && (
@@ -2531,6 +2642,16 @@ export default function App() {
           onResume={async () => {
             requestStart(sleepAlert.task);
             setSleepAlert(null);
+          }}
+        />
+      )}
+      {meetingAlert && (
+        <MeetingAlertModal
+          alert={meetingAlert}
+          onDismiss={() => setMeetingAlert(null)}
+          onPause={async () => {
+            await pauseTask(meetingAlert.task.id);
+            setMeetingAlert(null);
           }}
         />
       )}
