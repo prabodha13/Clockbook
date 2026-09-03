@@ -8,6 +8,10 @@ import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } fr
 
 const MEMBER_TINTS = ["#245C43", "#B5590F", "#5B6660", "#5C4A8C", "#8C2F3A", "#2E5C7A"];
 
+function isAdminRole(role) {
+  return role === "admin" || role === "super_admin";
+}
+
 function elapsedSeconds(task, nowMs) {
   let total = 0;
   for (const seg of task.segments || []) {
@@ -288,7 +292,7 @@ function Sidebar({ view, setView, isAdmin }) {
 }
 
 function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete }) {
-  const isAdmin = currentUser.role === "admin";
+  const isAdmin = isAdminRole(currentUser.role);
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
   return (
@@ -317,7 +321,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <div className="cb-user-btn" style={{ cursor: "default" }}>
           <Avatar member={currentUser} />
           {currentUser.name}
-          {isAdmin && <span className="cb-role-badge">Admin</span>}
+          {isAdmin && <span className="cb-role-badge">{currentUser.role === "super_admin" ? "Super Admin" : "Admin"}</span>}
         </div>
         <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={onLogout} title="Log out">
           <LogOut size={13} />Log out
@@ -329,7 +333,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
 
 function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onReset, hideClient }) {
   const isMine = task.owner_id === currentUser.id;
-  const isAdmin = currentUser.role === "admin";
+  const isAdmin = isAdminRole(currentUser.role);
   const canReset = isMine || isAdmin;
   const elapsed = elapsedSeconds(task, now);
   const owner = members.find((m) => m.id === task.owner_id);
@@ -408,8 +412,16 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
 }
 
 function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask }) {
-  const [showMineOnly, setShowMineOnly] = useState(false);
-  const visibleTasks = isAdmin && showMineOnly ? tasks.filter((t) => t.owner_id === currentUser.id) : tasks;
+  const [viewFilter, setViewFilter] = useState("everyone"); // "everyone" | "mine" | a member id
+  const isSuperAdmin = currentUser.role === "super_admin";
+  const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
+  const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
+
+  const visibleTasks = (() => {
+    if (!isAdmin || viewFilter === "everyone") return tasks;
+    if (viewFilter === "mine") return tasks.filter((t) => t.owner_id === currentUser.id);
+    return tasks.filter((t) => t.owner_id === viewFilter);
+  })();
 
   const todo = visibleTasks.filter((t) => t.status === "todo");
   const inProgress = visibleTasks.filter((t) => t.status === "running" || t.status === "paused");
@@ -467,14 +479,31 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
         <div>
           <div className="cb-page-title cb-serif">Dashboard</div>
           <div className="cb-page-sub">
-            {isAdmin && showMineOnly ? "Just your own active work." : "Your firm's active work, tracked client by client."}
+            {viewedMember
+              ? `Just ${viewedMember.name.split(" ")[0]}'s active work.`
+              : isAdmin && viewFilter === "mine"
+                ? "Just your own active work."
+                : "Your firm's active work, tracked client by client."}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {isAdmin && (
-            <div className="cb-tabs">
-              <button className={`cb-tab ${!showMineOnly ? "active" : ""}`} onClick={() => setShowMineOnly(false)}>Everyone</button>
-              <button className={`cb-tab ${showMineOnly ? "active" : ""}`} onClick={() => setShowMineOnly(true)}>Just me</button>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div className="cb-tabs">
+                <button className={`cb-tab ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
+                <button className={`cb-tab ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>Just me</button>
+              </div>
+              {pickableMembers.length > 0 && (
+                <select
+                  className="cb-select"
+                  style={{ width: 170 }}
+                  value={viewedMember ? viewedMember.id : ""}
+                  onChange={(e) => setViewFilter(e.target.value || "everyone")}
+                >
+                  <option value="">Or pick someone...</option>
+                  {pickableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+              )}
             </div>
           )}
           <button className="cb-btn cb-btn-primary" onClick={onNewTask}><Plus size={15} />New task</button>
@@ -801,7 +830,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
 
             <div className="cb-field">
               <label className="cb-label">Assign to</label>
-              {currentUser.role === "admin" ? (
+              {isAdminRole(currentUser.role) ? (
                 <select className="cb-select" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
                   {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
@@ -1671,6 +1700,31 @@ function SetCredentialsModal({ memberName, initialEmail, isReset, onClose, onSub
   );
 }
 
+function roleActions(m, currentUser) {
+  const isSelf = m.id === currentUser.id;
+  const canTouchSuperTier = isSelf || currentUser.role === "super_admin";
+  const actions = [];
+  if (m.role === "member") {
+    actions.push({ label: "Make admin", target: "admin" });
+  }
+  if (m.role === "admin") {
+    actions.push({ label: "Remove admin", target: "member" });
+    if (canTouchSuperTier) {
+      actions.push({ label: isSelf ? "Become super admin" : "Make super admin", target: "super_admin" });
+    }
+  }
+  if (m.role === "super_admin" && canTouchSuperTier) {
+    actions.push({ label: isSelf ? "Step down to admin" : "Remove super admin", target: "admin" });
+  }
+  return actions;
+}
+
+function roleLabel(role) {
+  if (role === "super_admin") return "Super Admin";
+  if (role === "admin") return "Admin";
+  return "Member";
+}
+
 function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
@@ -1706,7 +1760,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
               <div>
                 <div className="cb-row-task">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
                 <div className="cb-row-meta">
-                  {m.role === "admin" ? "Admin" : "Member"}
+                  {roleLabel(m.role)}
                   {!m.email && " \u00b7 No login set up yet"}
                 </div>
               </div>
@@ -1717,14 +1771,11 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                   {m.email ? "Reset password" : "Set up login"}
                 </button>
               )}
-              {isAdmin && (
-                <button
-                  className="cb-role-toggle"
-                  onClick={() => onChangeRole(m.id, m.role === "admin" ? "member" : "admin")}
-                >
-                  {m.role === "admin" ? "Remove admin" : "Make admin"}
+              {isAdmin && roleActions(m, currentUser).map((action) => (
+                <button key={action.target} className="cb-role-toggle" onClick={() => onChangeRole(m.id, action.target)}>
+                  {action.label}
                 </button>
-              )}
+              ))}
               {isAdmin && m.id !== currentUser.id && (
                 <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(m)}>
                   <Trash2 size={14} />
@@ -1970,7 +2021,7 @@ export default function App() {
   // The header pins whichever task the person was last active on, running or paused, so
   // pausing does not make it disappear, it only gets replaced once another task starts.
   const myPinnedTask = myRunningTask || myMostRecentPaused;
-  const isAdmin = currentUser ? currentUser.role === "admin" : false;
+  const isAdmin = currentUser ? isAdminRole(currentUser.role) : false;
 
   // Watches for this computer actually going to sleep or having its screen locked, and
   // pauses any running timer the moment it is detected rather than waiting to ask, since by
