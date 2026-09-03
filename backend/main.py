@@ -641,6 +641,8 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
+    if task.status == "submitted":
+        raise HTTPException(400, "This task has already been submitted and cannot be started again")
 
     if task.tracks_number_label and task.start_count is None:
         if payload.start_count is None:
