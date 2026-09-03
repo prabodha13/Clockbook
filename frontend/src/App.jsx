@@ -2049,7 +2049,9 @@ export default function App() {
     try {
       const updated = await api.pauseTask(task.id, new Date(atMs + clockOffsetRef.current).toISOString());
       mergeTask(updated);
+      console.log("[Clockbook diag] pauseTaskAt succeeded, task now:", updated.status);
     } catch (err) {
+      console.log("[Clockbook diag] pauseTaskAt FAILED:", err.message);
       // if this fails, the away alert below still tells the person to check the task themselves
     }
   }
@@ -2058,6 +2060,7 @@ export default function App() {
   // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
   // person with this once they are actually back to see it
   function showAwayAlert(task, gapMs, sleepStartMs) {
+    console.log("[Clockbook diag] showAwayAlert called, task:", task.name, "gapMs:", gapMs, "Notification.permission:", (typeof Notification !== "undefined" ? Notification.permission : "not supported"));
     setSleepAlert({ task, gapMs, sleepStartMs });
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
     // delivers it straight to the notification center with no visible toast. Waiting a
@@ -2151,6 +2154,7 @@ export default function App() {
       let lockedSince = null;
       let lockedTask = null;
       detector.addEventListener("change", () => {
+        console.log("[Clockbook diag] IdleDetector change, screenState:", detector.screenState, "userState:", detector.userState);
         if (detector.screenState === "locked") {
           // Pausing here, the moment the lock is detected, rather than waiting for the
           // person to come back and unlock, means the dashboard is accurate for anyone else
@@ -2158,17 +2162,22 @@ export default function App() {
           // comes back before someone eventually submits the task.
           lockedSince = Date.now();
           lockedTask = runningTaskRef.current;
+          console.log("[Clockbook diag] locked, lockedTask:", lockedTask ? lockedTask.name : null, "dedupOk:", Date.now() - lastAlertRef.current >= 5000);
           if (lockedTask && Date.now() - lastAlertRef.current >= 5000) {
             lastAlertRef.current = Date.now();
             pauseTaskAt(lockedTask, lockedSince);
           }
-        } else if (detector.screenState === "unlocked" && lockedSince) {
-          const gap = Date.now() - lockedSince;
-          const sleepStart = lockedSince;
-          const task = lockedTask;
-          lockedSince = null;
-          lockedTask = null;
-          if (task) showAwayAlert(task, gap, sleepStart);
+        } else if (detector.screenState === "unlocked") {
+          console.log("[Clockbook diag] unlocked, lockedSince:", lockedSince, "lockedTask:", lockedTask ? lockedTask.name : null);
+          if (lockedSince) {
+            const gap = Date.now() - lockedSince;
+            const sleepStart = lockedSince;
+            const task = lockedTask;
+            lockedSince = null;
+            lockedTask = null;
+            console.log("[Clockbook diag] calling showAwayAlert, gap:", gap, "task:", task ? task.name : null);
+            if (task) showAwayAlert(task, gap, sleepStart);
+          }
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
