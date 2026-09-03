@@ -1,4 +1,5 @@
 import uuid
+import secrets
 from datetime import datetime
 from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Float, JSON, Text
 from sqlalchemy.orm import relationship
@@ -18,11 +19,30 @@ class Member(Base):
     password_hash = Column(String, nullable=True)
     color_idx = Column(Integer, default=0)
     role = Column(String, default="member")  # "admin" or "member"
+    # Never returned by any API response, only a computed "connected" boolean is. This is
+    # the one credential Google gives that keeps working long-term, used to fetch a fresh
+    # short-lived access token each time a calendar check actually needs to happen.
+    google_refresh_token = Column(String, nullable=True)
+
+    @property
+    def google_calendar_connected(self):
+        return bool(self.google_refresh_token)
 
 
 class Session(Base):
     __tablename__ = "sessions"
     token = Column(String, primary_key=True)
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class GoogleOAuthState(Base):
+    # A short-lived, single-use marker created the moment someone clicks "Connect Calendar",
+    # so that when Google redirects back with just a code and this same state value, and
+    # nothing else identifying who they are, we can safely look up which member started it.
+    # Consumed and deleted the moment it is used, so it cannot be replayed.
+    __tablename__ = "google_oauth_states"
+    state = Column(String, primary_key=True, default=lambda: secrets.token_urlsafe(32))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 

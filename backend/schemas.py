@@ -15,6 +15,7 @@ class MemberOut(BaseModel):
     email: Optional[str] = None
     color_idx: int
     role: str
+    google_calendar_connected: bool = False
 
 
 class MemberCreate(BaseModel):

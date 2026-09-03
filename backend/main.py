@@ -2,13 +2,15 @@ import os
 import csv
 import secrets
 import bcrypt
+import httpx
+from urllib.parse import urlencode
 from io import StringIO
 from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Header
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, or_
@@ -52,6 +54,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE members ADD COLUMN email VARCHAR"))
             if "password_hash" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN password_hash VARCHAR"))
+            if "google_refresh_token" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN google_refresh_token VARCHAR"))
 
     if "template_tasks" in inspector.get_table_names():
         existing_tt_columns = {c["name"] for c in inspector.get_columns("template_tasks")}
@@ -260,6 +264,155 @@ def get_server_time():
     # disagrees with the server, this has no effect on anything actually saved, every
     # stored timestamp already comes from the server regardless.
     return {"now": datetime.utcnow().isoformat() + "Z"}
+
+
+# ---------------------------------------------------------------
+# Google Calendar integration (optional, per person)
+#
+# Each person connects their own calendar if they want to, nobody is required to. Only a
+# read-only scope is ever requested, nothing here can create, change, or delete anything in
+# anyone's calendar. The refresh token this produces is the one long-lived secret involved,
+# and it is never returned by any API response, MemberOut only ever exposes a computed
+# connected boolean. A short-lived access token is fetched fresh from that refresh token each
+# time a check actually happens, rather than cached, keeping the logic simple and avoiding any
+# separate expiry bookkeeping.
+# ---------------------------------------------------------------
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://clockbook.up.railway.app/api/auth/google/callback")
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+
+
+@app.get("/api/auth/google/connect-url")
+def get_google_connect_url(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not GOOGLE_CLIENT_ID:
+        raise HTTPException(500, "Google Calendar integration has not been configured on this server yet")
+    # Clear out any previous, unused attempt for this person before issuing a fresh one
+    db.query(models.GoogleOAuthState).filter(models.GoogleOAuthState.member_id == current_member.id).delete()
+    state_row = models.GoogleOAuthState(member_id=current_member.id)
+    db.add(state_row)
+    db.commit()
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": GOOGLE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": GOOGLE_CALENDAR_SCOPE,
+        "access_type": "offline",
+        # Forces Google to hand back a refresh token every time, not just on the very first
+        # ever consent, so reconnecting after a disconnect still works correctly
+        "prompt": "consent",
+        "state": state_row.state,
+    }
+    return {"url": "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)}
+
+
+@app.get("/api/auth/google/callback")
+def google_oauth_callback(code: str = None, state: str = None, error: str = None, db: Session = Depends(get_db)):
+    # This lands here via a plain browser redirect from Google, not an authenticated API
+    # call, so the state value, checked against what was stored when the person clicked
+    # Connect, is what safely identifies which member this belongs to.
+    if error or not code or not state:
+        return RedirectResponse(url="/?calendar=error")
+    state_row = db.get(models.GoogleOAuthState, state)
+    if not state_row:
+        return RedirectResponse(url="/?calendar=error")
+    member_id = state_row.member_id
+    db.delete(state_row)
+    db.commit()
+
+    try:
+        resp = httpx.post("https://oauth2.googleapis.com/token", data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": GOOGLE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }, timeout=10)
+        resp.raise_for_status()
+        refresh_token = resp.json().get("refresh_token")
+    except Exception:
+        return RedirectResponse(url="/?calendar=error")
+
+    if not refresh_token:
+        return RedirectResponse(url="/?calendar=error")
+
+    member = db.get(models.Member, member_id)
+    if member:
+        member.google_refresh_token = refresh_token
+        db.commit()
+
+    return RedirectResponse(url="/?calendar=connected")
+
+
+@app.post("/api/auth/google/disconnect", response_model=schemas.MemberOut)
+def disconnect_google_calendar(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    current_member.google_refresh_token = None
+    db.commit()
+    db.refresh(current_member)
+    return current_member
+
+
+def get_google_access_token(member):
+    if not member.google_refresh_token:
+        return None
+    try:
+        resp = httpx.post("https://oauth2.googleapis.com/token", data={
+            "refresh_token": member.google_refresh_token,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "grant_type": "refresh_token",
+        }, timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("access_token")
+    except Exception:
+        return None
+
+
+@app.get("/api/calendar/meeting-now")
+def get_meeting_now(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Only ever checks the calendar of whoever is asking, using only their own stored token,
+    # there is no way for this to see or reveal another person's calendar or meetings.
+    if not current_member.google_refresh_token:
+        return {"connected": False, "meeting": None}
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        return {"connected": True, "meeting": None}
+
+    now = datetime.utcnow()
+    # A generous look-back window so an already-in-progress meeting is still found, the
+    # precise "is this actually happening right now" check happens below regardless
+    time_min = (now - timedelta(hours=6)).isoformat() + "Z"
+    time_max = (now + timedelta(minutes=1)).isoformat() + "Z"
+    try:
+        resp = httpx.get(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"timeMin": time_min, "timeMax": time_max, "singleEvents": "true", "orderBy": "startTime"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        events = resp.json().get("items", [])
+    except Exception:
+        return {"connected": True, "meeting": None}
+
+    for event in events:
+        has_meet_link = bool(event.get("hangoutLink")) or any(
+            ep.get("entryPointType") == "video"
+            for ep in (event.get("conferenceData") or {}).get("entryPoints", [])
+        )
+        if not has_meet_link:
+            continue
+        start = event.get("start", {}).get("dateTime")
+        end = event.get("end", {}).get("dateTime")
+        if not start or not end:
+            continue  # an all-day event, not a timed meeting
+        start_dt = parse_utc_naive(start)
+        end_dt = parse_utc_naive(end)
+        if start_dt and end_dt and start_dt <= now <= end_dt:
+            return {"connected": True, "meeting": {"id": event.get("id"), "summary": event.get("summary") or "Meeting"}}
+
+    return {"connected": True, "meeting": None}
 
 
 # ---------------------------------------------------------------
