@@ -66,6 +66,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN requires_bank_account BOOLEAN DEFAULT FALSE"))
             if "tracks_number_label" not in existing_tt_columns:
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN tracks_number_label VARCHAR DEFAULT ''"))
+            if "needs_pay_period" not in existing_tt_columns:
+                conn.execute(text("ALTER TABLE template_tasks ADD COLUMN needs_pay_period BOOLEAN DEFAULT FALSE"))
 
     if "tasks" in inspector.get_table_names():
         existing_task_columns = {c["name"] for c in inspector.get_columns("tasks")}
@@ -82,6 +84,10 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN end_count INTEGER"))
             if "adjusted_seconds" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN adjusted_seconds FLOAT"))
+            if "pay_period_type" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_type VARCHAR"))
+            if "pay_period_number" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_number INTEGER"))
 
 
 @asynccontextmanager
@@ -825,6 +831,7 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
         task_type=payload.task_type.strip(),
         requires_bank_account=payload.requires_bank_account,
         tracks_number_label=payload.tracks_number_label.strip(),
+        needs_pay_period=payload.needs_pay_period,
     )
     db.add(task)
     db.commit()
@@ -843,6 +850,7 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     task.task_type = payload.task_type.strip()
     task.requires_bank_account = payload.requires_bank_account
     task.tracks_number_label = payload.tracks_number_label.strip()
+    task.needs_pay_period = payload.needs_pay_period
     db.commit()
     db.refresh(task)
     return task
@@ -906,6 +914,8 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         bank_account_id=payload.bank_account_id,
         bank_account_name=payload.bank_account_name.strip(),
         tracks_number_label=payload.tracks_number_label.strip(),
+        pay_period_type=payload.pay_period_type,
+        pay_period_number=payload.pay_period_number,
     )
     db.add(task)
     db.commit()
@@ -1117,6 +1127,8 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             "start_count": t.start_count,
             "end_count": t.end_count,
             "change": change,
+            "pay_period_type": t.pay_period_type,
+            "pay_period_number": t.pay_period_number,
         })
     return rows
 

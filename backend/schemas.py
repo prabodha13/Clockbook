@@ -120,6 +120,7 @@ class TemplateTaskOut(BaseModel):
     task_type: str
     requires_bank_account: bool
     tracks_number_label: str
+    needs_pay_period: bool = False
 
 
 class TemplateTaskCreate(BaseModel):
@@ -128,6 +129,7 @@ class TemplateTaskCreate(BaseModel):
     task_type: str = ""
     requires_bank_account: bool = False
     tracks_number_label: str = ""
+    needs_pay_period: bool = False
 
 
 class TemplateOut(BaseModel):
@@ -165,6 +167,8 @@ class TaskOut(BaseModel):
     start_count: Optional[int] = None
     end_count: Optional[int] = None
     adjusted_seconds: Optional[float] = None
+    pay_period_type: Optional[str] = None
+    pay_period_number: Optional[int] = None
 
     @field_serializer("created_at", "submitted_at")
     def serialize_as_utc(self, value: Optional[datetime], _info):
@@ -185,6 +189,8 @@ class TaskCreate(BaseModel):
     bank_account_id: Optional[str] = None
     bank_account_name: str = ""
     tracks_number_label: str = ""
+    pay_period_type: Optional[str] = None
+    pay_period_number: Optional[int] = None
 
 
 class TaskPause(BaseModel):
