@@ -808,6 +808,23 @@ def create_template(payload: schemas.TemplateCreate, current_member: models.Memb
     return tpl
 
 
+@app.patch("/api/templates/{template_id}", response_model=schemas.TemplateOut)
+def update_template(template_id: str, payload: schemas.TemplateCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    tpl = db.get(models.Template, template_id)
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    field = payload.field.strip()
+    name = payload.name.strip()
+    if not field or not name:
+        raise HTTPException(400, "Enter both a field and a template name")
+    tpl.field = field
+    tpl.name = name
+    db.commit()
+    db.refresh(tpl)
+    return tpl
+
+
 @app.delete("/api/templates/{template_id}", status_code=204)
 def delete_template(template_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
