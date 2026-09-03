@@ -365,7 +365,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
       <StatusBadge status={task.status} />
       <div className="cb-row-time cb-mono">{elapsed > 0 ? formatHM(elapsed) : "0m"}</div>
       <div className="cb-row-actions">
-        {task.status !== "running" && (
+        {(task.status === "todo" || task.status === "paused") && (
           <button className="cb-icon-btn" title={isMine ? "Start" : `Owned by ${owner ? owner.name : "someone else"}`} disabled={!isMine} onClick={() => onStart(task)}>
             <Play size={14} />
           </button>
