@@ -83,6 +83,7 @@ export const api = {
 
   getTemplates: () => request("/templates"),
   createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
+  updateTemplate: (id, field, name) => request(`/templates/${id}`, { method: "PATCH", body: JSON.stringify({ field, name }) }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
   addTemplateTask: (templateId, task) =>
     request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify(task) }),

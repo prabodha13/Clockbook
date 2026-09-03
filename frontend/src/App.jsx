@@ -584,6 +584,53 @@ function taskHeading(name, bankAccountName, payPeriodType, payPeriodNumber) {
   return parts.join(" \u2014 ");
 }
 
+function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSecondary }) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+  const selected = options.find((o) => o.id === value);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  const filtered = query.trim()
+    ? options.filter((o) => getLabel(o).toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
+
+  return (
+    <div ref={containerRef} className="cb-searchable-wrap">
+      <input
+        className="cb-input"
+        placeholder={placeholder}
+        value={open ? query : (selected ? getLabel(selected) : "")}
+        onFocus={() => { setOpen(true); setQuery(""); }}
+        onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
+        onKeyDown={(e) => { if (e.key === "Escape") { e.target.blur(); setOpen(false); } }}
+      />
+      {open && (
+        <div className="cb-searchable-list">
+          {filtered.length === 0 && <div className="cb-searchable-empty">No matches</div>}
+          {filtered.map((o) => (
+            <div
+              key={o.id}
+              className="cb-searchable-item"
+              onMouseDown={(e) => { e.preventDefault(); onChange(o.id); setOpen(false); setQuery(""); }}
+            >
+              {getLabel(o)}
+              {getSecondary && getSecondary(o) && <span className="cb-searchable-secondary">{getSecondary(o)}</span>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState(clients[0] ? clients[0].id : "");
@@ -597,6 +644,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
   const [taskTypeByTaskId, setTaskTypeByTaskId] = useState({});
   const [payPeriodTypeByTaskId, setPayPeriodTypeByTaskId] = useState({});
   const [payPeriodNumberByTaskId, setPayPeriodNumberByTaskId] = useState({});
+  const [taskSearchQuery, setTaskSearchQuery] = useState("");
 
   const [customName, setCustomName] = useState("");
   const [role, setRole] = useState("");
@@ -628,6 +676,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     setTaskTypeByTaskId({});
     setPayPeriodTypeByTaskId({});
     setPayPeriodNumberByTaskId({});
+    setTaskSearchQuery("");
   }
 
   function toggleTaskId(id) {
@@ -747,9 +796,10 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                 </div>
               )}
               {clientMode === "existing" ? (
-                <select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
-                  {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <SearchableSelect
+                  options={clients} value={clientId} onChange={setClientId}
+                  placeholder="Search clients..." getLabel={(c) => c.name}
+                />
               ) : (
                 <input className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
               )}
@@ -766,16 +816,29 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
 
               {taskMode === "template" ? (
                 <>
-                  <select className="cb-select" value={templateId} onChange={(e) => pickTemplate(e.target.value)} style={{ marginBottom: 10 }}>
-                    <option value="">Select a template</option>
-                    {templates.map((t) => <option key={t.id} value={t.id}>{t.field}: {t.name}</option>)}
-                  </select>
+                  <div style={{ marginBottom: 10 }}>
+                    <SearchableSelect
+                      options={templates} value={templateId} onChange={pickTemplate}
+                      placeholder="Search templates..." getLabel={(t) => t.name} getSecondary={(t) => t.field}
+                    />
+                  </div>
                   {selectedTemplate && (
                     <div className="cb-checklist">
                       {selectedTemplate.tasks.length === 0 && (
                         <div className="cb-hint" style={{ padding: 10 }}>This template has no tasks yet.</div>
                       )}
-                      {selectedTemplate.tasks.map((t) => {
+                      {selectedTemplate.tasks.length > 5 && (
+                        <input
+                          className="cb-input" placeholder="Search tasks in this template..."
+                          value={taskSearchQuery} onChange={(e) => setTaskSearchQuery(e.target.value)}
+                          style={{ margin: 8, width: "calc(100% - 16px)" }}
+                        />
+                      )}
+                      {selectedTemplate.tasks.length > 0
+                        && selectedTemplate.tasks.filter((t) => t.name.toLowerCase().includes(taskSearchQuery.toLowerCase())).length === 0 && (
+                        <div className="cb-hint" style={{ padding: 10 }}>No tasks match "{taskSearchQuery}".</div>
+                      )}
+                      {selectedTemplate.tasks.filter((t) => t.name.toLowerCase().includes(taskSearchQuery.toLowerCase())).map((t) => {
                         const checked = selectedTaskIds.includes(t.id);
                         const disabledForNewClient = t.requires_bank_account && clientMode === "new";
                         return (
@@ -1182,7 +1245,35 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   );
 }
 
-function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate }) {
+function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onRenameTemplate }) {
+  const [isEditingHeader, setIsEditingHeader] = useState(false);
+  const [editedField, setEditedField] = useState(template.field);
+  const [editedName, setEditedName] = useState(template.name);
+  const [renaming, setRenaming] = useState(false);
+
+  function startEditingHeader(e) {
+    e.stopPropagation();
+    setEditedField(template.field);
+    setEditedName(template.name);
+    setIsEditingHeader(true);
+  }
+
+  async function saveHeader() {
+    const field = editedField.trim();
+    const name = editedName.trim();
+    if (!field || !name) return;
+    if (field === template.field && name === template.name) {
+      setIsEditingHeader(false);
+      return;
+    }
+    setRenaming(true);
+    try {
+      await onRenameTemplate(template.id, field, name);
+      setIsEditingHeader(false);
+    } finally {
+      setRenaming(false);
+    }
+  }
   const [expanded, setExpanded] = useState(false);
   const [addingTask, setAddingTask] = useState(false);
   const [tName, setTName] = useState("");
@@ -1203,16 +1294,36 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
 
   return (
     <div className="cb-tmpl-card">
-      <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
-        <div>
-          <div className="cb-tmpl-field">{template.field}</div>
-          <div className="cb-tmpl-name">{template.name}</div>
+      {isEditingHeader ? (
+        <div className="cb-tmpl-head" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
+          <input className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
+          <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={renaming} onClick={saveHeader}>Save</button>
+          <button className="cb-btn cb-btn-sm cb-btn-ghost" disabled={renaming} onClick={() => setIsEditingHeader(false)}>Cancel</button>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-          <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}</span>
-          <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
-        </div>
-      </button>
+      ) : (
+        <button className="cb-tmpl-head cb-tmpl-head-toggle" onClick={() => setExpanded((v) => !v)}>
+          <div>
+            <div className="cb-tmpl-field" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              {template.field}
+              {isAdmin && (
+                <span
+                  role="button" tabIndex={0} title="Rename template" onClick={startEditingHeader}
+                  onKeyDown={(e) => { if (e.key === "Enter") startEditingHeader(e); }}
+                  className="cb-icon-btn" style={{ padding: 3 }}
+                >
+                  <Edit3 size={12} />
+                </span>
+              )}
+            </div>
+            <div className="cb-tmpl-name">{template.name}</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}</span>
+            <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+          </div>
+        </button>
+      )}
       {expanded && (
         <>
           {isAdmin && (
@@ -1428,7 +1539,7 @@ function SettingsView({
   );
 }
 
-function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate }) {
+function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate, onRenameTemplate }) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -1478,6 +1589,7 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
           <TemplateEditor
             key={t.id} template={t} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
             onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onDeleteTemplate={onDeleteTemplate}
+            onRenameTemplate={onRenameTemplate}
           />
         ))
       )}
@@ -2985,6 +3097,10 @@ export default function App() {
     await api.createTemplate(field, name);
     await refreshTemplates();
   }
+  async function renameTemplate(id, field, name) {
+    await api.updateTemplate(id, field, name);
+    await refreshTemplates();
+  }
   async function deleteTemplate(id) {
     await api.deleteTemplate(id);
     await refreshTemplates();
@@ -3057,7 +3173,7 @@ export default function App() {
               <Templates
                 templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
-                onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate}
+                onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate} onRenameTemplate={renameTemplate}
               />
             )}
             {view === "clients" && (
