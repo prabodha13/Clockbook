@@ -1975,7 +1975,7 @@ export default function App() {
   useEffect(() => { runningTaskRef.current = myRunningTask || null; }, [myRunningTask]);
 
   const lastAlertRef = useRef(0);
-  const SLEEP_THRESHOLD_MS = 20000;
+  const SLEEP_THRESHOLD_MS = 60000;
 
   // Pauses the given task right now, backdated to the moment it actually stopped running.
   // The backend already accepts an arbitrary historical end_at and uses it to close the
