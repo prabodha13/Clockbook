@@ -3,6 +3,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
+  Calendar as CalendarIcon, Video,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -268,6 +269,7 @@ function Sidebar({ view, setView, isAdmin }) {
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
     { id: "clients", label: "Clients", icon: Building2 },
+    { id: "calendar", label: "Calendar", icon: CalendarIcon },
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
     ...(isAdmin ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
@@ -1478,6 +1480,103 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onDelete, onAdd
   );
 }
 
+function formatEventTime(iso, allDay) {
+  if (allDay) return "All day";
+  return new Date(iso).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+function formatDayHeader(iso) {
+  const d = new Date(iso);
+  const today = new Date();
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const sameDay = (a, b) => a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  if (sameDay(d, today)) return "Today";
+  if (sameDay(d, tomorrow)) return "Tomorrow";
+  return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
+}
+
+function CalendarPage({ onConnectCalendar }) {
+  const [state, setState] = useState({ loading: true, connected: false, events: [], error: "" });
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true }));
+    try {
+      const data = await api.getCalendarEvents();
+      setState({ loading: false, connected: data.connected, events: data.events || [], error: data.error || "" });
+    } catch (err) {
+      setState({ loading: false, connected: false, events: [], error: err.message || "Could not load your calendar" });
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const groups = [];
+  for (const ev of state.events) {
+    const dayKey = ev.start.slice(0, 10);
+    let group = groups.find((g) => g.dayKey === dayKey);
+    if (!group) { group = { dayKey, events: [] }; groups.push(group); }
+    group.events.push(ev);
+  }
+
+  return (
+    <div>
+      <div className="cb-page-head">
+        <div>
+          <div className="cb-page-title cb-serif">Calendar</div>
+          <div className="cb-page-sub">Your own upcoming events from Google Calendar, next 7 days.</div>
+        </div>
+        {state.connected && (
+          <button className="cb-btn cb-btn-ghost" onClick={load} title="Re-check your calendar">
+            <RotateCcw size={14} />Refresh
+          </button>
+        )}
+      </div>
+
+      {state.loading && <div className="cb-empty">Loading your calendar...</div>}
+
+      {!state.loading && !state.connected && (
+        <div className="cb-empty">
+          <span className="cb-empty-title">Not connected yet</span><br />
+          Connect your Google Calendar to see your upcoming events here, and to get a prompt to pause your timer automatically when a meeting starts.
+          <div style={{ marginTop: 14 }}>
+            <button className="cb-btn cb-btn-primary" onClick={onConnectCalendar}><CalendarIcon size={14} />Connect Google Calendar</button>
+          </div>
+        </div>
+      )}
+
+      {!state.loading && state.connected && state.error && (
+        <div className="cb-error" style={{ marginBottom: 10 }}>{state.error}</div>
+      )}
+
+      {!state.loading && state.connected && !state.error && groups.length === 0 && (
+        <div className="cb-empty">Nothing on your calendar for the next 7 days.</div>
+      )}
+
+      {!state.loading && state.connected && groups.map((g) => (
+        <div className="cb-group" key={g.dayKey}>
+          <div className="cb-group-head">
+            <div className="cb-group-title">{formatDayHeader(g.events[0].start)}</div>
+          </div>
+          <div className="cb-card-list">
+            {g.events.map((ev) => (
+              <div className="cb-row" key={ev.id}>
+                <div className="cb-row-main">
+                  <div className="cb-row-task">{ev.summary}</div>
+                  <div className="cb-row-meta">
+                    <span>{formatEventTime(ev.start, ev.all_day)}</span>
+                    {ev.has_meet_link && <span><Video size={11} style={{ verticalAlign: -2, marginRight: 3 }} />Google Meet</span>}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask }) {
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
@@ -2586,6 +2685,9 @@ export default function App() {
                 clients={clients} tasks={tasks} bankAccounts={bankAccounts} isAdmin={isAdmin}
                 onAdd={addClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
               />
+            )}
+            {view === "calendar" && (
+              <CalendarPage onConnectCalendar={connectGoogleCalendar} />
             )}
             {view === "export" && (
               <ExportView
