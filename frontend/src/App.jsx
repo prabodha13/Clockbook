@@ -1694,7 +1694,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
           </select>
         )}
         <div style={{ marginLeft: "auto", fontSize: 13, color: "var(--ink-soft)" }}>
-          {rows.length} entr{rows.length === 1 ? "y" : "ies"}, <span className="cb-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>{totalHours.toFixed(2)}h</span> total
+          {rows.length} entr{rows.length === 1 ? "y" : "ies"}, <span className="cb-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>{totalHours.toFixed(2)}h</span> ({formatHM(totalHours * 3600)}) total
         </div>
       </div>
 
