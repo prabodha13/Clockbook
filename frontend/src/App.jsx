@@ -407,10 +407,13 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask }) {
-  const todo = tasks.filter((t) => t.status === "todo");
-  const inProgress = tasks.filter((t) => t.status === "running" || t.status === "paused");
-  const submittedToday = tasks
+function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask }) {
+  const [showMineOnly, setShowMineOnly] = useState(false);
+  const visibleTasks = isAdmin && showMineOnly ? tasks.filter((t) => t.owner_id === currentUser.id) : tasks;
+
+  const todo = visibleTasks.filter((t) => t.status === "todo");
+  const inProgress = visibleTasks.filter((t) => t.status === "running" || t.status === "paused");
+  const submittedToday = visibleTasks
     .filter((t) => t.status === "submitted" && isToday(t.submitted_at))
     .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
 
@@ -463,9 +466,19 @@ function Dashboard({ tasks, now, currentUser, members, onStart, onPause, onCompl
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Dashboard</div>
-          <div className="cb-page-sub">Your firm's active work, tracked client by client.</div>
+          <div className="cb-page-sub">
+            {isAdmin && showMineOnly ? "Just your own active work." : "Your firm's active work, tracked client by client."}
+          </div>
         </div>
-        <button className="cb-btn cb-btn-primary" onClick={onNewTask}><Plus size={15} />New task</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {isAdmin && (
+            <div className="cb-tabs">
+              <button className={`cb-tab ${!showMineOnly ? "active" : ""}`} onClick={() => setShowMineOnly(false)}>Everyone</button>
+              <button className={`cb-tab ${showMineOnly ? "active" : ""}`} onClick={() => setShowMineOnly(true)}>Just me</button>
+            </div>
+          )}
+          <button className="cb-btn cb-btn-primary" onClick={onNewTask}><Plus size={15} />New task</button>
+        </div>
       </div>
 
       <div className="cb-stats">
@@ -2389,7 +2402,7 @@ export default function App() {
           <div className="cb-content">
             {view === "dashboard" && (
               <Dashboard
-                tasks={tasks} now={now} currentUser={currentUser} members={members}
+                tasks={tasks} now={now} currentUser={currentUser} members={members} isAdmin={isAdmin}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
               />
