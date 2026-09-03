@@ -66,6 +66,7 @@ html, body, #root {
 .cb-tracking.paused { background: var(--paper); border-color: var(--line-strong); }
 .cb-tracking-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex-shrink: 0; animation: cb-pulse 1.6s ease-in-out infinite; }
 .cb-tracking.paused .cb-tracking-dot { background: var(--ink-faint); animation: none; }
+.cb-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); flex-shrink: 0; animation: cb-pulse 1.6s ease-in-out infinite; }
 @keyframes cb-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
 .cb-tracking-text { min-width: 0; }
 .cb-tracking-label { font-size: 11px; color: var(--amber); font-weight: 600; }

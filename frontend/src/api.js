@@ -38,6 +38,10 @@ export const api = {
   getAuthStatus: () => request("/auth/status"),
   getServerTime: () => request("/time"),
   getGoogleConnectUrl: () => request("/auth/google/connect-url"),
+  getPods: () => request("/pods"),
+  createPod: (name) => request("/pods", { method: "POST", body: JSON.stringify({ name }) }),
+  deletePod: (id) => request(`/pods/${id}`, { method: "DELETE" }),
+  updateMemberPod: (memberId, podId) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId }) }),
   disconnectGoogleCalendar: () => request("/auth/google/disconnect", { method: "POST" }),
   getMeetingNow: () => request("/calendar/meeting-now"),
   getCalendarEvents: () => request("/calendar/events"),
@@ -57,6 +61,7 @@ export const api = {
 
   getClients: () => request("/clients"),
   createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
+  updateClient: (id, name) => request(`/clients/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
 
   getBankAccounts: () => request("/bank-accounts"),

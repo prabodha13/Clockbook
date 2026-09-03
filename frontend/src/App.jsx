@@ -3,7 +3,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
-  Calendar as CalendarIcon, Video,
+  Calendar as CalendarIcon, Video, Edit3,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -347,6 +347,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
         <div className="cb-row-meta">
           {task.role && <span>{task.role}</span>}
           {task.task_type && <span>{task.task_type}</span>}
+          {task.bank_account_name && <span>{task.bank_account_name}</span>}
           <span>
             Owner:{" "}
             {isAdmin ? (
@@ -453,6 +454,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
   }, 0);
   const myRunningCount = myTasks.filter((t) => t.status === "running" || t.status === "paused").length;
   const mySubmittedTodayCount = myTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
+  const activeNowCount = tasks.filter((t) => t.status === "running").length;
 
   function Group({ title, items, empty }) {
     return (
@@ -525,6 +527,15 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           <div className="cb-stat-num">{mySubmittedTodayCount}</div>
           <div className="cb-stat-label">Submitted today</div>
         </div>
+        {isAdmin && (
+          <div className="cb-stat" style={{ border: "2px solid var(--green)" }}>
+            <div className="cb-stat-num" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <span className="cb-live-dot" />
+              {activeNowCount}
+            </div>
+            <div className="cb-stat-label" style={{ color: "var(--green)", fontWeight: 500 }}>Active right now</div>
+          </div>
+        )}
       </div>
 
       <div className="cb-group">
@@ -1028,43 +1039,54 @@ function AddMemberModal({ onClose, onAdd }) {
 
 function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask }) {
   const [name, setName] = useState(task.name);
+  const [role, setRole] = useState(task.role);
+  const [taskType, setTaskType] = useState(task.task_type);
+  const [requiresBank, setRequiresBank] = useState(!!task.requires_bank_account);
+  const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
+  const [saving, setSaving] = useState(false);
 
-  useEffect(() => { setName(task.name); }, [task.name]);
+  // Resyncs local state whenever the underlying task actually changes, e.g. after a save
+  // completes and fresh data comes back, or if this same slot ends up showing a different
+  // task. Editing always happens on a local copy, so two fields changed in quick succession
+  // can never race each other and accidentally revert one of them.
+  useEffect(() => {
+    setName(task.name);
+    setRole(task.role);
+    setTaskType(task.task_type);
+    setRequiresBank(!!task.requires_bank_account);
+    setTracksLabel(task.tracks_number_label);
+  }, [task.id, task.name, task.role, task.task_type, task.requires_bank_account, task.tracks_number_label]);
 
-  function saveField(field, value) {
-    if (value === task[field]) return; // nothing actually changed, skip a wasted request
-    onUpdateTask(template.id, task.id, {
-      name: field === "name" ? value : name,
-      role: field === "role" ? value : task.role,
-      task_type: field === "task_type" ? value : task.task_type,
-      requires_bank_account: field === "requires_bank_account" ? value : task.requires_bank_account,
-      tracks_number_label: field === "tracks_number_label" ? value : task.tracks_number_label,
-    });
-  }
+  const isDirty = name !== task.name || role !== task.role || taskType !== task.task_type
+    || requiresBank !== !!task.requires_bank_account || tracksLabel !== task.tracks_number_label;
 
-  function saveOnEnter(e) {
-    if (e.key === "Enter") e.target.blur();
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await onUpdateTask(template.id, task.id, {
+        name, role, task_type: taskType, requires_bank_account: requiresBank, tracks_number_label: tracksLabel,
+      });
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
     <div className="cb-tmpl-task-block">
       <div className="cb-tmpl-task-row">
-        <input
-          className="cb-input" value={name} onChange={(e) => setName(e.target.value)}
-          onBlur={(e) => saveField("name", e.target.value)} onKeyDown={saveOnEnter}
-        />
-        <select className="cb-select" value={task.role} onChange={(e) => saveField("role", e.target.value)}>
+        <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} />
+        <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="">No role</option>
           {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
-          {task.role && !roles.some((r) => r.name === task.role) && (
-            <option value={task.role}>{task.role}</option>
+          {role && !roles.some((r) => r.name === role) && (
+            <option value={role}>{role}</option>
           )}
         </select>
-        <select className="cb-select" value={task.task_type} onChange={(e) => saveField("task_type", e.target.value)}>
+        <select className="cb-select" value={taskType} onChange={(e) => setTaskType(e.target.value)}>
           <option value="">No task type</option>
           {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-          {task.task_type && !taskTypes.some((t) => t.name === task.task_type) && (
-            <option value={task.task_type}>{task.task_type}</option>
+          {taskType && !taskTypes.some((t) => t.name === taskType) && (
+            <option value={taskType}>{taskType}</option>
           )}
         </select>
         <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
@@ -1072,22 +1094,27 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
       <div className="cb-tmpl-task-options">
         <label className="cb-tmpl-task-option-checkbox">
           <input
-            type="checkbox" className="cb-checkbox" checked={!!task.requires_bank_account}
-            onChange={(e) => saveField("requires_bank_account", e.target.checked)}
+            type="checkbox" className="cb-checkbox" checked={requiresBank}
+            onChange={(e) => setRequiresBank(e.target.checked)}
           />
           Requires a bank account
         </label>
         <select
           className="cb-select cb-tmpl-task-tracks-input"
-          value={task.tracks_number_label}
-          onChange={(e) => saveField("tracks_number_label", e.target.value)}
+          value={tracksLabel}
+          onChange={(e) => setTracksLabel(e.target.value)}
         >
           <option value="">Not tracked</option>
           {trackedMetrics.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
-          {task.tracks_number_label && !trackedMetrics.some((m) => m.name === task.tracks_number_label) && (
-            <option value={task.tracks_number_label}>{task.tracks_number_label}</option>
+          {tracksLabel && !trackedMetrics.some((m) => m.name === tracksLabel) && (
+            <option value={tracksLabel}>{tracksLabel}</option>
           )}
         </select>
+        {isDirty && (
+          <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={saving} onClick={handleSave} style={{ marginLeft: "auto" }}>
+            {saving ? "Saving..." : "Save"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1191,9 +1218,10 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
 
 function SettingsView({
   roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
-  onAddTrackedMetric, onDeleteTrackedMetric,
+  onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
 }) {
   const [newRole, setNewRole] = useState("");
+  const [newPod, setNewPod] = useState("");
   const [newTaskType, setNewTaskType] = useState("");
   const [newMetric, setNewMetric] = useState("");
   const [error, setError] = useState("");
@@ -1228,6 +1256,18 @@ function SettingsView({
     try {
       await onAddTrackedMetric(newMetric);
       setNewMetric("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function submitPod(e) {
+    e.preventDefault();
+    if (!newPod.trim()) return;
+    try {
+      await onAddPod(newPod);
+      setNewPod("");
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
@@ -1295,6 +1335,33 @@ function SettingsView({
           {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
         </div>
       </div>
+
+      {isSuperAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Teams</div>
+              <div className="cb-tmpl-name">Pods</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>
+              Assign an admin to a pod on the Staff page and they will only see time and task data for people in that same pod. An admin with no pod keeps seeing everyone, and super admins always see everyone regardless of pod.
+            </div>
+            {pods.map((p) => (
+              <div key={p.id} className="cb-client-account-row">
+                <div style={{ fontSize: 13.5 }}>{p.name}</div>
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeletePod(p.id)}><Trash2 size={13} /></button>
+              </div>
+            ))}
+            {pods.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No pods created yet.</div>}
+            <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 360 }}>
+              <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
+              <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1356,11 +1423,38 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
   );
 }
 
-function ClientRow({ client, taskCount, bankAccounts, isAdmin, onDeleteClient, onAddAccount, onDeleteAccount }) {
+function ClientRow({ client, taskCount, bankAccounts, isAdmin, onUpdateClient, onDeleteClient, onAddAccount, onDeleteAccount }) {
   const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editedName, setEditedName] = useState(client.name);
+  const [renaming, setRenaming] = useState(false);
+
+  function startEditingName(e) {
+    e.stopPropagation();
+    setEditedName(client.name);
+    setIsEditingName(true);
+  }
+
+  async function saveClientName() {
+    const trimmed = editedName.trim();
+    if (!trimmed || trimmed === client.name) {
+      setIsEditingName(false);
+      return;
+    }
+    setRenaming(true);
+    try {
+      await onUpdateClient(client.id, trimmed);
+      setIsEditingName(false);
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    } finally {
+      setRenaming(false);
+    }
+  }
 
   async function submitAccount(e) {
     e.preventDefault();
@@ -1397,15 +1491,41 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, onDeleteClient, o
 
   return (
     <div>
-      <button className="cb-client-row-toggle" onClick={() => setExpanded((v) => !v)}>
-        <div className="cb-row-main">
-          <div className="cb-row-task">{client.name}</div>
-          <div className="cb-row-meta">
-            {taskCount} task{taskCount === 1 ? "" : "s"} tracked, {bankAccounts.length} bank account{bankAccounts.length === 1 ? "" : "s"}
+      {isEditingName ? (
+        <div className="cb-row" style={{ background: "var(--paper)" }}>
+          <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <input
+              className="cb-input" style={{ maxWidth: 320 }} value={editedName}
+              onChange={(e) => setEditedName(e.target.value)} autoFocus
+              onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
+            />
+            <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={renaming} onClick={saveClientName}>Save</button>
+            <button className="cb-btn cb-btn-sm cb-btn-ghost" disabled={renaming} onClick={() => setIsEditingName(false)}>Cancel</button>
+            {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
           </div>
         </div>
-        <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
-      </button>
+      ) : (
+        <button className="cb-client-row-toggle" onClick={() => setExpanded((v) => !v)}>
+          <div className="cb-row-main">
+            <div className="cb-row-task" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {client.name}
+              {isAdmin && (
+                <span
+                  role="button" tabIndex={0} title="Edit client name" onClick={startEditingName}
+                  onKeyDown={(e) => { if (e.key === "Enter") startEditingName(e); }}
+                  className="cb-icon-btn" style={{ padding: 3 }}
+                >
+                  <Edit3 size={13} />
+                </span>
+              )}
+            </div>
+            <div className="cb-row-meta">
+              {taskCount} task{taskCount === 1 ? "" : "s"} tracked, {bankAccounts.length} bank account{bankAccounts.length === 1 ? "" : "s"}
+            </div>
+          </div>
+          <ChevronDown size={16} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s" }} />
+        </button>
+      )}
       {expanded && (
         <div className="cb-client-detail">
           <div className="cb-hint" style={{ marginBottom: 8 }}>Bank accounts</div>
@@ -1441,7 +1561,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, onDeleteClient, o
   );
 }
 
-function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onDelete, onAddAccount, onDeleteAccount }) {
+function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDelete, onAddAccount, onDeleteAccount }) {
   const [name, setName] = useState("");
 
   async function submit(e) {
@@ -1471,7 +1591,7 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onDelete, onAdd
           return (
             <ClientRow
               key={c.id} client={c} taskCount={count} bankAccounts={accounts} isAdmin={isAdmin}
-              onDeleteClient={onDelete} onAddAccount={onAddAccount} onDeleteAccount={onDeleteAccount}
+              onUpdateClient={onUpdate} onDeleteClient={onDelete} onAddAccount={onAddAccount} onDeleteAccount={onDeleteAccount}
             />
           );
         })}
@@ -1967,7 +2087,7 @@ function roleLabel(role) {
   return "Member";
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const settingUpMember = members.find((m) => m.id === settingUpId);
@@ -2005,10 +2125,22 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                   {roleLabel(m.role)}
                   {!m.email && " \u00b7 No login set up yet"}
                   {m.google_calendar_connected && " \u00b7 Calendar connected"}
+                  {m.pod_id && ` \u00b7 ${(pods.find((p) => p.id === m.pod_id) || {}).name || "Unknown pod"}`}
                 </div>
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {currentUser.role === "super_admin" && pods.length > 0 && (
+                <select
+                  className="cb-select"
+                  style={{ width: 150, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
+                  value={m.pod_id || ""}
+                  onChange={(e) => onAssignPod(m.id, e.target.value || null)}
+                >
+                  <option value="">No pod</option>
+                  {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              )}
               {m.id === currentUser.id && (
                 m.google_calendar_connected ? (
                   <button className="cb-role-toggle" onClick={onDisconnectCalendar}>Disconnect calendar</button>
@@ -2133,6 +2265,7 @@ export default function App() {
   const [roles, setRoles] = useState([]);
   const [taskTypes, setTaskTypes] = useState([]);
   const [trackedMetrics, setTrackedMetrics] = useState([]);
+  const [pods, setPods] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState("dashboard");
@@ -2223,6 +2356,11 @@ export default function App() {
       setTaskTypes(tt);
       setTrackedMetrics(tm);
       setLoadError("");
+      try {
+        setPods(await api.getPods());
+      } catch (err) {
+        setPods([]); // staff cannot see this list at all, that is expected, not an error
+      }
     } catch (err) {
       setLoadError(err.message || "Could not reach the server");
     }
@@ -2262,6 +2400,7 @@ export default function App() {
     setClients([]);
     setTemplates([]);
     setTasks([]);
+    setPods([]);
     setDataLoading(true);
     setAuthState("login");
   }
@@ -2568,6 +2707,36 @@ export default function App() {
     }
   }
 
+  async function addPod(name) {
+    try {
+      const pod = await api.createPod(name.trim());
+      setPods((prev) => [...prev, pod].sort((a, b) => a.name.localeCompare(b.name)));
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function deletePodHandler(id) {
+    try {
+      await api.deletePod(id);
+      setPods((prev) => prev.filter((p) => p.id !== id));
+      // members who were in this pod are now unassigned server-side, reflect that locally
+      setMembers((prev) => prev.map((m) => (m.pod_id === id ? { ...m, pod_id: null } : m)));
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function assignMemberPod(memberId, podId) {
+    try {
+      const updated = await api.updateMemberPod(memberId, podId);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      if (updated.id === currentUser.id) setCurrentUser(updated);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
   async function refreshTasks() {
     const tk = await api.getTasks();
     setTasks(tk);
@@ -2681,6 +2850,12 @@ export default function App() {
     const client = await api.createClient(name.trim());
     setClients((prev) => [...prev, client]);
     return client;
+  }
+
+  async function updateClient(clientId, name) {
+    const updated = await api.updateClient(clientId, name);
+    setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
   }
 
   async function deleteClient(clientId) {
@@ -2826,7 +3001,7 @@ export default function App() {
             {view === "clients" && (
               <Clients
                 clients={clients} tasks={tasks} bankAccounts={bankAccounts} isAdmin={isAdmin}
-                onAdd={addClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
+                onAdd={addClient} onUpdate={updateClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
               />
             )}
             {view === "calendar" && (
@@ -2844,6 +3019,7 @@ export default function App() {
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
+                pods={pods} onAssignPod={assignMemberPod}
               />
             )}
             {view === "settings" && isAdmin && (
@@ -2851,6 +3027,7 @@ export default function App() {
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
+                pods={pods} isSuperAdmin={currentUser.role === "super_admin"} onAddPod={addPod} onDeletePod={deletePodHandler}
               />
             )}
           </div>
