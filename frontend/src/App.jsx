@@ -2012,12 +2012,22 @@ export default function App() {
 
   useEffect(() => {
     const HEARTBEAT_MS = 3000;
+    // A gap this large cannot plausibly be explained by a browser simply slowing down a
+    // background tab's timers to save power, only genuine sleep produces something this long
+    const DEFINITELY_REAL_SLEEP_MS = 5 * 60 * 1000;
     let lastTick = Date.now();
     const iv = setInterval(() => {
       const nowTick = Date.now();
       const gap = nowTick - lastTick;
       const sleepStart = lastTick;
       lastTick = nowTick;
+      // A tab that is not the visible one gets its timers deliberately throttled by the
+      // browser to save power, and that throttling produces the exact same symptom as real
+      // sleep, a bigger gap than expected between checks, with nothing actually having
+      // happened. This only trusts a gap seen while backgrounded if it is large enough that
+      // throttling alone could not explain it, so switching tabs never causes a false pause,
+      // while genuinely leaving the computer asleep for a real stretch still gets caught.
+      if (document.hidden && gap < DEFINITELY_REAL_SLEEP_MS) return;
       reportGap(gap, sleepStart);
     }, HEARTBEAT_MS);
     return () => clearInterval(iv);
