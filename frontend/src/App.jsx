@@ -389,7 +389,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             Complete
           </button>
         )}
-        {isAdmin && (
+        {(isAdmin || (isMine && task.status !== "submitted")) && (
           <button
             className="cb-icon-btn cb-btn-danger"
             title="Delete"
@@ -1977,18 +1977,23 @@ export default function App() {
   const lastAlertRef = useRef(0);
   const SLEEP_THRESHOLD_MS = 20000;
 
-  async function reportGap(gapMs, sleepStartMs) {
-    if (gapMs < SLEEP_THRESHOLD_MS) return;
-    if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
-    lastAlertRef.current = Date.now();
-    const task = runningTaskRef.current;
-    if (!task) return;
+  // Pauses the given task right now, backdated to the moment it actually stopped running.
+  // The backend already accepts an arbitrary historical end_at and uses it to close the
+  // segment regardless of when this call itself arrives, so this is safe to call the instant
+  // a lock is detected rather than waiting for the person to come back and unlock first.
+  async function pauseTaskAt(task, atMs) {
     try {
-      const updated = await api.pauseTask(task.id, new Date(sleepStartMs + clockOffsetRef.current).toISOString());
+      const updated = await api.pauseTask(task.id, new Date(atMs + clockOffsetRef.current).toISOString());
       mergeTask(updated);
     } catch (err) {
-      // if this fails, still tell the person below so they know to check the task themselves
+      // if this fails, the away alert below still tells the person to check the task themselves
     }
+  }
+
+  // Shows the same "you were away" popup and notification as before, kept separate from
+  // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
+  // person with this once they are actually back to see it
+  function showAwayAlert(task, gapMs, sleepStartMs) {
     setSleepAlert({ task, gapMs, sleepStartMs });
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
     // delivers it straight to the notification center with no visible toast. Waiting a
@@ -2010,6 +2015,16 @@ export default function App() {
     }, 2000);
   }
 
+  async function reportGap(gapMs, sleepStartMs) {
+    if (gapMs < SLEEP_THRESHOLD_MS) return;
+    if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
+    lastAlertRef.current = Date.now();
+    const task = runningTaskRef.current;
+    if (!task) return;
+    await pauseTaskAt(task, sleepStartMs);
+    showAwayAlert(task, gapMs, sleepStartMs);
+  }
+
   const wasHiddenSinceLastCheckRef = useRef(false);
 
   useEffect(() => {
@@ -2024,9 +2039,6 @@ export default function App() {
 
   useEffect(() => {
     const HEARTBEAT_MS = 3000;
-    // A gap this large cannot plausibly be explained by a browser simply slowing down a
-    // background tab's timers to save power, only genuine sleep produces something this long
-    const DEFINITELY_REAL_SLEEP_MS = 5 * 60 * 1000;
     let lastTick = Date.now();
     const iv = setInterval(() => {
       const nowTick = Date.now();
@@ -2036,16 +2048,20 @@ export default function App() {
       // A tab that is not the visible one gets its timers deliberately throttled by the
       // browser to save power, and that throttling produces the exact same symptom as real
       // sleep, a bigger gap than expected between checks, with nothing actually having
-      // happened. Checking document.hidden only at the instant this callback happens to
-      // fire is not good enough, since a delayed callback often finally runs right after
-      // someone has already switched back, by which point the tab looks visible again even
-      // though it was hidden for the entire gap that caused the false reading. This instead
-      // remembers whether the tab was hidden at any point since the last check, so a real
-      // background throttling gap is still recognized correctly regardless of exactly when
-      // the delayed callback happens to land.
+      // happened. There is no length of time a hidden tab can be trusted to prove real
+      // sleep, since ordinary work in another tab or app for several minutes produces
+      // exactly this same signature, so a gap seen while hidden at any point is never
+      // treated as sleep here, no matter how large. Genuine sleep is still caught whenever
+      // this tab was the visible one throughout, and screen lock is covered separately by
+      // the Idle Detection API below regardless of visibility.
+      // Checking document.hidden only at the instant this callback happens to fire is not
+      // good enough either, since a delayed callback often finally runs right after someone
+      // has already switched back, by which point the tab looks visible again even though it
+      // was hidden for the entire gap that caused the false reading. This instead remembers
+      // whether the tab was hidden at any point since the last check.
       const wasHidden = wasHiddenSinceLastCheckRef.current || document.hidden;
       wasHiddenSinceLastCheckRef.current = false;
-      if (wasHidden && gap < DEFINITELY_REAL_SLEEP_MS) return;
+      if (wasHidden) return;
       reportGap(gap, sleepStart);
     }, HEARTBEAT_MS);
     return () => clearInterval(iv);
@@ -2063,14 +2079,26 @@ export default function App() {
       const controller = new AbortController();
       const detector = new window.IdleDetector();
       let lockedSince = null;
+      let lockedTask = null;
       detector.addEventListener("change", () => {
         if (detector.screenState === "locked") {
+          // Pausing here, the moment the lock is detected, rather than waiting for the
+          // person to come back and unlock, means the dashboard is accurate for anyone else
+          // looking at it during a long lock, and nothing is lost if this computer never
+          // comes back before someone eventually submits the task.
           lockedSince = Date.now();
+          lockedTask = runningTaskRef.current;
+          if (lockedTask && Date.now() - lastAlertRef.current >= 5000) {
+            lastAlertRef.current = Date.now();
+            pauseTaskAt(lockedTask, lockedSince);
+          }
         } else if (detector.screenState === "unlocked" && lockedSince) {
           const gap = Date.now() - lockedSince;
           const sleepStart = lockedSince;
+          const task = lockedTask;
           lockedSince = null;
-          reportGap(gap, sleepStart);
+          lockedTask = null;
+          if (task) showAwayAlert(task, gap, sleepStart);
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
