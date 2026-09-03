@@ -415,6 +415,51 @@ def get_meeting_now(current_member: models.Member = Depends(get_current_member),
     return {"connected": True, "meeting": None}
 
 
+@app.get("/api/calendar/events")
+def get_calendar_events(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # A plain, real view of what is actually on the connected calendar, useful both as a
+    # genuinely handy view and as the clearest possible proof the connection is working,
+    # since seeing real events is far easier to verify than waiting for the exact right
+    # moment for the background meeting-now check to fire.
+    if not current_member.google_refresh_token:
+        return {"connected": False, "events": []}
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        return {"connected": True, "events": [], "error": "Could not refresh access, try reconnecting"}
+
+    now = datetime.utcnow()
+    time_min = now.isoformat() + "Z"
+    time_max = (now + timedelta(days=7)).isoformat() + "Z"
+    try:
+        resp = httpx.get(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"timeMin": time_min, "timeMax": time_max, "singleEvents": "true", "orderBy": "startTime", "maxResults": 20},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+    except Exception:
+        return {"connected": True, "events": [], "error": "Could not reach Google Calendar"}
+
+    events = []
+    for event in items:
+        start = event.get("start", {})
+        end = event.get("end", {})
+        has_meet_link = bool(event.get("hangoutLink")) or any(
+            ep.get("entryPointType") == "video"
+            for ep in (event.get("conferenceData") or {}).get("entryPoints", [])
+        )
+        events.append({
+            "id": event.get("id"),
+            "summary": event.get("summary") or "(no title)",
+            "start": start.get("dateTime") or start.get("date"),
+            "all_day": "dateTime" not in start,
+            "has_meet_link": has_meet_link,
+        })
+    return {"connected": True, "events": events}
+
+
 # ---------------------------------------------------------------
 # Members
 # ---------------------------------------------------------------
