@@ -1587,6 +1587,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
   const [copiedId, setCopiedId] = useState(null);
   const [rows, setRows] = useState([]);
   const [loadError, setLoadError] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
   const dateRange = useMemo(() => {
     if (datePreset === "custom") return dateRangeForCustom(customFrom, customTo);
@@ -1609,6 +1610,54 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
 
   const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
 
+  // Groups by Client + Role + Task Type, since that combination is what actually becomes
+  // one line on a Karbon timesheet, regardless of which template, or no template at all, the
+  // underlying tasks came from. A group of exactly one task renders with no fold at all, the
+  // fold only exists to earn its place when there is something to actually combine.
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const r of rows) {
+      const key = `${r.client}|||${r.role || ""}|||${r.task_type || ""}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(r);
+    }
+    return Array.from(map.entries()).map(([key, groupRows]) => {
+      const totalSeconds = groupRows.reduce((sum, r) => sum + r.seconds, 0);
+      const allPushed = groupRows.every((r) => r.pushed);
+      const anyAdjusted = groupRows.some((r) => r.adjusted);
+      const dates = Array.from(new Set(groupRows.map((r) => (r.submitted_at || "").slice(0, 10))));
+      const trackedBys = Array.from(new Set(groupRows.map((r) => r.tracked_by || "")));
+      const bankAccounts = Array.from(new Set(groupRows.map((r) => r.bank_account || "")));
+      const metrics = Array.from(new Set(groupRows.map((r) => r.metric || "")));
+      const noteCount = groupRows.filter((r) => r.note).length;
+      const label = (values) => (values.length === 1 ? (values[0] || "none") : "Multiple");
+      return {
+        key,
+        client: groupRows[0].client,
+        role: groupRows[0].role,
+        task_type: groupRows[0].task_type,
+        rows: groupRows,
+        count: groupRows.length,
+        totalSeconds,
+        allPushed,
+        anyAdjusted,
+        noteCount,
+        dateLabel: dates.length === 1 ? formatDate(groupRows[0].submitted_at) : `${dates.length} dates`,
+        trackedByLabel: label(trackedBys),
+        bankAccountLabel: label(bankAccounts),
+        metricLabel: label(metrics),
+      };
+    });
+  }, [rows]);
+
+  function toggleGroup(key) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
   function copyRow(r) {
     const decHours = r.hours.toFixed(2);
     const hm = formatHM(r.seconds);
@@ -1618,6 +1667,16 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
     const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1600); }
+    });
+  }
+
+  function copyGroup(g) {
+    const totalHm = formatHM(g.totalSeconds);
+    const totalDec = (g.totalSeconds / 3600).toFixed(2);
+    const breakdown = g.rows.map((r) => `${r.task}: ${formatHM(r.seconds)}`).join(", ");
+    const text = `${g.client} | Role: ${g.role || "none"} | Task type: ${g.task_type || "none"} | ${totalHm} (${totalDec}h) total across ${g.count} tasks: ${breakdown}`;
+    copyToClipboard(text).then((ok) => {
+      if (ok) { setCopiedId(g.key); setTimeout(() => setCopiedId(null), 1600); }
     });
   }
 
@@ -1635,6 +1694,20 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
 
   async function handleTogglePushed(id) {
     await onTogglePushed(id);
+    await loadRows();
+  }
+
+  // Ticking Pushed on a folded group marks every task inside it at once, since that is
+  // literally what happened, the combined total was entered as one Karbon line. Only the
+  // tasks that actually need to change are touched, un-pushing a partially pushed group
+  // brings everything to pushed first rather than guessing what was intended.
+  async function handleToggleGroupPushed(g) {
+    const target = !g.allPushed;
+    for (const r of g.rows) {
+      if (r.pushed !== target) {
+        await onTogglePushed(r.id);
+      }
+    }
     await loadRows();
   }
 
@@ -1713,37 +1786,107 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
             {rows.length === 0 && (
               <tr><td colSpan={isAdmin ? 15 : 14}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
-            {rows.map((r) => (
-              <tr key={r.id}>
-                <td>{formatDate(r.submitted_at)}</td>
-                <td>{r.client}</td>
-                <td>{r.task}</td>
-                <td>{r.role || "none"}</td>
-                <td>{r.task_type || "none"}</td>
-                <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
-                <td>{r.bank_account || "none"}</td>
-                <td>{r.metric || "none"}</td>
-                <td className="num cb-mono">
-                  {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
-                </td>
-                <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                <td>{r.tracked_by || "none"}</td>
-                <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
-                <td>
-                  <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
-                    {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
-                  </button>
-                </td>
-                {isAdmin && (
-                  <td>
-                    <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(r)}>
-                      <Trash2 size={14} />
-                    </button>
-                  </td>
-                )}
-              </tr>
-            ))}
+            {groups.map((g) => {
+              if (g.count === 1) {
+                const r = g.rows[0];
+                return (
+                  <tr key={r.id}>
+                    <td>{formatDate(r.submitted_at)}</td>
+                    <td>{r.client}</td>
+                    <td>{r.task}</td>
+                    <td>{r.role || "none"}</td>
+                    <td>{r.task_type || "none"}</td>
+                    <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
+                    <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                    <td>{r.bank_account || "none"}</td>
+                    <td>{r.metric || "none"}</td>
+                    <td className="num cb-mono">
+                      {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
+                    </td>
+                    <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
+                    <td>{r.tracked_by || "none"}</td>
+                    <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
+                    <td>
+                      <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
+                        {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
+                      </button>
+                    </td>
+                    {isAdmin && (
+                      <td>
+                        <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(r)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                );
+              }
+              const expanded = expandedGroups.has(g.key);
+              return (
+                <Fragment key={g.key}>
+                  <tr className="cb-export-group-row" style={{ cursor: "pointer", background: "var(--paper)" }} onClick={() => toggleGroup(g.key)}>
+                    <td>{g.dateLabel}</td>
+                    <td>{g.client}</td>
+                    <td style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <ChevronDown size={14} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
+                      {g.count} tasks
+                    </td>
+                    <td>{g.role || "none"}</td>
+                    <td>{g.task_type || "none"}</td>
+                    <td className="num cb-mono" style={{ fontWeight: 600 }}>
+                      {formatHM(g.totalSeconds)}
+                      {g.anyAdjusted && <span title="At least one of these was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}
+                    </td>
+                    <td></td>
+                    <td>{g.bankAccountLabel}</td>
+                    <td>{g.metricLabel}</td>
+                    <td></td>
+                    <td>{g.noteCount > 0 ? `${g.noteCount} note${g.noteCount > 1 ? "s" : ""}` : "none"}</td>
+                    <td>{g.trackedByLabel}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <input type="checkbox" className="cb-checkbox" checked={g.allPushed} onChange={() => handleToggleGroupPushed(g)} />
+                    </td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <button className="cb-icon-btn" title="Copy summary for Karbon" onClick={() => copyGroup(g)}>
+                        {copiedId === g.key ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
+                      </button>
+                    </td>
+                    {isAdmin && <td></td>}
+                  </tr>
+                  {expanded && g.rows.map((r) => (
+                    <tr key={r.id} className="cb-export-group-child">
+                      <td>{formatDate(r.submitted_at)}</td>
+                      <td></td>
+                      <td style={{ paddingLeft: 24, color: "var(--ink-soft)" }}>{r.task}</td>
+                      <td>{r.role || "none"}</td>
+                      <td>{r.task_type || "none"}</td>
+                      <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
+                      <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                      <td>{r.bank_account || "none"}</td>
+                      <td>{r.metric || "none"}</td>
+                      <td className="num cb-mono">
+                        {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
+                      </td>
+                      <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
+                      <td>{r.tracked_by || "none"}</td>
+                      <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
+                      <td>
+                        <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
+                          {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
+                        </button>
+                      </td>
+                      {isAdmin && (
+                        <td>
+                          <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(r)}>
+                            <Trash2 size={14} />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </Fragment>
+              );
+            })}
           </tbody>
         </table>
       </div>
