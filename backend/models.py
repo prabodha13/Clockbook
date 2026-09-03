@@ -11,6 +11,15 @@ def gen_id(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+class Pod(Base):
+    # A team/pod grouping for staff. When a regular admin is assigned to a pod, they only
+    # see task and time data for people in that same pod, super admins always see everyone
+    # regardless of pod, and an admin with no pod assigned keeps seeing everyone too.
+    __tablename__ = "pods"
+    id = Column(String, primary_key=True, default=lambda: gen_id("pod"))
+    name = Column(String, nullable=False, unique=True)
+
+
 class Member(Base):
     __tablename__ = "members"
     id = Column(String, primary_key=True, default=lambda: gen_id("mem"))
@@ -19,6 +28,7 @@ class Member(Base):
     password_hash = Column(String, nullable=True)
     color_idx = Column(Integer, default=0)
     role = Column(String, default="member")  # "admin" or "member"
+    pod_id = Column(String, ForeignKey("pods.id"), nullable=True)
     # Never returned by any API response, only a computed "connected" boolean is. This is
     # the one credential Google gives that keeps working long-term, used to fetch a fresh
     # short-lived access token each time a calendar check actually needs to happen.

@@ -56,6 +56,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE members ADD COLUMN password_hash VARCHAR"))
             if "google_refresh_token" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN google_refresh_token VARCHAR"))
+            if "pod_id" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN pod_id VARCHAR"))
 
     if "template_tasks" in inspector.get_table_names():
         existing_tt_columns = {c["name"] for c in inspector.get_columns("template_tasks")}
@@ -573,6 +575,25 @@ def create_client(payload: schemas.ClientCreate, current_member: models.Member =
     return client
 
 
+@app.patch("/api/clients/{client_id}", response_model=schemas.ClientOut)
+def update_client(client_id: str, payload: schemas.ClientCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    client = db.get(models.Client, client_id)
+    if not client:
+        raise HTTPException(404, "Client not found")
+    new_name = payload.name.strip()
+    if not new_name:
+        raise HTTPException(400, "Enter a client name")
+    client.name = new_name
+    # Tasks store their own copy of the client name for historical display, keep every
+    # existing task in sync too, so old and new entries never show two different names for
+    # what is now the same client.
+    db.query(models.TaskInstance).filter(models.TaskInstance.client_id == client_id).update({"client_name": new_name})
+    db.commit()
+    db.refresh(client)
+    return client
+
+
 @app.delete("/api/clients/{client_id}", status_code=204)
 def delete_client(client_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
@@ -647,6 +668,63 @@ def delete_role(role_id: str, current_member: models.Member = Depends(get_curren
         db.delete(role)
         db.commit()
     return None
+
+
+# ---------------------------------------------------------------
+# Pods (teams). Any admin can see the list, so they know what pod they and others are in,
+# but only a super admin can create, delete, or reassign one, since an admin who could
+# change their own pod assignment could simply unassign themselves to see everyone again,
+# which would make the restriction meaningless.
+# ---------------------------------------------------------------
+
+@app.get("/api/pods", response_model=list[schemas.PodOut])
+def list_pods(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    return db.query(models.Pod).order_by(models.Pod.name).all()
+
+
+@app.post("/api/pods", response_model=schemas.PodOut, status_code=201)
+def create_pod(payload: schemas.PodCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can create pods")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Enter a pod name")
+    if db.query(models.Pod).filter(models.Pod.name == name).first():
+        raise HTTPException(400, "A pod with this name already exists")
+    pod = models.Pod(name=name)
+    db.add(pod)
+    db.commit()
+    db.refresh(pod)
+    return pod
+
+
+@app.delete("/api/pods/{pod_id}", status_code=204)
+def delete_pod(pod_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can delete pods")
+    pod = db.get(models.Pod, pod_id)
+    if pod:
+        db.query(models.Member).filter(models.Member.pod_id == pod_id).update({"pod_id": None})
+        db.delete(pod)
+        db.commit()
+    return None
+
+
+@app.patch("/api/members/{member_id}/pod", response_model=schemas.MemberOut)
+def update_member_pod(member_id: str, payload: schemas.MemberPodUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can change pod assignments")
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    if payload.pod_id:
+        if not db.get(models.Pod, payload.pod_id):
+            raise HTTPException(404, "Pod not found")
+    member.pod_id = payload.pod_id
+    db.commit()
+    db.refresh(member)
+    return member
 
 
 @app.get("/api/task-types", response_model=list[schemas.TaskTypeOut])
@@ -798,11 +876,14 @@ def list_tasks(current_member: models.Member = Depends(get_current_member), db: 
         or_(models.TaskInstance.status != "submitted", models.TaskInstance.submitted_at >= recent_cutoff)
     )
     if current_member.role == "super_admin":
-        pass  # sees everything, including other super admins
+        pass  # sees everything, including other super admins, regardless of any pod
     elif current_member.role == "admin":
         super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
         if super_admin_ids:
             query = query.filter(~models.TaskInstance.owner_id.in_(super_admin_ids))
+        if current_member.pod_id:
+            pod_member_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
+            query = query.filter(models.TaskInstance.owner_id.in_(pod_member_ids))
     else:
         query = query.filter(models.TaskInstance.owner_id == current_member.id)
     return query.order_by(models.TaskInstance.created_at.desc()).all()
@@ -984,7 +1065,7 @@ def parse_utc_naive(value):
     return dt
 
 
-def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None):
+def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None, include_owner_ids=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
         query = query.filter(models.TaskInstance.client_id == client_id)
@@ -992,6 +1073,8 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
         query = query.filter(models.TaskInstance.submitted_by_id == submitted_by)
     if exclude_owner_ids:
         query = query.filter(~models.TaskInstance.submitted_by_id.in_(exclude_owner_ids))
+    if include_owner_ids is not None:
+        query = query.filter(models.TaskInstance.submitted_by_id.in_(include_owner_ids))
     if pushed == "pending":
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(False))
     elif pushed == "pushed":
@@ -1041,21 +1124,27 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
 @app.get("/api/export")
 def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     exclude_owner_ids = None
+    include_owner_ids = None
     if current_member.role == "member":
         submitted_by = current_member.id
     elif current_member.role == "admin":
         exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
-    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids)
+        if current_member.pod_id:
+            include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
+    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids)
 
 
 @app.get("/api/export.csv")
 def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     exclude_owner_ids = None
+    include_owner_ids = None
     if current_member.role == "member":
         submitted_by = current_member.id
     elif current_member.role == "admin":
         exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
-    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids)
+        if current_member.pod_id:
+            include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
+    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids)
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([

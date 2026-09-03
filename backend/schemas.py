@@ -15,7 +15,22 @@ class MemberOut(BaseModel):
     email: Optional[str] = None
     color_idx: int
     role: str
+    pod_id: Optional[str] = None
     google_calendar_connected: bool = False
+
+
+class PodOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+
+
+class PodCreate(BaseModel):
+    name: str
+
+
+class MemberPodUpdate(BaseModel):
+    pod_id: Optional[str] = None
 
 
 class MemberCreate(BaseModel):
