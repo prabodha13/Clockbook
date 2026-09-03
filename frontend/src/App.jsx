@@ -496,7 +496,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
               {pickableMembers.length > 0 && (
                 <select
                   className="cb-select"
-                  style={{ width: 170 }}
+                  style={{ width: 140 }}
                   value={viewedMember ? viewedMember.id : ""}
                   onChange={(e) => setViewFilter(e.target.value || "everyone")}
                 >
