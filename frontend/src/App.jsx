@@ -2010,6 +2010,18 @@ export default function App() {
     }, 2000);
   }
 
+  const wasHiddenSinceLastCheckRef = useRef(false);
+
+  useEffect(() => {
+    // This only ever records that the tab went hidden at some point, it never triggers
+    // anything by itself, so switching tabs alone still cannot cause a pause on its own
+    function handleVisibility() {
+      if (document.hidden) wasHiddenSinceLastCheckRef.current = true;
+    }
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, []);
+
   useEffect(() => {
     const HEARTBEAT_MS = 3000;
     // A gap this large cannot plausibly be explained by a browser simply slowing down a
@@ -2024,10 +2036,16 @@ export default function App() {
       // A tab that is not the visible one gets its timers deliberately throttled by the
       // browser to save power, and that throttling produces the exact same symptom as real
       // sleep, a bigger gap than expected between checks, with nothing actually having
-      // happened. This only trusts a gap seen while backgrounded if it is large enough that
-      // throttling alone could not explain it, so switching tabs never causes a false pause,
-      // while genuinely leaving the computer asleep for a real stretch still gets caught.
-      if (document.hidden && gap < DEFINITELY_REAL_SLEEP_MS) return;
+      // happened. Checking document.hidden only at the instant this callback happens to
+      // fire is not good enough, since a delayed callback often finally runs right after
+      // someone has already switched back, by which point the tab looks visible again even
+      // though it was hidden for the entire gap that caused the false reading. This instead
+      // remembers whether the tab was hidden at any point since the last check, so a real
+      // background throttling gap is still recognized correctly regardless of exactly when
+      // the delayed callback happens to land.
+      const wasHidden = wasHiddenSinceLastCheckRef.current || document.hidden;
+      wasHiddenSinceLastCheckRef.current = false;
+      if (wasHidden && gap < DEFINITELY_REAL_SLEEP_MS) return;
       reportGap(gap, sleepStart);
     }, HEARTBEAT_MS);
     return () => clearInterval(iv);
