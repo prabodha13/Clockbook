@@ -118,7 +118,7 @@ html, body, #root {
 
 /* Stats strip */
 .cb-stats { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-.cb-stat { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 10px 16px; min-width: 130px; }
+.cb-stat { background: var(--surface); border: 1px solid var(--line); border-radius: 7px; padding: 10px 16px; min-width: 130px; flex: 1; }
 .cb-stat-num { font-size: 19px; font-weight: 600; }
 .cb-stat-label { font-size: 11.5px; color: var(--ink-soft); margin-top: 2px; }
 
