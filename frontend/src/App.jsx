@@ -1829,7 +1829,7 @@ function SleepAlertModal({ alert, onDismiss, onResume }) {
         </div>
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
-            This computer looks like it was locked, asleep, or away from this tab for about{" "}
+            This computer looks like it was locked or asleep for about{" "}
             <strong>{niceDuration(alert.gapMs)}</strong>. The timer for{" "}
             <strong>{alert.task.client_name}: {alert.task.name}</strong> was paused the moment it went away,
             so that time was not tracked.
