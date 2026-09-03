@@ -147,8 +147,12 @@ def get_current_member(authorization: str = Header(None), db: Session = Depends(
 
 
 def require_admin(member):
-    if member.role != "admin":
+    if member.role not in ("admin", "super_admin"):
         raise HTTPException(403, "This action requires an admin")
+
+
+def is_admin_or_above(role):
+    return role in ("admin", "super_admin")
 
 
 def close_open_segment(segments, end_override=None):
@@ -287,13 +291,19 @@ def create_member(payload: schemas.MemberCreate, current_member: models.Member =
 @app.patch("/api/members/{member_id}/role", response_model=schemas.MemberOut)
 def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
-    if payload.role not in ("admin", "member"):
-        raise HTTPException(400, "Role must be admin or member")
+    if payload.role not in ("admin", "member", "super_admin"):
+        raise HTTPException(400, "Role must be admin, member, or super_admin")
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
-    if member.role == "admin" and payload.role == "member":
-        admin_count = db.query(models.Member).filter(models.Member.role == "admin").count()
+    # An admin can always promote themselves to super admin, since otherwise nobody could
+    # ever become the first one. Touching anyone else's super admin status, granting it or
+    # taking it away, is reserved for an existing super admin.
+    acting_on_self = member_id == current_member.id
+    if not acting_on_self and (payload.role == "super_admin" or member.role == "super_admin") and current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can manage another person's super admin access")
+    if is_admin_or_above(member.role) and not is_admin_or_above(payload.role):
+        admin_count = db.query(models.Member).filter(models.Member.role.in_(["admin", "super_admin"])).count()
         if admin_count <= 1:
             raise HTTPException(400, "At least one admin is required")
     member.role = payload.role
@@ -330,8 +340,10 @@ def delete_member(member_id: str, current_member: models.Member = Depends(get_cu
     member = db.get(models.Member, member_id)
     if not member:
         return None
-    if member.role == "admin":
-        admin_count = db.query(models.Member).filter(models.Member.role == "admin").count()
+    if member.role == "super_admin" and current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can delete a super admin")
+    if is_admin_or_above(member.role):
+        admin_count = db.query(models.Member).filter(models.Member.role.in_(["admin", "super_admin"])).count()
         if admin_count <= 1:
             raise HTTPException(400, "At least one admin is required")
     has_tasks = db.query(models.TaskInstance).filter(
@@ -587,7 +599,13 @@ def list_tasks(current_member: models.Member = Depends(get_current_member), db: 
     query = db.query(models.TaskInstance).filter(
         or_(models.TaskInstance.status != "submitted", models.TaskInstance.submitted_at >= recent_cutoff)
     )
-    if current_member.role != "admin":
+    if current_member.role == "super_admin":
+        pass  # sees everything, including other super admins
+    elif current_member.role == "admin":
+        super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+        if super_admin_ids:
+            query = query.filter(~models.TaskInstance.owner_id.in_(super_admin_ids))
+    else:
         query = query.filter(models.TaskInstance.owner_id == current_member.id)
     return query.order_by(models.TaskInstance.created_at.desc()).all()
 
@@ -595,7 +613,7 @@ def list_tasks(current_member: models.Member = Depends(get_current_member), db: 
 @app.post("/api/tasks", response_model=schemas.TaskOut, status_code=201)
 def create_task(payload: schemas.TaskCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     owner_id = payload.owner_id or current_member.id
-    if owner_id != current_member.id and current_member.role != "admin":
+    if owner_id != current_member.id and not is_admin_or_above(current_member.role):
         raise HTTPException(403, "Only an admin can assign a task to someone else")
     task = models.TaskInstance(
         client_id=payload.client_id,
@@ -670,7 +688,7 @@ def reset_task(task_id: str, current_member: models.Member = Depends(get_current
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.owner_id and task.owner_id != current_member.id and current_member.role != "admin":
+    if task.owner_id and task.owner_id != current_member.id and not is_admin_or_above(current_member.role):
         raise HTTPException(403, "This task belongs to someone else")
     if task.status not in ("running", "paused"):
         raise HTTPException(400, "Only a running or paused task can be reset")
@@ -740,11 +758,16 @@ def toggle_pushed(task_id: str, current_member: models.Member = Depends(get_curr
 
 @app.delete("/api/tasks/{task_id}", status_code=204)
 def delete_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    require_admin(current_member)
     task = db.get(models.TaskInstance, task_id)
-    if task:
-        db.delete(task)
-        db.commit()
+    if not task:
+        return None
+    if not is_admin_or_above(current_member.role):
+        if task.owner_id != current_member.id:
+            raise HTTPException(403, "This task belongs to someone else")
+        if task.status == "submitted":
+            raise HTTPException(403, "Only an admin can delete a task that has already been submitted")
+    db.delete(task)
+    db.commit()
     return None
 
 
@@ -761,12 +784,14 @@ def parse_utc_naive(value):
     return dt
 
 
-def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None):
+def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
         query = query.filter(models.TaskInstance.client_id == client_id)
     if submitted_by and submitted_by != "all":
         query = query.filter(models.TaskInstance.submitted_by_id == submitted_by)
+    if exclude_owner_ids:
+        query = query.filter(~models.TaskInstance.submitted_by_id.in_(exclude_owner_ids))
     if pushed == "pending":
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(False))
     elif pushed == "pushed":
@@ -815,16 +840,22 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
 
 @app.get("/api/export")
 def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "admin":
+    exclude_owner_ids = None
+    if current_member.role == "member":
         submitted_by = current_member.id
-    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by)
+    elif current_member.role == "admin":
+        exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids)
 
 
 @app.get("/api/export.csv")
 def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "admin":
+    exclude_owner_ids = None
+    if current_member.role == "member":
         submitted_by = current_member.id
-    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by)
+    elif current_member.role == "admin":
+        exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids)
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
