@@ -2060,8 +2060,14 @@ export default function App() {
       // was hidden for the entire gap that caused the false reading. This instead remembers
       // whether the tab was hidden at any point since the last check.
       const wasHidden = wasHiddenSinceLastCheckRef.current || document.hidden;
-      wasHiddenSinceLastCheckRef.current = false;
-      if (wasHidden) return;
+      if (wasHidden) {
+        if (!document.hidden) {
+          // Back to visible now. This gap still spans the hidden period, so it is ignored
+          // too, only the next one, entirely after this point, can be trusted.
+          wasHiddenSinceLastCheckRef.current = false;
+        }
+        return;
+      }
       reportGap(gap, sleepStart);
     }, HEARTBEAT_MS);
     return () => clearInterval(iv);
