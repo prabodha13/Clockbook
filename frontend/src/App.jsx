@@ -3023,27 +3023,24 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                   {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               )}
-              {m.id === currentUser.id && (
-                m.google_calendar_connected ? (
-                  <button className="cb-role-toggle" onClick={onDisconnectCalendar}>Disconnect calendar</button>
-                ) : (
-                  <button className="cb-role-toggle" onClick={onConnectCalendar}>Connect Google Calendar</button>
-                )
-              )}
-              {m.id === currentUser.id && (
-                <button className="cb-role-toggle" onClick={() => setShowSlackSettings(true)}>Notifications</button>
-              )}
-              {isAdmin && (
-                <StaffRowMenu
-                  items={[
+              <StaffRowMenu
+                items={[
+                  ...(m.id === currentUser.id ? [
+                    {
+                      label: m.google_calendar_connected ? "Disconnect calendar" : "Connect Google Calendar",
+                      onClick: m.google_calendar_connected ? onDisconnectCalendar : onConnectCalendar,
+                    },
+                    { label: "Notifications", onClick: () => setShowSlackSettings(true) },
+                  ] : []),
+                  ...(isAdmin ? [
                     { label: m.email ? "Reset password" : "Set up login", onClick: () => setSettingUpId(m.id) },
                     ...roleActions(m, currentUser).map((action) => ({
                       label: action.label, onClick: () => onChangeRole(m.id, action.target),
                     })),
                     ...(m.id !== currentUser.id ? [{ label: "Delete", danger: true, onClick: () => handleDelete(m) }] : []),
-                  ]}
-                />
-              )}
+                  ] : []),
+                ]}
+              />
             </div>
           </div>
         ))}
