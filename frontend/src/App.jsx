@@ -2772,9 +2772,94 @@ function roleLabel(role) {
   return "Member";
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod }) {
+function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, onChangeChannel }) {
+  const [slackEmail, setSlackEmail] = useState(member.slack_email || member.email || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [testResult, setTestResult] = useState("");
+
+  async function handleConnect() {
+    setError(""); setTestResult(""); setBusy(true);
+    try {
+      await onConnect(slackEmail.trim());
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleTest() {
+    setError(""); setTestResult(""); setBusy(true);
+    try {
+      await onTest();
+      setTestResult("Sent, check Slack for a message from Clockbook.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Notifications</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          {!member.slack_connected ? (
+            <div className="cb-field">
+              <label className="cb-label">Your Slack email</label>
+              <input className="cb-input" value={slackEmail} onChange={(e) => setSlackEmail(e.target.value)} placeholder="you@company.com" />
+              <div className="cb-hint" style={{ marginTop: 6 }}>The email your Slack account uses, so Clockbook can find and message you there.</div>
+            </div>
+          ) : (
+            <>
+              <div className="cb-hint" style={{ marginBottom: 10 }}>Connected as {member.slack_email}</div>
+              <div className="cb-field">
+                <label className="cb-label">Where should notifications go?</label>
+                <div className="cb-tabs" style={{ width: "fit-content" }}>
+                  <button
+                    type="button" className={`cb-tab ${member.notification_channel === "browser" ? "active" : ""}`}
+                    onClick={() => onChangeChannel("browser")}
+                  >
+                    Browser
+                  </button>
+                  <button
+                    type="button" className={`cb-tab ${member.notification_channel === "slack" ? "active" : ""}`}
+                    onClick={() => onChangeChannel("slack")}
+                  >
+                    Slack
+                  </button>
+                </div>
+              </div>
+              <button className="cb-btn cb-btn-sm cb-btn-ghost" disabled={busy} onClick={handleTest}>Send a test message</button>
+              {testResult && <div className="cb-hint" style={{ marginTop: 6, color: "var(--green)" }}>{testResult}</div>}
+            </>
+          )}
+          {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          {member.slack_connected ? (
+            <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onDisconnect}>Disconnect Slack</button>
+          ) : (
+            <>
+              <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+              <button className="cb-btn cb-btn-primary" disabled={busy || !slackEmail.trim()} onClick={handleConnect}>Connect</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
+  const [showSlackSettings, setShowSlackSettings] = useState(false);
   const settingUpMember = members.find((m) => m.id === settingUpId);
 
   async function handleDelete(m) {
@@ -2833,6 +2918,9 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                   <button className="cb-role-toggle" onClick={onConnectCalendar}>Connect Google Calendar</button>
                 )
               )}
+              {m.id === currentUser.id && (
+                <button className="cb-role-toggle" onClick={() => setShowSlackSettings(true)}>Notifications</button>
+              )}
               {isAdmin && (
                 <button className="cb-role-toggle" onClick={() => setSettingUpId(m.id)}>
                   {m.email ? "Reset password" : "Set up login"}
@@ -2862,6 +2950,16 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
             await onSetCredentials(settingUpMember.id, email, password);
             setSettingUpId(null);
           }}
+        />
+      )}
+      {showSlackSettings && (
+        <SlackSettingsModal
+          member={members.find((m) => m.id === currentUser.id) || currentUser}
+          onClose={() => setShowSlackSettings(false)}
+          onConnect={onConnectSlack}
+          onDisconnect={onDisconnectSlack}
+          onTest={onTestSlack}
+          onChangeChannel={onChangeNotificationChannel}
         />
       )}
     </div>
@@ -3392,10 +3490,13 @@ export default function App() {
           promptedMeetingIdsRef.current.add(meeting.id);
           savePromptedMeetingIds(promptedMeetingIdsRef.current);
           setMeetingAlert({ task, summary: meeting.summary, meetingId: meeting.id });
-          if ("Notification" in window && Notification.permission === "granted") {
+          const alertText = `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`;
+          if (currentUser.notification_channel === "slack" && currentUser.slack_connected) {
+            api.relayNotification(alertText).catch(() => {});
+          } else if ("Notification" in window && Notification.permission === "granted") {
             try {
               const n = new Notification("Clockbook", {
-                body: `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`,
+                body: alertText,
                 tag: "clockbook-meeting-alert",
                 requireInteraction: true,
               });
@@ -3427,6 +3528,38 @@ export default function App() {
       setCurrentUser(updated);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast("Google Calendar disconnected");
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function connectSlack(slackEmail) {
+    const updated = await api.connectSlack(currentUser.id, slackEmail);
+    setCurrentUser(updated);
+    setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+    showToast("Slack connected");
+  }
+
+  async function disconnectSlack() {
+    try {
+      const updated = await api.disconnectSlack(currentUser.id);
+      setCurrentUser(updated);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      showToast("Slack disconnected");
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function testSlack() {
+    await api.testSlack(currentUser.id);
+  }
+
+  async function updateNotificationChannel(channel) {
+    try {
+      const updated = await api.updateNotificationChannel(currentUser.id, channel);
+      setCurrentUser(updated);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
       showToast(err.message, true);
     }
@@ -3818,6 +3951,8 @@ export default function App() {
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
                 pods={pods} onAssignPod={assignMemberPod}
+                onConnectSlack={connectSlack} onDisconnectSlack={disconnectSlack} onTestSlack={testSlack}
+                onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
             {view === "settings" && isAdmin && (
