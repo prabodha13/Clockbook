@@ -3,7 +3,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
-  Calendar as CalendarIcon, Video, Edit3,
+  Calendar as CalendarIcon, Video, Edit3, Ban,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -625,7 +625,26 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
     });
   }
 
-  async function handleDismiss(suggestion) {
+  // Removes just this one occurrence, using its own specific id, so a different day's
+  // occurrence of the same recurring event is completely unaffected and still shows up
+  async function handleDismissOccurrence(suggestion) {
+    setSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
+    setSelectedIds((prev) => {
+      if (!prev.has(suggestion.id)) return prev;
+      const next = new Set(prev);
+      next.delete(suggestion.id);
+      return next;
+    });
+    try {
+      await api.dismissSuggestedTask(suggestion.id);
+    } catch (err) {
+      // if this fails, it simply reappears the next time suggestions are reloaded
+    }
+  }
+
+  // The deliberate, permanent action: excludes every occurrence of the same recurring
+  // series, past and future, using the shared series id rather than this one instance's id
+  async function handleDismissForever(suggestion) {
     const seriesId = suggestion.series_id || suggestion.id;
     setSuggestions((prev) => prev.filter((s) => (s.series_id || s.id) !== seriesId));
     setSelectedIds((prev) => {
@@ -665,10 +684,16 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
               </div>
             </div>
             <button
-              className="cb-icon-btn" title="Not needed, don't suggest this again"
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDismiss(s); }}
+              className="cb-icon-btn" title="Remove just this one, it can still come back tomorrow if recurring"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDismissOccurrence(s); }}
             >
               <Trash2 size={13} />
+            </button>
+            <button
+              className="cb-icon-btn" title="Not needed, never suggest this again"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDismissForever(s); }}
+            >
+              <Ban size={13} />
             </button>
           </label>
         ))}
