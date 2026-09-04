@@ -3480,13 +3480,23 @@ export default function App() {
       Notification.requestPermission();
     }
     enableIdleDetection();
-    const previouslyRunning = tasks.find(
-      (t) => t.owner_id === currentUser.id && t.status === "running" && t.id !== taskId
-    );
     try {
       const updated = await api.startTask(taskId, startCount != null ? startCount : null);
-      setTasks((prev) =>
-        prev.map((t) => {
+      console.log("[timer-diagnostic] start response", {
+        id: updated.id, status: updated.status,
+        lastSegmentStart: updated.segments?.length ? updated.segments[updated.segments.length - 1].start : null,
+        lastSegmentEnd: updated.segments?.length ? updated.segments[updated.segments.length - 1].end : null,
+      });
+      let pausedPreviousTask = null;
+      setTasks((prev) => {
+        // Computed fresh from prev, the actual current state at the moment this update
+        // applies, rather than from the outer tasks variable, which reflects whatever
+        // render created this specific function instance and could be stale by now
+        const previouslyRunning = prev.find(
+          (t) => t.owner_id === currentUser.id && t.status === "running" && t.id !== taskId
+        );
+        pausedPreviousTask = previouslyRunning || null;
+        return prev.map((t) => {
           if (t.id === updated.id) return updated;
           if (previouslyRunning && t.id === previouslyRunning.id) {
             const segs = t.segments.length ? [...t.segments] : [];
@@ -3496,10 +3506,10 @@ export default function App() {
             return { ...t, status: "paused", segments: segs };
           }
           return t;
-        })
-      );
-      if (previouslyRunning) {
-        showToast(`Paused "${previouslyRunning.client_name}: ${previouslyRunning.name}" to start this task`);
+        });
+      });
+      if (pausedPreviousTask) {
+        showToast(`Paused "${pausedPreviousTask.client_name}: ${pausedPreviousTask.name}" to start this task`);
       }
     } catch (err) {
       showToast(err.message, true);
@@ -3519,6 +3529,12 @@ export default function App() {
   async function pauseTask(taskId, endAt) {
     try {
       const updated = await api.pauseTask(taskId, endAt);
+      console.log("[timer-diagnostic] pause response", {
+        id: updated.id, status: updated.status,
+        lastSegmentStart: updated.segments?.length ? updated.segments[updated.segments.length - 1].start : null,
+        lastSegmentEnd: updated.segments?.length ? updated.segments[updated.segments.length - 1].end : null,
+        openSegmentsRemaining: (updated.segments || []).filter((s) => !s.end).length,
+      });
       mergeTask(updated);
     } catch (err) {
       showToast(err.message, true);
