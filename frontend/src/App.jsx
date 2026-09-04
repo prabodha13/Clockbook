@@ -2950,8 +2950,9 @@ function StaffRowMenu({ items }) {
   }, []);
 
   // Runs before the browser paints, so the menu never visibly flashes at the wrong spot.
-  // Since it is portaled straight onto document.body, it is never clipped by an ancestor's
-  // overflow: hidden, no matter how far down the list its row sits.
+  // Portaled onto .cb-root rather than document.body, so it stays outside .cb-card-list's
+  // overflow: hidden clipping, while still inheriting the color variables defined on
+  // .cb-root itself, document.body sits outside that element and has none of them.
   useLayoutEffect(() => {
     if (!open || !buttonRef.current) return;
     const rect = buttonRef.current.getBoundingClientRect();
@@ -2983,7 +2984,7 @@ function StaffRowMenu({ items }) {
             </button>
           ))}
         </div>,
-        document.body
+        document.querySelector(".cb-root") || document.body
       )}
     </>
   );
