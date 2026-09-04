@@ -45,6 +45,7 @@ export const api = {
   disconnectGoogleCalendar: () => request("/auth/google/disconnect", { method: "POST" }),
   getMeetingNow: () => request("/calendar/meeting-now"),
   getCalendarEvents: () => request("/calendar/events"),
+  getSuggestedTasks: () => request("/calendar/suggested-tasks"),
   claimAccount: (payload) => request("/auth/claim", { method: "POST", body: JSON.stringify(payload) }),
   login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request("/auth/logout", { method: "POST" }),

@@ -413,7 +413,267 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask }) {
+// If the person picked a specific account for a bank-required template task, use that,
+// otherwise auto-fill it when the client only has one account to begin with, this is used
+// consistently for what is shown, what counts as complete, and what actually gets submitted,
+// so those three things can never disagree with each other.
+function resolvedBankAccountId(row, taskId, clientAccounts) {
+  if (row.bankAccountByTaskId[taskId]) return row.bankAccountByTaskId[taskId];
+  if (clientAccounts.length === 1) return clientAccounts[0].id;
+  return "";
+}
+
+function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, onClose, onDone, onCreateTasks }) {
+  const [rows, setRows] = useState(() =>
+    suggestions.map((s) => ({
+      suggestion: s,
+      clientId: "",
+      role: "",
+      useTemplate: null, // null until chosen, then true or false
+      templateId: "",
+      taskType: "",
+      bankAccountByTaskId: {},
+    }))
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  function updateRow(index, patch) {
+    setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
+  }
+
+  function bankTasksFor(row) {
+    if (!row.useTemplate || !row.templateId) return [];
+    const tpl = templates.find((t) => t.id === row.templateId);
+    return tpl ? tpl.tasks.filter((t) => t.requires_bank_account) : [];
+  }
+
+  function isRowComplete(row) {
+    if (!row.clientId || !row.role || row.useTemplate === null) return false;
+    if (row.useTemplate === false) return !!row.taskType;
+    if (!row.templateId) return false;
+    const clientAccounts = bankAccounts.filter((a) => a.client_id === row.clientId);
+    return bankTasksFor(row).every((t) => resolvedBankAccountId(row, t.id, clientAccounts));
+  }
+
+  const allComplete = rows.length > 0 && rows.every(isRowComplete);
+
+  async function handleCreate() {
+    setError("");
+    if (!allComplete) {
+      setError("Finish classifying every item before creating tasks, each one needs at least a client, a role, and a template choice.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payloads = [];
+      for (const row of rows) {
+        const client = clients.find((c) => c.id === row.clientId);
+        if (row.useTemplate === false) {
+          payloads.push({
+            client_id: row.clientId, client_name: client.name, name: row.suggestion.summary,
+            role: row.role, task_type: row.taskType,
+            source_calendar_event_id: row.suggestion.id,
+          });
+        } else {
+          const tpl = templates.find((t) => t.id === row.templateId);
+          const clientAccounts = bankAccounts.filter((a) => a.client_id === row.clientId);
+          for (const tt of tpl.tasks) {
+            const accountId = tt.requires_bank_account ? resolvedBankAccountId(row, tt.id, clientAccounts) : null;
+            const account = accountId ? bankAccounts.find((a) => a.id === accountId) : null;
+            payloads.push({
+              client_id: row.clientId, client_name: client.name, name: tt.name,
+              role: row.role, task_type: tt.task_type,
+              bank_account_id: account ? account.id : null,
+              bank_account_name: account ? account.name : "",
+              tracks_number_label: tt.tracks_number_label || "",
+              source_calendar_event_id: row.suggestion.id,
+            });
+          }
+        }
+      }
+      await onCreateTasks(payloads);
+      await onDone();
+    } catch (err) {
+      setError(err.message || "Could not create tasks");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 720 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Add to To Do</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          {rows.map((row, i) => {
+            const bankTasks = bankTasksFor(row);
+            const clientAccounts = row.clientId ? bankAccounts.filter((a) => a.client_id === row.clientId) : [];
+            return (
+              <div key={row.suggestion.id} style={{ padding: "14px 0", borderBottom: i < rows.length - 1 ? "1px solid var(--line)" : "none" }}>
+                <div style={{ fontWeight: 500, marginBottom: 10 }}>{row.suggestion.summary}</div>
+                <div className="cb-field-row">
+                  <div className="cb-field">
+                    <label className="cb-label">Client</label>
+                    <SearchableSelect
+                      options={clients} value={row.clientId} onChange={(v) => updateRow(i, { clientId: v })}
+                      placeholder="Search clients..." getLabel={(c) => c.name}
+                    />
+                  </div>
+                  <div className="cb-field">
+                    <label className="cb-label">Role</label>
+                    <select className="cb-select" value={row.role} onChange={(e) => updateRow(i, { role: e.target.value })}>
+                      <option value="">Select a role</option>
+                      {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <div className="cb-field">
+                  <label className="cb-label">Does this use a standard template?</label>
+                  <div className="cb-tabs" style={{ width: "fit-content" }}>
+                    <button type="button" className={`cb-tab ${row.useTemplate === false ? "active" : ""}`} onClick={() => updateRow(i, { useTemplate: false })}>No, single task</button>
+                    <button type="button" className={`cb-tab ${row.useTemplate === true ? "active" : ""}`} onClick={() => updateRow(i, { useTemplate: true, taskType: "" })}>Yes, use a template</button>
+                  </div>
+                </div>
+                {row.useTemplate === false && (
+                  <div className="cb-field">
+                    <label className="cb-label">Task type</label>
+                    <select className="cb-select" value={row.taskType} onChange={(e) => updateRow(i, { taskType: e.target.value })}>
+                      <option value="">Select a task type</option>
+                      {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                    </select>
+                  </div>
+                )}
+                {row.useTemplate === true && (
+                  <>
+                    <div className="cb-field">
+                      <label className="cb-label">Template</label>
+                      <SearchableSelect
+                        options={templates} value={row.templateId}
+                        onChange={(v) => updateRow(i, { templateId: v, bankAccountByTaskId: {} })}
+                        placeholder="Search templates..." getLabel={(t) => t.name} getSecondary={(t) => t.field}
+                      />
+                    </div>
+                    {row.templateId && bankTasks.length > 0 && (
+                      <div className="cb-hint" style={{ marginBottom: 6 }}>
+                        {!row.clientId ? "Pick a client above to choose a bank account." : null}
+                      </div>
+                    )}
+                    {row.clientId && bankTasks.map((tt) => (
+                      <div className="cb-field" key={tt.id}>
+                        <label className="cb-label">Bank account for "{tt.name}"</label>
+                        <select
+                          className="cb-select"
+                          value={resolvedBankAccountId(row, tt.id, clientAccounts)}
+                          onChange={(e) => updateRow(i, { bankAccountByTaskId: { ...row.bankAccountByTaskId, [tt.id]: e.target.value } })}
+                        >
+                          <option value="">Select a bank account</option>
+                          {clientAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+                        </select>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            );
+          })}
+          {error && <div className="cb-error">{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={handleCreate}>
+            {busy ? "Creating..." : "Create Tasks"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+  const [suggestions, setSuggestions] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const [showReview, setShowReview] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!currentUser.google_calendar_connected) { setLoading(false); return; }
+    setLoading(true);
+    try {
+      const data = await api.getSuggestedTasks();
+      setSuggestions(data.suggestions || []);
+    } catch (err) {
+      setSuggestions([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentUser.google_calendar_connected]);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (!currentUser.google_calendar_connected) return null;
+  if (!loading && suggestions.length === 0) return null;
+
+  function toggle(id) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  const selected = suggestions.filter((s) => selectedIds.has(s.id));
+
+  return (
+    <div className="cb-group">
+      <div className="cb-group-head">
+        <div className="cb-group-title">Suggested Tasks</div>
+        <div className="cb-group-count">{suggestions.length}</div>
+      </div>
+      <div className="cb-hint" style={{ margin: "0 0 8px" }}>
+        From your calendar, events without a meeting link. These are only suggestions, nothing is tracked, started, or completed until you add them.
+      </div>
+      <div className="cb-card-list">
+        {loading && <div className="cb-empty">Checking your calendar...</div>}
+        {!loading && suggestions.map((s) => (
+          <label key={s.id} className="cb-checklist-item" style={{ cursor: "pointer" }}>
+            <input type="checkbox" className="cb-checkbox" checked={selectedIds.has(s.id)} onChange={() => toggle(s.id)} />
+            <div>
+              <div className="cb-checklist-name">{s.summary}</div>
+              <div className="cb-checklist-meta">
+                {s.all_day ? "All day" : new Date(s.start).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}
+              </div>
+            </div>
+          </label>
+        ))}
+      </div>
+      {selected.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <button className="cb-btn cb-btn-primary" onClick={() => setShowReview(true)}>
+            Add {selected.length} Selected to To Do
+          </button>
+        </div>
+      )}
+      {showReview && (
+        <SuggestedTasksReviewModal
+          suggestions={selected} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
+          onClose={() => setShowReview(false)}
+          onDone={async () => {
+            setShowReview(false);
+            setSelectedIds(new Set());
+            await load();
+          }}
+          onCreateTasks={onCreateTasks}
+        />
+      )}
+    </div>
+  );
+}
+
+function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("everyone"); // "everyone" | "mine" | a member id
   const isSuperAdmin = currentUser.role === "super_admin";
   const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
@@ -536,6 +796,11 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           </div>
         )}
       </div>
+
+      <SuggestedTasksSection
+        currentUser={currentUser} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
+        onCreateTasks={onCreateTasks}
+      />
 
       <div className="cb-group">
         <div className="cb-group-head">
@@ -3167,6 +3432,8 @@ export default function App() {
                 tasks={tasks} now={now} currentUser={currentUser} members={members} isAdmin={isAdmin}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
+                clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
+                onCreateTasks={createTasks}
               />
             )}
             {view === "templates" && (
