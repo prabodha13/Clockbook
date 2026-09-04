@@ -771,6 +771,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
 
 function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("everyone"); // "everyone" | "mine" | a member id
+  const [showActiveOnly, setShowActiveOnly] = useState(false);
   const isSuperAdmin = currentUser.role === "super_admin";
   const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
@@ -810,6 +811,46 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
   const myRunningCount = myTasks.filter((t) => t.status === "running" || t.status === "paused").length;
   const mySubmittedTodayCount = myTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
+
+  if (showActiveOnly) {
+    const runningTasks = tasks.filter((t) => t.status === "running");
+    const byOwner = {};
+    for (const t of runningTasks) {
+      const owner = members.find((m) => m.id === t.owner_id);
+      const label = owner ? owner.name : "Unknown";
+      if (!byOwner[label]) byOwner[label] = [];
+      byOwner[label].push(t);
+    }
+    const ownerNames = Object.keys(byOwner).sort();
+    return (
+      <div>
+        <div className="cb-page-head">
+          <div>
+            <div className="cb-page-title cb-serif">Active right now</div>
+            <div className="cb-page-sub">Everyone currently running a timer, across the whole firm.</div>
+          </div>
+          <button className="cb-btn" onClick={() => setShowActiveOnly(false)}>Back to dashboard</button>
+        </div>
+        <div className="cb-group">
+          <div className="cb-card-list">
+            {runningTasks.length === 0 ? (
+              <div className="cb-empty">Nobody has a timer running right now.</div>
+            ) : (
+              ownerNames.map((name) => (
+                <Fragment key={name}>
+                  <div className="cb-client-subgroup-head"><Building2 size={12} />{name}</div>
+                  {byOwner[name].map((t) => (
+                    <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
+                      onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset} />
+                  ))}
+                </Fragment>
+              ))
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   function Group({ title, items, empty }) {
     return (
@@ -883,7 +924,10 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           <div className="cb-stat-label">Submitted today</div>
         </div>
         {isAdmin && (
-          <div className="cb-stat" style={{ border: "2px solid var(--green)" }}>
+          <div
+            className="cb-stat" style={{ border: "2px solid var(--green)", cursor: "pointer" }}
+            onClick={() => setShowActiveOnly(true)} title="See everyone currently running a timer"
+          >
             <div className="cb-stat-num" style={{ display: "flex", alignItems: "center", gap: 7 }}>
               <span className="cb-live-dot" />
               {activeNowCount}
