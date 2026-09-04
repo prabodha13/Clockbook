@@ -2979,6 +2979,27 @@ function MeetingAlertModal({ alert, onDismiss, onPause, onTrackMeeting }) {
   );
 }
 
+function todaysPromptedMeetingsKey() {
+  return "clockbook_prompted_meetings_" + new Date().toISOString().slice(0, 10);
+}
+
+function loadPromptedMeetingIds() {
+  try {
+    const raw = sessionStorage.getItem(todaysPromptedMeetingsKey());
+    return raw ? new Set(JSON.parse(raw)) : new Set();
+  } catch (err) {
+    return new Set();
+  }
+}
+
+function savePromptedMeetingIds(set) {
+  try {
+    sessionStorage.setItem(todaysPromptedMeetingsKey(), JSON.stringify([...set]));
+  } catch (err) {
+    // if storage is unavailable for any reason, the in-memory set still works for this session
+  }
+}
+
 export default function App() {
   const [authState, setAuthState] = useState("loading"); // loading | claim | login | ready
   const [unclaimedMembers, setUnclaimedMembers] = useState([]);
@@ -3358,7 +3379,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const promptedMeetingIdsRef = useRef(new Set());
+  const promptedMeetingIdsRef = useRef(loadPromptedMeetingIds());
 
   useEffect(() => {
     const iv = setInterval(async () => {
@@ -3369,6 +3390,7 @@ export default function App() {
         const { meeting } = await api.getMeetingNow();
         if (meeting && !promptedMeetingIdsRef.current.has(meeting.id)) {
           promptedMeetingIdsRef.current.add(meeting.id);
+          savePromptedMeetingIds(promptedMeetingIdsRef.current);
           setMeetingAlert({ task, summary: meeting.summary, meetingId: meeting.id });
           if ("Notification" in window && Notification.permission === "granted") {
             try {
