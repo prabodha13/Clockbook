@@ -205,6 +205,8 @@ class TaskSubmit(BaseModel):
     note: str = ""
     end_count: Optional[int] = None
     adjusted_seconds: Optional[float] = None
+    role: Optional[str] = None
+    task_type: Optional[str] = None
 
 
 class TaskStart(BaseModel):

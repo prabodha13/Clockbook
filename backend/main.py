@@ -1164,6 +1164,10 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     task.status = "submitted"
     task.note = payload.note
     task.end_count = payload.end_count
+    if payload.role is not None:
+        task.role = payload.role
+    if payload.task_type is not None:
+        task.task_type = payload.task_type
     task.submitted_at = datetime.utcnow()
     task.submitted_by_id = current_member.id
     task.pushed_to_karbon = False
