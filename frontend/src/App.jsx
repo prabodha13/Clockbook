@@ -3,7 +3,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
-  Calendar as CalendarIcon, Video, Edit3, Ban,
+  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -2932,6 +2932,42 @@ function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, 
   );
 }
 
+function StaffRowMenu({ items }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  if (items.length === 0) return null;
+
+  return (
+    <div ref={containerRef} style={{ position: "relative" }}>
+      <button className="cb-icon-btn" title="More actions" onClick={() => setOpen((v) => !v)}>
+        <MoreVertical size={15} />
+      </button>
+      {open && (
+        <div className="cb-row-menu">
+          {items.map((item, i) => (
+            <button
+              key={i} className="cb-user-dropdown-item"
+              style={item.danger ? { color: "var(--red)" } : undefined}
+              onClick={() => { item.onClick(); setOpen(false); }}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
@@ -2998,19 +3034,15 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                 <button className="cb-role-toggle" onClick={() => setShowSlackSettings(true)}>Notifications</button>
               )}
               {isAdmin && (
-                <button className="cb-role-toggle" onClick={() => setSettingUpId(m.id)}>
-                  {m.email ? "Reset password" : "Set up login"}
-                </button>
-              )}
-              {isAdmin && roleActions(m, currentUser).map((action) => (
-                <button key={action.target} className="cb-role-toggle" onClick={() => onChangeRole(m.id, action.target)}>
-                  {action.label}
-                </button>
-              ))}
-              {isAdmin && m.id !== currentUser.id && (
-                <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(m)}>
-                  <Trash2 size={14} />
-                </button>
+                <StaffRowMenu
+                  items={[
+                    { label: m.email ? "Reset password" : "Set up login", onClick: () => setSettingUpId(m.id) },
+                    ...roleActions(m, currentUser).map((action) => ({
+                      label: action.label, onClick: () => onChangeRole(m.id, action.target),
+                    })),
+                    ...(m.id !== currentUser.id ? [{ label: "Delete", danger: true, onClick: () => handleDelete(m) }] : []),
+                  ]}
+                />
               )}
             </div>
           </div>
