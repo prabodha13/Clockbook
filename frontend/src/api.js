@@ -46,6 +46,7 @@ export const api = {
   getMeetingNow: () => request("/calendar/meeting-now"),
   getCalendarEvents: () => request("/calendar/events"),
   getSuggestedTasks: () => request("/calendar/suggested-tasks"),
+  dismissSuggestedTask: (eventId) => request(`/calendar/suggested-tasks/${eventId}/dismiss`, { method: "POST" }),
   claimAccount: (payload) => request("/auth/claim", { method: "POST", body: JSON.stringify(payload) }),
   login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request("/auth/logout", { method: "POST" }),

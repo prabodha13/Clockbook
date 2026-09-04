@@ -625,6 +625,21 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
     });
   }
 
+  async function handleDismiss(id) {
+    setSuggestions((prev) => prev.filter((s) => s.id !== id));
+    setSelectedIds((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    try {
+      await api.dismissSuggestedTask(id);
+    } catch (err) {
+      // if this fails, it simply reappears the next time suggestions are reloaded
+    }
+  }
+
   const selected = suggestions.filter((s) => selectedIds.has(s.id));
 
   return (
@@ -639,14 +654,20 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
       <div className="cb-card-list">
         {loading && <div className="cb-empty">Checking your calendar...</div>}
         {!loading && suggestions.map((s) => (
-          <label key={s.id} className="cb-checklist-item" style={{ cursor: "pointer" }}>
+          <label key={s.id} className="cb-checklist-item" style={{ cursor: "pointer", alignItems: "center" }}>
             <input type="checkbox" className="cb-checkbox" checked={selectedIds.has(s.id)} onChange={() => toggle(s.id)} />
-            <div>
+            <div style={{ flex: 1 }}>
               <div className="cb-checklist-name">{s.summary}</div>
               <div className="cb-checklist-meta">
                 {s.all_day ? "All day" : new Date(s.start).toLocaleString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}
               </div>
             </div>
+            <button
+              className="cb-icon-btn" title="Not needed, don't suggest this again"
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDismiss(s.id); }}
+            >
+              <Trash2 size={13} />
+            </button>
           </label>
         ))}
       </div>
@@ -797,11 +818,6 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
         )}
       </div>
 
-      <SuggestedTasksSection
-        currentUser={currentUser} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
-        onCreateTasks={onCreateTasks}
-      />
-
       <div className="cb-group">
         <div className="cb-group-head">
           <div className="cb-group-title">In progress</div>
@@ -826,6 +842,14 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
       </div>
 
       <Group title="To do" items={todo} empty={<span><span className="cb-empty-title">No tasks queued</span><br />Add one from a template or a one off task.</span>} />
+
+      {!isAdmin && (
+        <SuggestedTasksSection
+          currentUser={currentUser} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
+          onCreateTasks={onCreateTasks}
+        />
+      )}
+
       <Group title="Submitted today" items={submittedToday} empty="Nothing submitted yet today." />
     </div>
   );
