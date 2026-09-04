@@ -347,6 +347,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
         <div className="cb-row-meta">
           {task.role && <span>{task.role}</span>}
           {task.task_type && <span>{task.task_type}</span>}
+          {task.source_template_name && <span>Template: {task.source_template_name}</span>}
           <span>
             Owner:{" "}
             {isAdmin ? (
@@ -500,6 +501,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
           });
         } else {
           const clientAccounts = bankAccounts.filter((a) => a.client_id === row.clientId);
+          const tpl = templates.find((t) => t.id === row.templateId);
           for (const tt of selectedTemplateTasksFor(row)) {
             const accountId = tt.requires_bank_account ? resolvedBankAccountId(row, tt.id, clientAccounts) : null;
             const account = accountId ? bankAccounts.find((a) => a.id === accountId) : null;
@@ -510,6 +512,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
               bank_account_name: account ? account.name : "",
               tracks_number_label: tt.tracks_number_label || "",
               source_calendar_event_id: row.suggestion.id,
+              source_template_name: tpl ? tpl.name : null,
             });
           }
         }
@@ -1161,6 +1164,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             tracks_number_label: t.tracks_number_label || "",
             pay_period_type: t.needs_pay_period ? payPeriodTypeByTaskId[t.id] : null,
             pay_period_number: t.needs_pay_period ? parseInt(payPeriodNumberByTaskId[t.id], 10) : null,
+            source_template_name: selectedTemplate.name,
           };
         });
       } else {
