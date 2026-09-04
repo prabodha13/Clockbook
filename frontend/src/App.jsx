@@ -137,9 +137,9 @@ function Avatar({ member, size }) {
 }
 
 function StatusBadge({ status }) {
-  if (status === "running") return <span className="cb-badge cb-badge-running"><Play size={10} />Running</span>;
-  if (status === "paused") return <span className="cb-badge cb-badge-paused"><Pause size={10} />Paused</span>;
-  if (status === "submitted") return <span className="cb-badge cb-badge-submitted"><CheckCircle2 size={10} />Submitted</span>;
+  if (status === "running") return <span className="cb-badge cb-badge-running">Running</span>;
+  if (status === "paused") return <span className="cb-badge cb-badge-paused">Paused</span>;
+  if (status === "submitted") return <span className="cb-badge cb-badge-submitted">Submitted</span>;
   return <span className="cb-badge cb-badge-todo">To do</span>;
 }
 
@@ -314,7 +314,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
             ) : (
               <button className="cb-btn cb-btn-sm" onClick={onPause}><Pause size={13} />Pause</button>
             )}
-            <button className="cb-btn cb-btn-sm cb-btn-primary" onClick={onComplete}><CheckCircle2 size={13} />Complete</button>
+            <button className="cb-btn cb-btn-sm cb-btn-primary cb-btn-complete" onClick={onComplete}><CheckCircle2 size={13} />Complete</button>
           </div>
         </div>
       ) : (
@@ -393,7 +393,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
           </button>
         )}
         {(task.status === "running" || task.status === "paused") && (
-          <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={!isMine} onClick={() => onComplete(task)}>
+          <button className="cb-btn cb-btn-sm cb-btn-primary cb-btn-complete" disabled={!isMine} onClick={() => onComplete(task)}>
             Complete
           </button>
         )}
@@ -836,7 +836,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           <button className="cb-btn" onClick={() => setShowActiveOnly(false)}>Back to dashboard</button>
         </div>
         <div className="cb-group">
-          <div className="cb-card-list">
+          <div className="cb-flat-list">
             {runningTasks.length === 0 ? (
               <div className="cb-empty">Nobody has a timer running right now.</div>
             ) : (
@@ -863,7 +863,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           <div className="cb-group-title">{title}</div>
           <div className="cb-group-count">{items.length}</div>
         </div>
-        <div className="cb-card-list">
+        <div className="cb-flat-list">
           {items.length === 0 ? (
             <div className="cb-empty">{empty}</div>
           ) : (
@@ -893,9 +893,9 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {isAdmin && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div className="cb-tabs">
-                <button className={`cb-tab ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
-                <button className={`cb-tab ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>Just me</button>
+              <div className="cb-tabs cb-tabs-plain">
+                <button className={`cb-tab cb-tab-plain ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
+                <button className={`cb-tab cb-tab-plain ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>Just me</button>
               </div>
               {pickableMembers.length > 0 && (
                 <select
@@ -929,14 +929,15 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
         </div>
         {isAdmin && (
           <div
-            className="cb-stat" style={{ border: "2px solid var(--green)", cursor: "pointer" }}
+            className="cb-stat" style={{ cursor: "pointer" }} tabIndex={0} role="button"
             onClick={() => setShowActiveOnly(true)} title="See everyone currently running a timer"
+            onKeyDown={(e) => { if (e.key === "Enter") setShowActiveOnly(true); }}
           >
-            <div className="cb-stat-num" style={{ display: "flex", alignItems: "center", gap: 7 }}>
+            <div className="cb-stat-num" style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--green)" }}>
               <span className="cb-live-dot" />
               {activeNowCount}
             </div>
-            <div className="cb-stat-label" style={{ color: "var(--green)", fontWeight: 500 }}>Active right now</div>
+            <div className="cb-stat-label" style={{ color: "var(--green)", textDecoration: "underline", textUnderlineOffset: "2px" }}>Active right now</div>
           </div>
         )}
       </div>
@@ -946,7 +947,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           <div className="cb-group-title">In progress</div>
           <div className="cb-group-count">{inProgress.length}</div>
         </div>
-        <div className="cb-card-list">
+        <div className="cb-flat-list">
           {inProgress.length === 0 ? (
             <div className="cb-empty">Nothing running or paused. Start a task below to begin tracking.</div>
           ) : (
