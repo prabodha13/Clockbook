@@ -151,3 +151,4 @@ class TaskInstance(Base):
     pay_period_type = Column(String, nullable=True)  # "weekly", "fortnightly", or "monthly"
     pay_period_number = Column(Integer, nullable=True)  # 1-52, 1-26, or 1-12 respectively
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
+    source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed

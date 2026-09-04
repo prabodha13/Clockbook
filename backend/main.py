@@ -96,6 +96,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_number INTEGER"))
             if "source_calendar_event_id" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_calendar_event_id VARCHAR"))
+            if "source_template_name" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
 
 
 @asynccontextmanager
@@ -950,8 +952,13 @@ def update_template(template_id: str, payload: schemas.TemplateCreate, current_m
     name = payload.name.strip()
     if not field or not name:
         raise HTTPException(400, "Enter both a field and a template name")
+    old_name = tpl.name
     tpl.field = field
     tpl.name = name
+    if old_name != name:
+        db.query(models.TaskInstance).filter(models.TaskInstance.source_template_name == old_name).update(
+            {"source_template_name": name}, synchronize_session=False
+        )
     db.commit()
     db.refresh(tpl)
     return tpl
@@ -1066,6 +1073,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         pay_period_type=payload.pay_period_type,
         pay_period_number=payload.pay_period_number,
         source_calendar_event_id=payload.source_calendar_event_id,
+        source_template_name=payload.source_template_name,
     )
     db.add(task)
     db.commit()
