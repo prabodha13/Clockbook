@@ -88,6 +88,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_type VARCHAR"))
             if "pay_period_number" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_number INTEGER"))
+            if "source_calendar_event_id" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN source_calendar_event_id VARCHAR"))
 
 
 @asynccontextmanager
@@ -466,6 +468,63 @@ def get_calendar_events(current_member: models.Member = Depends(get_current_memb
             "has_meet_link": has_meet_link,
         })
     return {"connected": True, "events": events}
+
+
+@app.get("/api/calendar/suggested-tasks")
+def get_suggested_tasks(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Calendar events without a meeting link, these are never meetings to prompt a pause
+    # for, they're plain work items that might be worth turning into a To Do task. Checks
+    # against every task this person has ever created, not just the recent window the
+    # dashboard itself is optimized for, so an event does not get suggested again just
+    # because the task it already produced was submitted a while ago.
+    if not current_member.google_refresh_token:
+        return {"connected": False, "suggestions": []}
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        return {"connected": True, "suggestions": [], "error": "Could not refresh access, try reconnecting"}
+
+    now = datetime.utcnow()
+    time_min = now.isoformat() + "Z"
+    time_max = (now + timedelta(days=7)).isoformat() + "Z"
+    try:
+        resp = httpx.get(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"timeMin": time_min, "timeMax": time_max, "singleEvents": "true", "orderBy": "startTime", "maxResults": 20},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+    except Exception:
+        return {"connected": True, "suggestions": [], "error": "Could not reach Google Calendar"}
+
+    already_used_ids = {
+        row[0] for row in db.query(models.TaskInstance.source_calendar_event_id)
+        .filter(
+            models.TaskInstance.owner_id == current_member.id,
+            models.TaskInstance.source_calendar_event_id.isnot(None),
+        ).all()
+    }
+
+    suggestions = []
+    for event in items:
+        event_id = event.get("id")
+        if not event_id or event_id in already_used_ids:
+            continue
+        has_meet_link = bool(event.get("hangoutLink")) or any(
+            ep.get("entryPointType") == "video"
+            for ep in (event.get("conferenceData") or {}).get("entryPoints", [])
+        )
+        if has_meet_link:
+            continue
+        start = event.get("start", {})
+        suggestions.append({
+            "id": event_id,
+            "summary": event.get("summary") or "(no title)",
+            "start": start.get("dateTime") or start.get("date"),
+            "all_day": "dateTime" not in start,
+        })
+    return {"connected": True, "suggestions": suggestions}
 
 
 # ---------------------------------------------------------------
@@ -933,6 +992,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         tracks_number_label=payload.tracks_number_label.strip(),
         pay_period_type=payload.pay_period_type,
         pay_period_number=payload.pay_period_number,
+        source_calendar_event_id=payload.source_calendar_event_id,
     )
     db.add(task)
     db.commit()

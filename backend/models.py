@@ -138,3 +138,4 @@ class TaskInstance(Base):
     adjusted_seconds = Column(Float, nullable=True)  # only set when the person edits the tracked time at submit
     pay_period_type = Column(String, nullable=True)  # "weekly", "fortnightly", or "monthly"
     pay_period_number = Column(Integer, nullable=True)  # 1-52, 1-26, or 1-12 respectively
+    source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task

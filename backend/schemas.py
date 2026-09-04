@@ -169,6 +169,7 @@ class TaskOut(BaseModel):
     adjusted_seconds: Optional[float] = None
     pay_period_type: Optional[str] = None
     pay_period_number: Optional[int] = None
+    source_calendar_event_id: Optional[str] = None
 
     @field_serializer("created_at", "submitted_at")
     def serialize_as_utc(self, value: Optional[datetime], _info):
@@ -191,6 +192,7 @@ class TaskCreate(BaseModel):
     tracks_number_label: str = ""
     pay_period_type: Optional[str] = None
     pay_period_number: Optional[int] = None
+    source_calendar_event_id: Optional[str] = None
 
 
 class TaskPause(BaseModel):
