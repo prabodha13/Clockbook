@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useCallback, useRef, Fragment } from "react";
+import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, Fragment } from "react";
+import { createPortal } from "react-dom";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
@@ -2934,25 +2935,44 @@ function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, 
 
 function StaffRowMenu({ items }) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
 
   useEffect(() => {
     function handleClickOutside(e) {
-      if (containerRef.current && !containerRef.current.contains(e.target)) setOpen(false);
+      const clickedButton = buttonRef.current && buttonRef.current.contains(e.target);
+      const clickedMenu = menuRef.current && menuRef.current.contains(e.target);
+      if (!clickedButton && !clickedMenu) setOpen(false);
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  // Runs before the browser paints, so the menu never visibly flashes at the wrong spot.
+  // Since it is portaled straight onto document.body, it is never clipped by an ancestor's
+  // overflow: hidden, no matter how far down the list its row sits.
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const menuHeight = menuRef.current ? menuRef.current.getBoundingClientRect().height : items.length * 36 + 8;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUpward = spaceBelow < menuHeight + 12 && rect.top > menuHeight;
+    setPosition({
+      top: openUpward ? rect.top - menuHeight - 4 : rect.bottom + 4,
+      left: Math.max(8, rect.right - 175),
+    });
+  }, [open, items.length]);
+
   if (items.length === 0) return null;
 
   return (
-    <div ref={containerRef} style={{ position: "relative" }}>
-      <button className="cb-icon-btn" title="More actions" onClick={() => setOpen((v) => !v)}>
+    <>
+      <button ref={buttonRef} className="cb-icon-btn" title="More actions" onClick={() => setOpen((v) => !v)}>
         <MoreVertical size={15} />
       </button>
-      {open && (
-        <div className="cb-row-menu">
+      {open && createPortal(
+        <div ref={menuRef} className="cb-row-menu" style={{ position: "fixed", top: position.top, left: position.left }}>
           {items.map((item, i) => (
             <button
               key={i} className="cb-user-dropdown-item"
@@ -2962,9 +2982,10 @@ function StaffRowMenu({ items }) {
               {item.label}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body
       )}
-    </div>
+    </>
   );
 }
 

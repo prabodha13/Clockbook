@@ -86,7 +86,7 @@ html, body, #root {
   color: #fff; font-size: 11px; font-weight: 600; flex-shrink: 0;
 }
 .cb-row-menu {
-  position: absolute; top: 34px; right: 0; background: var(--surface); border: 1px solid var(--line);
+  background: var(--surface); border: 1px solid var(--line);
   border-radius: 8px; box-shadow: 0 8px 24px rgba(20,30,20,0.12); min-width: 175px; z-index: 40; overflow: hidden;
 }
 .cb-user-dropdown {
