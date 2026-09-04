@@ -57,6 +57,17 @@ class GoogleOAuthState(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class DismissedSuggestion(Base):
+    # Marks a calendar event as "not needed" for a specific person, purely a reminder they
+    # chose to clear, never turned into a task. Kept separate from source_calendar_event_id
+    # on tasks, since dismissing is the opposite action, deciding nothing should be created.
+    __tablename__ = "dismissed_suggestions"
+    id = Column(String, primary_key=True, default=lambda: gen_id("dsm"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    calendar_event_id = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Client(Base):
     __tablename__ = "clients"
     id = Column(String, primary_key=True, default=lambda: gen_id("cli"))

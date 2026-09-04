@@ -505,6 +505,11 @@ def get_suggested_tasks(current_member: models.Member = Depends(get_current_memb
             models.TaskInstance.source_calendar_event_id.isnot(None),
         ).all()
     }
+    dismissed_ids = {
+        row[0] for row in db.query(models.DismissedSuggestion.calendar_event_id)
+        .filter(models.DismissedSuggestion.member_id == current_member.id).all()
+    }
+    already_used_ids |= dismissed_ids
 
     suggestions = []
     for event in items:
@@ -525,6 +530,20 @@ def get_suggested_tasks(current_member: models.Member = Depends(get_current_memb
             "all_day": "dateTime" not in start,
         })
     return {"connected": True, "suggestions": suggestions}
+
+
+@app.post("/api/calendar/suggested-tasks/{event_id}/dismiss", status_code=204)
+def dismiss_suggested_task(event_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Marking a suggestion as not needed is just a personal reminder being cleared, it never
+    # touches or creates a task, so it does not need any of the task-creation permissions.
+    existing = db.query(models.DismissedSuggestion).filter(
+        models.DismissedSuggestion.member_id == current_member.id,
+        models.DismissedSuggestion.calendar_event_id == event_id,
+    ).first()
+    if not existing:
+        db.add(models.DismissedSuggestion(member_id=current_member.id, calendar_event_id=event_id))
+        db.commit()
+    return None
 
 
 # ---------------------------------------------------------------
