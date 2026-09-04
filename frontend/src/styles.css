@@ -113,7 +113,11 @@ html, body, #root {
 .cb-role-toggle:hover { color: var(--ink); text-decoration: underline; }
 .cb-role-toggle:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 
-.cb-content { padding: 26px; flex: 1; overflow: auto; max-width: 1560px; margin: 0 auto; width: 100%; }
+.cb-content {
+  padding: 26px; flex: 1; overflow: auto; max-width: 1560px; margin: 0 auto; width: 100%;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.cb-content::-webkit-scrollbar { display: none; }
 
 .cb-notice {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
