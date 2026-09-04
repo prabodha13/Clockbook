@@ -431,6 +431,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
       role: "",
       useTemplate: null, // null until chosen, then true or false
       templateId: "",
+      selectedTaskIds: [], // which specific tasks within the chosen template, none pre-checked
       taskType: "",
       bankAccountByTaskId: {},
     }))
@@ -442,16 +443,38 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
-  function bankTasksFor(row) {
+  function templateTasksFor(row) {
     if (!row.useTemplate || !row.templateId) return [];
     const tpl = templates.find((t) => t.id === row.templateId);
-    return tpl ? tpl.tasks.filter((t) => t.requires_bank_account) : [];
+    return tpl ? tpl.tasks : [];
+  }
+
+  function selectedTemplateTasksFor(row) {
+    return templateTasksFor(row).filter((t) => row.selectedTaskIds.includes(t.id));
+  }
+
+  function bankTasksFor(row) {
+    return selectedTemplateTasksFor(row).filter((t) => t.requires_bank_account);
+  }
+
+  function toggleTemplateTaskId(index, taskId) {
+    setRows((prev) => prev.map((r, i) => {
+      if (i !== index) return r;
+      const isSelected = r.selectedTaskIds.includes(taskId);
+      const nextBankAccountByTaskId = { ...r.bankAccountByTaskId };
+      if (isSelected) delete nextBankAccountByTaskId[taskId];
+      return {
+        ...r,
+        selectedTaskIds: isSelected ? r.selectedTaskIds.filter((id) => id !== taskId) : [...r.selectedTaskIds, taskId],
+        bankAccountByTaskId: nextBankAccountByTaskId,
+      };
+    }));
   }
 
   function isRowComplete(row) {
     if (!row.clientId || !row.role || row.useTemplate === null) return false;
     if (row.useTemplate === false) return !!row.taskType;
-    if (!row.templateId) return false;
+    if (!row.templateId || row.selectedTaskIds.length === 0) return false;
     const clientAccounts = bankAccounts.filter((a) => a.client_id === row.clientId);
     return bankTasksFor(row).every((t) => resolvedBankAccountId(row, t.id, clientAccounts));
   }
@@ -461,7 +484,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
   async function handleCreate() {
     setError("");
     if (!allComplete) {
-      setError("Finish classifying every item before creating tasks, each one needs at least a client, a role, and a template choice.");
+      setError("Finish classifying every item before creating tasks, each one needs at least a client, a role, a template choice, and at least one task selected from it.");
       return;
     }
     setBusy(true);
@@ -476,9 +499,8 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
             source_calendar_event_id: row.suggestion.id,
           });
         } else {
-          const tpl = templates.find((t) => t.id === row.templateId);
           const clientAccounts = bankAccounts.filter((a) => a.client_id === row.clientId);
-          for (const tt of tpl.tasks) {
+          for (const tt of selectedTemplateTasksFor(row)) {
             const accountId = tt.requires_bank_account ? resolvedBankAccountId(row, tt.id, clientAccounts) : null;
             const account = accountId ? bankAccounts.find((a) => a.id === accountId) : null;
             payloads.push({
@@ -511,6 +533,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
         <div className="cb-modal-body">
           {rows.map((row, i) => {
             const bankTasks = bankTasksFor(row);
+            const templateTasks = templateTasksFor(row);
             const clientAccounts = row.clientId ? bankAccounts.filter((a) => a.client_id === row.clientId) : [];
             return (
               <div key={row.suggestion.id} style={{ padding: "14px 0", borderBottom: i < rows.length - 1 ? "1px solid var(--line)" : "none" }}>
@@ -553,11 +576,36 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
                       <label className="cb-label">Template</label>
                       <SearchableSelect
                         options={templates} value={row.templateId}
-                        onChange={(v) => updateRow(i, { templateId: v, bankAccountByTaskId: {} })}
+                        onChange={(v) => updateRow(i, { templateId: v, selectedTaskIds: [], bankAccountByTaskId: {} })}
                         placeholder="Search templates..." getLabel={(t) => t.name} getSecondary={(t) => t.field}
                       />
                     </div>
-                    {row.templateId && bankTasks.length > 0 && (
+                    {row.templateId && (
+                      <div className="cb-field">
+                        <label className="cb-label">Which tasks from this template?</label>
+                        <div className="cb-checklist">
+                          {templateTasks.length === 0 && (
+                            <div className="cb-hint" style={{ padding: 10 }}>This template has no tasks yet.</div>
+                          )}
+                          {templateTasks.map((t) => (
+                            <label key={t.id} className="cb-checklist-item">
+                              <input
+                                type="checkbox" className="cb-checkbox" checked={row.selectedTaskIds.includes(t.id)}
+                                onChange={() => toggleTemplateTaskId(i, t.id)}
+                              />
+                              <div>
+                                <div className="cb-checklist-name">{t.name}</div>
+                                <div className="cb-checklist-meta">
+                                  {t.task_type || "no task type"}
+                                  {t.requires_bank_account ? " \u00b7 needs a bank account" : ""}
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {bankTasks.length > 0 && (
                       <div className="cb-hint" style={{ marginBottom: 6 }}>
                         {!row.clientId ? "Pick a client above to choose a bank account." : null}
                       </div>
