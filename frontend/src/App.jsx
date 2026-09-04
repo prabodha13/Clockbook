@@ -1464,8 +1464,13 @@ function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
   const [role, setRole] = useState(task.role || "");
   const [taskType, setTaskType] = useState(task.task_type || "");
   const total = elapsedSeconds(task, now);
-  const trackedH = Math.floor(total / 3600);
-  const trackedM = Math.round((total % 3600) / 60);
+  // Snapshot the tracked time once, when the modal first opens. This used to be recalculated
+  // from the live clock on every render, so if the task kept running while this dialog was
+  // open, the comparison baseline would silently drift away from the untouched input fields
+  // and the submission would get flagged as a manual edit that never actually happened.
+  const [initialTotal] = useState(total);
+  const trackedH = Math.floor(initialTotal / 3600);
+  const trackedM = Math.round((initialTotal % 3600) / 60);
   const roundedTrackedSeconds = trackedH * 3600 + trackedM * 60;
   const [hours, setHours] = useState(String(trackedH));
   const [minutes, setMinutes] = useState(String(trackedM));
@@ -1528,7 +1533,7 @@ function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
               <span style={{ color: "var(--ink-soft)" }}>m</span>
             </div>
             <div className="cb-hint">
-              Tracked: {formatHM(total)} ({decimalHours(total)}h){isAdjusted ? ", you are changing this" : ""}
+              Tracked: {formatHM(initialTotal)} ({decimalHours(initialTotal)}h){isAdjusted ? ", you are changing this" : ""}
             </div>
             {isAdjusted && (
               <div className="cb-hint">The tracked time is kept on record either way, it helps to explain the change in the note below.</div>
