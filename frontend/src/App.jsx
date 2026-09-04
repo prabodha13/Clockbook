@@ -625,16 +625,18 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
     });
   }
 
-  async function handleDismiss(id) {
-    setSuggestions((prev) => prev.filter((s) => s.id !== id));
+  async function handleDismiss(suggestion) {
+    const seriesId = suggestion.series_id || suggestion.id;
+    setSuggestions((prev) => prev.filter((s) => (s.series_id || s.id) !== seriesId));
     setSelectedIds((prev) => {
-      if (!prev.has(id)) return prev;
+      const idsInSeries = suggestions.filter((s) => (s.series_id || s.id) === seriesId).map((s) => s.id);
+      if (!idsInSeries.some((id) => prev.has(id))) return prev;
       const next = new Set(prev);
-      next.delete(id);
+      idsInSeries.forEach((id) => next.delete(id));
       return next;
     });
     try {
-      await api.dismissSuggestedTask(id);
+      await api.dismissSuggestedTask(seriesId);
     } catch (err) {
       // if this fails, it simply reappears the next time suggestions are reloaded
     }
@@ -664,7 +666,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
             </div>
             <button
               className="cb-icon-btn" title="Not needed, don't suggest this again"
-              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDismiss(s.id); }}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleDismiss(s); }}
             >
               <Trash2 size={13} />
             </button>
