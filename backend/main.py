@@ -1108,10 +1108,17 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
 
     if not task.owner_id:
         task.owner_id = current_member.id
-    task.segments = [*(task.segments or []), {"start": datetime.utcnow().isoformat() + "Z", "end": None}]
+    already_running_with_open_segment = (
+        task.status == "running" and bool(task.segments) and not task.segments[-1].get("end")
+    )
+    if not already_running_with_open_segment:
+        task.segments = [*(task.segments or []), {"start": datetime.utcnow().isoformat() + "Z", "end": None}]
     task.status = "running"
     db.commit()
     db.refresh(task)
+    print(f"[timer-diagnostic] start task={task.id} status={task.status} "
+          f"last_segment_start={task.segments[-1]['start'] if task.segments else None} "
+          f"last_segment_end={task.segments[-1].get('end') if task.segments else None}")
     return task
 
 
@@ -1126,6 +1133,11 @@ def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), c
     task.status = "paused"
     db.commit()
     db.refresh(task)
+    open_count = sum(1 for s in (task.segments or []) if not s.get("end"))
+    print(f"[timer-diagnostic] pause task={task.id} status={task.status} "
+          f"last_segment_start={task.segments[-1]['start'] if task.segments else None} "
+          f"last_segment_end={task.segments[-1].get('end') if task.segments else None} "
+          f"open_segments_remaining={open_count}")
     return task
 
 
