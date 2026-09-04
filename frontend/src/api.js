@@ -62,8 +62,9 @@ export const api = {
   deleteMember: (memberId) => request(`/members/${memberId}`, { method: "DELETE" }),
 
   getClients: () => request("/clients"),
-  createClient: (name) => request("/clients", { method: "POST", body: JSON.stringify({ name }) }),
-  updateClient: (id, name) => request(`/clients/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  createClient: (name, code) => request("/clients", { method: "POST", body: JSON.stringify({ name, code: code || null }) }),
+  updateClient: (id, name, code) => request(`/clients/${id}`, { method: "PATCH", body: JSON.stringify({ name, code: code || null }) }),
+  mergeClients: (keepId, duplicateId) => request(`/clients/${keepId}/merge/${duplicateId}`, { method: "POST" }),
   deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
 
   getBankAccounts: () => request("/bank-accounts"),

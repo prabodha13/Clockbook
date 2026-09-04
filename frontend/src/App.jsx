@@ -843,7 +843,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
 
       <Group title="To do" items={todo} empty={<span><span className="cb-empty-title">No tasks queued</span><br />Add one from a template or a one off task.</span>} />
 
-      {!isAdmin && (
+      {(!isAdmin || viewFilter === "mine") && (
         <SuggestedTasksSection
           currentUser={currentUser} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
           onCreateTasks={onCreateTasks}
@@ -1886,36 +1886,61 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
   );
 }
 
-function ClientRow({ client, taskCount, bankAccounts, isAdmin, onUpdateClient, onDeleteClient, onAddAccount, onDeleteAccount }) {
+function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpdateClient, onDeleteClient, onAddAccount, onDeleteAccount, onMergeClients }) {
   const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
   const [editedName, setEditedName] = useState(client.name);
+  const [editedCode, setEditedCode] = useState(client.code || "");
   const [renaming, setRenaming] = useState(false);
+  const [showMerge, setShowMerge] = useState(false);
+  const [mergeTargetId, setMergeTargetId] = useState("");
+  const [merging, setMerging] = useState(false);
 
   function startEditingName(e) {
     e.stopPropagation();
     setEditedName(client.name);
+    setEditedCode(client.code || "");
     setIsEditingName(true);
   }
 
   async function saveClientName() {
-    const trimmed = editedName.trim();
-    if (!trimmed || trimmed === client.name) {
+    const trimmedName = editedName.trim();
+    const trimmedCode = editedCode.trim();
+    if (!trimmedName || (trimmedName === client.name && trimmedCode === (client.code || ""))) {
       setIsEditingName(false);
       return;
     }
     setRenaming(true);
     try {
-      await onUpdateClient(client.id, trimmed);
+      await onUpdateClient(client.id, trimmedName, trimmedCode);
       setIsEditingName(false);
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
     } finally {
       setRenaming(false);
+    }
+  }
+
+  async function handleMerge() {
+    if (!mergeTargetId) return;
+    const target = allClients.find((c) => c.id === mergeTargetId);
+    if (!window.confirm(`Merge "${target.name}" into "${client.name}"? Every task and bank account from "${target.name}" will move to "${client.name}", and "${target.name}" will be deleted. This cannot be undone.`)) {
+      return;
+    }
+    setMerging(true);
+    try {
+      await onMergeClients(client.id, mergeTargetId);
+      setShowMerge(false);
+      setMergeTargetId("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    } finally {
+      setMerging(false);
     }
   }
 
@@ -1959,7 +1984,12 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, onUpdateClient, o
           <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <input
               className="cb-input" style={{ maxWidth: 320 }} value={editedName}
-              onChange={(e) => setEditedName(e.target.value)} autoFocus
+              onChange={(e) => setEditedName(e.target.value)} autoFocus placeholder="Client name"
+              onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
+            />
+            <input
+              className="cb-input" style={{ maxWidth: 140 }} value={editedCode}
+              onChange={(e) => setEditedCode(e.target.value)} placeholder="Code (optional)"
               onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
             />
             <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={renaming} onClick={saveClientName}>Save</button>
@@ -1983,6 +2013,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, onUpdateClient, o
               )}
             </div>
             <div className="cb-row-meta">
+              {client.code && <span>Code: {client.code}</span>}
               {taskCount} task{taskCount === 1 ? "" : "s"} tracked, {bankAccounts.length} bank account{bankAccounts.length === 1 ? "" : "s"}
             </div>
           </div>
@@ -2007,6 +2038,31 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, onUpdateClient, o
           </form>
           {isAdmin && (
             <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
+              {!showMerge ? (
+                <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => setShowMerge(true)}>Merge a duplicate into this client</button>
+              ) : (
+                <div>
+                  <div className="cb-hint" style={{ marginBottom: 6 }}>
+                    Pick the duplicate client to absorb. Every task and bank account from it moves here, and it gets deleted.
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ width: 240 }}>
+                      <SearchableSelect
+                        options={allClients.filter((c) => c.id !== client.id)} value={mergeTargetId} onChange={setMergeTargetId}
+                        placeholder="Search for the duplicate..." getLabel={(c) => c.name}
+                      />
+                    </div>
+                    <button className="cb-btn cb-btn-sm cb-btn-danger" disabled={!mergeTargetId || merging} onClick={handleMerge}>
+                      {merging ? "Merging..." : "Merge"}
+                    </button>
+                    <button className="cb-btn cb-btn-sm cb-btn-ghost" disabled={merging} onClick={() => { setShowMerge(false); setMergeTargetId(""); }}>Cancel</button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {isAdmin && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--line)" }}>
               <button
                 className="cb-btn cb-btn-sm cb-btn-danger"
                 title={taskCount > 0 ? "This client has tracked tasks" : "Delete client"}
@@ -2024,14 +2080,23 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, onUpdateClient, o
   );
 }
 
-function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDelete, onAddAccount, onDeleteAccount }) {
+function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDelete, onAddAccount, onDeleteAccount, onMergeClients }) {
   const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
 
   async function submit(e) {
     e.preventDefault();
     if (!name.trim()) return;
-    await onAdd(name);
-    setName("");
+    try {
+      await onAdd(name, code);
+      setName("");
+      setCode("");
+      setError("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
   }
 
   return (
@@ -2042,10 +2107,12 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDel
           <div className="cb-page-sub">Every task on the dashboard is tracked against one of these. Click a client to manage its bank accounts.</div>
         </div>
       </div>
-      <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 10, maxWidth: 420 }}>
+      <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 6, maxWidth: 480 }}>
         <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="cb-input" style={{ maxWidth: 140 }} placeholder="Code (optional)" value={code} onChange={(e) => setCode(e.target.value)} />
         <button type="submit" className="cb-btn cb-btn-primary" style={{ flexShrink: 0 }}><Plus size={15} />Add</button>
       </form>
+      {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
       <div className="cb-card-list">
         {clients.length === 0 && <div className="cb-empty">No clients yet. Add your first one above.</div>}
         {clients.map((c) => {
@@ -2053,8 +2120,9 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDel
           const accounts = bankAccounts.filter((a) => a.client_id === c.id);
           return (
             <ClientRow
-              key={c.id} client={c} taskCount={count} bankAccounts={accounts} isAdmin={isAdmin}
+              key={c.id} client={c} taskCount={count} bankAccounts={accounts} isAdmin={isAdmin} allClients={clients}
               onUpdateClient={onUpdate} onDeleteClient={onDelete} onAddAccount={onAddAccount} onDeleteAccount={onDeleteAccount}
+              onMergeClients={onMergeClients}
             />
           );
         })}
@@ -3309,16 +3377,23 @@ export default function App() {
     }
   }
 
-  async function addClient(name) {
-    const client = await api.createClient(name.trim());
+  async function addClient(name, code) {
+    const client = await api.createClient(name.trim(), code);
     setClients((prev) => [...prev, client]);
     return client;
   }
 
-  async function updateClient(clientId, name) {
-    const updated = await api.updateClient(clientId, name);
+  async function updateClient(clientId, name, code) {
+    const updated = await api.updateClient(clientId, name, code);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
+  }
+
+  async function mergeClients(keepId, duplicateId) {
+    const keptClient = await api.mergeClients(keepId, duplicateId);
+    setClients((prev) => prev.filter((c) => c.id !== duplicateId).map((c) => (c.id === keptClient.id ? keptClient : c)));
+    setTasks((prev) => prev.map((t) => (t.client_id === duplicateId ? { ...t, client_id: keepId, client_name: keptClient.name } : t)));
+    setBankAccounts((prev) => prev.map((a) => (a.client_id === duplicateId ? { ...a, client_id: keepId } : a)));
   }
 
   async function deleteClient(clientId) {
@@ -3471,6 +3546,7 @@ export default function App() {
               <Clients
                 clients={clients} tasks={tasks} bankAccounts={bankAccounts} isAdmin={isAdmin}
                 onAdd={addClient} onUpdate={updateClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
+                onMergeClients={mergeClients}
               />
             )}
             {view === "calendar" && (
