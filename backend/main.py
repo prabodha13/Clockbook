@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from sqlalchemy import inspect, text, or_
+from sqlalchemy import inspect, text, or_, func
 
 from database import get_db, engine, Base
 import models
@@ -58,6 +58,12 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE members ADD COLUMN google_refresh_token VARCHAR"))
             if "pod_id" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN pod_id VARCHAR"))
+
+    if "clients" in inspector.get_table_names():
+        existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
+        with engine.begin() as conn:
+            if "code" not in existing_client_columns:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN code VARCHAR"))
 
     if "template_tasks" in inspector.get_table_names():
         existing_tt_columns = {c["name"] for c in inspector.get_columns("template_tasks")}
@@ -650,9 +656,22 @@ def list_clients(current_member: models.Member = Depends(get_current_member), db
     return db.query(models.Client).all()
 
 
+def check_client_code_available(db, code, exclude_client_id=None):
+    if not code:
+        return
+    query = db.query(models.Client).filter(func.lower(models.Client.code) == code.lower())
+    if exclude_client_id:
+        query = query.filter(models.Client.id != exclude_client_id)
+    existing = query.first()
+    if existing:
+        raise HTTPException(400, f'The code "{code}" is already used by {existing.name}')
+
+
 @app.post("/api/clients", response_model=schemas.ClientOut, status_code=201)
 def create_client(payload: schemas.ClientCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    client = models.Client(name=payload.name.strip())
+    code = payload.code.strip() if payload.code else None
+    check_client_code_available(db, code)
+    client = models.Client(name=payload.name.strip(), code=code)
     db.add(client)
     db.commit()
     db.refresh(client)
@@ -668,7 +687,10 @@ def update_client(client_id: str, payload: schemas.ClientCreate, current_member:
     new_name = payload.name.strip()
     if not new_name:
         raise HTTPException(400, "Enter a client name")
+    code = payload.code.strip() if payload.code else None
+    check_client_code_available(db, code, exclude_client_id=client_id)
     client.name = new_name
+    client.code = code
     # Tasks store their own copy of the client name for historical display, keep every
     # existing task in sync too, so old and new entries never show two different names for
     # what is now the same client.
@@ -689,6 +711,31 @@ def delete_client(client_id: str, current_member: models.Member = Depends(get_cu
         db.delete(client)
         db.commit()
     return None
+
+
+@app.post("/api/clients/{keep_id}/merge/{duplicate_id}", response_model=schemas.ClientOut)
+def merge_clients(keep_id: str, duplicate_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Reassigns every task and bank account that belonged to the duplicate, across every
+    # user in the firm, not just the person doing the merge, so nobody's tracked time gets
+    # orphaned or silently lost. The duplicate client is then removed entirely.
+    require_admin(current_member)
+    if keep_id == duplicate_id:
+        raise HTTPException(400, "Cannot merge a client into itself")
+    keep_client = db.get(models.Client, keep_id)
+    duplicate_client = db.get(models.Client, duplicate_id)
+    if not keep_client or not duplicate_client:
+        raise HTTPException(404, "Client not found")
+
+    db.query(models.TaskInstance).filter(models.TaskInstance.client_id == duplicate_id).update(
+        {"client_id": keep_id, "client_name": keep_client.name}, synchronize_session=False
+    )
+    db.query(models.BankAccount).filter(models.BankAccount.client_id == duplicate_id).update(
+        {"client_id": keep_id}, synchronize_session=False
+    )
+    db.delete(duplicate_client)
+    db.commit()
+    db.refresh(keep_client)
+    return keep_client
 
 
 # ---------------------------------------------------------------

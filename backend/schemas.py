@@ -64,10 +64,12 @@ class ClientOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
+    code: Optional[str] = None
 
 
 class ClientCreate(BaseModel):
     name: str
+    code: Optional[str] = None
 
 
 class RoleOut(BaseModel):

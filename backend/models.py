@@ -72,6 +72,7 @@ class Client(Base):
     __tablename__ = "clients"
     id = Column(String, primary_key=True, default=lambda: gen_id("cli"))
     name = Column(String, nullable=False)
+    code = Column(String, nullable=True)
 
 
 class BankAccount(Base):
