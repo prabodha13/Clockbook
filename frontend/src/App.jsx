@@ -773,7 +773,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
 }
 
 function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
-  const [viewFilter, setViewFilter] = useState("everyone"); // "everyone" | "mine" | a member id
+  const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const isSuperAdmin = currentUser.role === "super_admin";
   const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
@@ -1840,6 +1840,10 @@ function SettingsView({
   const [newPod, setNewPod] = useState("");
   const [newTaskType, setNewTaskType] = useState("");
   const [newMetric, setNewMetric] = useState("");
+  const [scanResults, setScanResults] = useState(null);
+  const [scanning, setScanning] = useState(false);
+  const [repairingId, setRepairingId] = useState(null);
+  const [repairResults, setRepairResults] = useState({});
   const [error, setError] = useState("");
 
   async function submitRole(e) {
@@ -1887,6 +1891,33 @@ function SettingsView({
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function runScan() {
+    setScanning(true);
+    setError("");
+    try {
+      const result = await api.scanCorruptedTasks();
+      setScanResults(result.affected_tasks);
+      setRepairResults({});
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  async function repairTask(taskId) {
+    setRepairingId(taskId);
+    try {
+      const result = await api.repairTaskSegments(taskId);
+      setRepairResults((prev) => ({ ...prev, [taskId]: result }));
+      setScanResults((prev) => prev.filter((t) => t.id !== taskId));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setRepairingId(null);
     }
   }
 
@@ -1975,6 +2006,51 @@ function SettingsView({
               <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isSuperAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Diagnostics</div>
+              <div className="cb-tmpl-name">Time tracking check</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>
+              Finds any task whose tracked time is stuck growing because of a leftover unclosed period from before a recent fix. Fixing one only ever shortens its time to what was actually tracked, never lengthens it.
+            </div>
+            <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
+              {scanning ? "Scanning..." : "Scan for issues"}
+            </button>
+            {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
+            {scanResults && scanResults.length === 0 && Object.keys(repairResults).length === 0 && (
+              <div className="cb-hint" style={{ marginTop: 10 }}>No issues found.</div>
+            )}
+            {scanResults && scanResults.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                {scanResults.map((t) => (
+                  <div key={t.id} className="cb-client-account-row">
+                    <div>
+                      <div style={{ fontSize: 13.5, fontWeight: 500 }}>{t.client_name}: {t.name}</div>
+                      <div className="cb-hint">
+                        {t.status}, currently showing {t.current_elapsed_hours}h, {t.orphaned_segment_count} stuck period{t.orphaned_segment_count === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                    <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={repairingId === t.id} onClick={() => repairTask(t.id)}>
+                      {repairingId === t.id ? "Fixing..." : "Fix"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {Object.entries(repairResults).map(([taskId, result]) => (
+              <div key={taskId} className="cb-hint" style={{ marginTop: 8, color: "var(--green)" }}>
+                Fixed: {result.before_hours}h corrected to {result.after_hours}h.
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -3491,9 +3567,14 @@ export default function App() {
           savePromptedMeetingIds(promptedMeetingIdsRef.current);
           setMeetingAlert({ task, summary: meeting.summary, meetingId: meeting.id });
           const alertText = `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`;
-          if (currentUser.notification_channel === "slack" && currentUser.slack_connected) {
-            api.relayNotification(alertText).catch(() => {});
-          } else if ("Notification" in window && Notification.permission === "granted") {
+          let sentViaSlack = false;
+          try {
+            const result = await api.relayNotification(alertText);
+            sentViaSlack = !!result.sent;
+          } catch (err) {
+            sentViaSlack = false;
+          }
+          if (!sentViaSlack && "Notification" in window && Notification.permission === "granted") {
             try {
               const n = new Notification("Clockbook", {
                 body: alertText,
