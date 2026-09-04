@@ -143,10 +143,36 @@ function StatusBadge({ status }) {
   return <span className="cb-badge cb-badge-todo">To do</span>;
 }
 
+function TableSkeleton({ rows = 4 }) {
+  return (
+    <div className="cb-skeleton-list">
+      {Array.from({ length: rows }).map((_, i) => (
+        <div className="cb-skeleton-row" key={i}>
+          <div className="cb-skeleton-main">
+            <div className="cb-skeleton-bar cb-skeleton-title" />
+            <div className="cb-skeleton-bar cb-skeleton-meta" />
+          </div>
+          <div className="cb-skeleton-bar cb-skeleton-badge" />
+          <div className="cb-skeleton-bar cb-skeleton-time" />
+          <div className="cb-skeleton-bar cb-skeleton-action" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function LoadingScreen() {
   return (
-    <div className="cb-center-screen">
-      <div style={{ color: "var(--ink-soft)", fontSize: 14 }}>Loading Clockbook</div>
+    <div className="cb-loading-shell">
+      <div className="cb-loading-sidebar">
+        <div className="cb-skeleton-bar cb-skeleton-logo" />
+        <div className="cb-skeleton-bar cb-skeleton-navitem" />
+        <div className="cb-skeleton-bar cb-skeleton-navitem" />
+        <div className="cb-skeleton-bar cb-skeleton-navitem" />
+      </div>
+      <div className="cb-loading-main">
+        <TableSkeleton rows={5} />
+      </div>
     </div>
   );
 }
@@ -725,7 +751,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
         From your calendar, events without a meeting link. These are only suggestions, nothing is tracked, started, or completed until you add them.
       </div>
       <div className="cb-card-list">
-        {loading && <div className="cb-empty">Checking your calendar...</div>}
+        {loading && <TableSkeleton rows={2} />}
         {!loading && suggestions.map((s) => (
           <label key={s.id} className="cb-checklist-item" style={{ cursor: "pointer", alignItems: "center" }}>
             <input type="checkbox" className="cb-checkbox" checked={selectedIds.has(s.id)} onChange={() => toggle(s.id)} />
@@ -2416,7 +2442,7 @@ function CalendarPage({ onConnectCalendar }) {
         )}
       </div>
 
-      {state.loading && <div className="cb-empty">Loading your calendar...</div>}
+      {state.loading && <TableSkeleton rows={3} />}
 
       {!state.loading && !state.connected && (
         <div className="cb-empty">
