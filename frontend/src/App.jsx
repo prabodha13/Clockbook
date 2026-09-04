@@ -1333,10 +1333,12 @@ function StartCountModal({ task, onClose, onSubmit }) {
   );
 }
 
-function CompleteModal({ task, now, onClose, onSubmit }) {
+function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
   const [note, setNote] = useState(task.note || "");
   const [endCount, setEndCount] = useState(task.end_count != null ? String(task.end_count) : "");
   const [busy, setBusy] = useState(false);
+  const [role, setRole] = useState(task.role || "");
+  const [taskType, setTaskType] = useState(task.task_type || "");
   const total = elapsedSeconds(task, now);
   const trackedH = Math.floor(total / 3600);
   const trackedM = Math.round((total % 3600) / 60);
@@ -1344,6 +1346,8 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
   const [hours, setHours] = useState(String(trackedH));
   const [minutes, setMinutes] = useState(String(trackedM));
   const needsCount = !!task.tracks_number_label;
+  const needsRole = !task.role;
+  const needsTaskType = !task.task_type;
 
   const editedSeconds = (parseInt(hours || "0", 10) * 3600) + (parseInt(minutes || "0", 10) * 60);
   const isAdjusted = editedSeconds !== roundedTrackedSeconds;
@@ -1359,8 +1363,32 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 500 }}>{task.name}</div>
-            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 4 }}>{task.role || "no role set"}, {task.task_type || "no task type set"}</div>
+            <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 4 }}>
+              {task.role || "no role set yet"}, {task.task_type || "no task type set yet"}
+            </div>
           </div>
+          {(needsRole || needsTaskType) && (
+            <div className="cb-field-row">
+              {needsRole && (
+                <div className="cb-field">
+                  <label className="cb-label">Role</label>
+                  <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
+                    <option value="">Select a role</option>
+                    {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+                  </select>
+                </div>
+              )}
+              {needsTaskType && (
+                <div className="cb-field">
+                  <label className="cb-label">Task type</label>
+                  <select className="cb-select" value={taskType} onChange={(e) => setTaskType(e.target.value)}>
+                    <option value="">Select a task type</option>
+                    {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          )}
           <div className="cb-field">
             <label className="cb-label">Time to record</label>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1399,10 +1427,13 @@ function CompleteModal({ task, now, onClose, onSubmit }) {
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={busy || (needsCount && endCount === "")}
+            className="cb-btn cb-btn-primary" disabled={busy || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)}
             onClick={async () => {
               setBusy(true);
-              await onSubmit(task.id, note, needsCount ? parseInt(endCount, 10) : null, isAdjusted ? editedSeconds : null);
+              await onSubmit(
+                task.id, note, needsCount ? parseInt(endCount, 10) : null, isAdjusted ? editedSeconds : null,
+                needsRole ? role : null, needsTaskType ? taskType : null
+              );
             }}
           >
             <CheckCircle2 size={14} />Submit
@@ -2786,7 +2817,44 @@ function SleepAlertModal({ alert, onDismiss, onResume }) {
   );
 }
 
-function MeetingAlertModal({ alert, onDismiss, onPause }) {
+function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm }) {
+  const [clientId, setClientId] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Track "{meetingSummary}"</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-field">
+            <label className="cb-label">Which client is this for?</label>
+            <SearchableSelect
+              options={clients} value={clientId} onChange={setClientId}
+              placeholder="Search clients..." getLabel={(c) => c.name}
+            />
+          </div>
+          <div className="cb-hint">
+            Role and task type can be filled in later, when you submit this. This starts tracking right away, with your other timer paused.
+          </div>
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+          <button
+            className="cb-btn cb-btn-primary" disabled={!clientId || busy}
+            onClick={async () => { setBusy(true); await onConfirm(clientId); }}
+          >
+            Start tracking
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MeetingAlertModal({ alert, onDismiss, onPause, onTrackMeeting }) {
   const [busy, setBusy] = useState(false);
   return (
     <div className="cb-overlay">
@@ -2797,13 +2865,17 @@ function MeetingAlertModal({ alert, onDismiss, onPause }) {
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
             <strong>{alert.summary}</strong> looks like it's happening right now on your calendar.
-            Want to pause the timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> while you're in it?
+            Want to pause the timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> while you're in it,
+            or track the meeting itself instead?
           </div>
         </div>
-        <div className="cb-modal-foot">
+        <div className="cb-modal-foot" style={{ flexWrap: "wrap" }}>
           <button className="cb-btn" disabled={busy} onClick={onDismiss}>Keep it running</button>
-          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onPause(); }}>
-            Pause timer
+          <button className="cb-btn" disabled={busy} onClick={async () => { setBusy(true); await onPause(); }}>
+            Just pause
+          </button>
+          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={onTrackMeeting}>
+            Track this meeting instead
           </button>
         </div>
       </div>
@@ -2835,6 +2907,7 @@ export default function App() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [sleepAlert, setSleepAlert] = useState(null);
   const [meetingAlert, setMeetingAlert] = useState(null);
+  const [meetingTrackPrompt, setMeetingTrackPrompt] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
 
   // Every timestamp actually saved comes from the server, so what gets recorded is always
@@ -3200,7 +3273,7 @@ export default function App() {
         const { meeting } = await api.getMeetingNow();
         if (meeting && !promptedMeetingIdsRef.current.has(meeting.id)) {
           promptedMeetingIdsRef.current.add(meeting.id);
-          setMeetingAlert({ task, summary: meeting.summary });
+          setMeetingAlert({ task, summary: meeting.summary, meetingId: meeting.id });
           if ("Notification" in window && Notification.permission === "granted") {
             try {
               const n = new Notification("Clockbook", {
@@ -3366,9 +3439,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note, endCount, adjustedSeconds) {
+  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType) {
     try {
-      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null);
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
@@ -3477,6 +3550,25 @@ export default function App() {
     }
     setTasks((prev) => [...created, ...prev]);
     setShowNewTask(false);
+  }
+
+  async function trackMeetingAsTask(clientId) {
+    const { task: existingTask, summary, meetingId } = meetingTrackPrompt;
+    const client = clients.find((c) => c.id === clientId);
+    try {
+      await pauseTask(existingTask.id);
+      const created = await api.createTask({
+        client_id: clientId, client_name: client.name, name: summary,
+        source_calendar_event_id: meetingId || null,
+      });
+      setTasks((prev) => [created, ...prev]);
+      await startTask(created.id, null);
+      showToast(`Now tracking "${summary}"`);
+    } catch (err) {
+      showToast(err.message, true);
+    } finally {
+      setMeetingTrackPrompt(null);
+    }
   }
 
   async function refreshTemplates() {
@@ -3624,7 +3716,7 @@ export default function App() {
         />
       )}
       {completingTask && (
-        <CompleteModal task={completingTask} now={now} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
+        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
       )}
       {showAddMember && (
         <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={addTeammate} />
@@ -3647,6 +3739,17 @@ export default function App() {
             await pauseTask(meetingAlert.task.id);
             setMeetingAlert(null);
           }}
+          onTrackMeeting={() => {
+            setMeetingTrackPrompt(meetingAlert);
+            setMeetingAlert(null);
+          }}
+        />
+      )}
+      {meetingTrackPrompt && (
+        <MeetingClientPickerModal
+          meetingSummary={meetingTrackPrompt.summary} clients={clients}
+          onClose={() => setMeetingTrackPrompt(null)}
+          onConfirm={trackMeetingAsTask}
         />
       )}
       {toast && <div className={`cb-toast ${toast.isError ? "error" : ""}`}>{toast.msg}</div>}

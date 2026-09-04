@@ -103,12 +103,13 @@ export const api = {
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
   getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>
     request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`),
-  submitTask: (id, note, endCount, adjustedSeconds) =>
+  submitTask: (id, note, endCount, adjustedSeconds, role, taskType) =>
     request(`/tasks/${id}/submit`, {
       method: "POST",
       body: JSON.stringify({
         note, end_count: endCount != null ? endCount : null,
         adjusted_seconds: adjustedSeconds != null ? adjustedSeconds : null,
+        role: role != null ? role : null, task_type: taskType != null ? taskType : null,
       }),
     }),
   reassignTask: (id, ownerId) =>
