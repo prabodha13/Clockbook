@@ -113,7 +113,7 @@ html, body, #root {
 .cb-role-toggle:hover { color: var(--ink); text-decoration: underline; }
 .cb-role-toggle:focus-visible { outline: 2px solid var(--green); outline-offset: 1px; }
 
-.cb-content { padding: 26px; flex: 1; overflow: auto; max-width: 1120px; }
+.cb-content { padding: 26px; flex: 1; overflow: auto; max-width: 1560px; }
 
 .cb-notice {
   display: flex; align-items: center; justify-content: space-between; gap: 16px;
