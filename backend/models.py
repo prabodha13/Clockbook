@@ -33,10 +33,20 @@ class Member(Base):
     # the one credential Google gives that keeps working long-term, used to fetch a fresh
     # short-lived access token each time a calendar check actually needs to happen.
     google_refresh_token = Column(String, nullable=True)
+    # The email this person says matches their Slack account, used once to resolve and
+    # cache slack_user_id below, never used for lookups after that so a rename or a typo
+    # fixed later doesn't silently break an already-working connection
+    slack_email = Column(String, nullable=True)
+    slack_user_id = Column(String, nullable=True)
+    notification_channel = Column(String, default="browser")  # "browser" or "slack"
 
     @property
     def google_calendar_connected(self):
         return bool(self.google_refresh_token)
+
+    @property
+    def slack_connected(self):
+        return bool(self.slack_user_id)
 
 
 class Session(Base):

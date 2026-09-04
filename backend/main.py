@@ -58,6 +58,12 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE members ADD COLUMN google_refresh_token VARCHAR"))
             if "pod_id" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN pod_id VARCHAR"))
+            if "slack_email" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN slack_email VARCHAR"))
+            if "slack_user_id" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN slack_user_id VARCHAR"))
+            if "notification_channel" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN notification_channel VARCHAR DEFAULT 'browser'"))
 
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
@@ -654,6 +660,130 @@ def delete_member(member_id: str, current_member: models.Member = Depends(get_cu
     db.delete(member)
     db.commit()
     return None
+
+
+# ---------------------------------------------------------------
+# Slack notifications, optional per person. Deliberately uses users.list rather than
+# users.lookupByEmail: Slack's own docs contradict themselves on whether a modern bot
+# token can use that method, and other developers have hit it silently failing in
+# practice, so this fetches the member list once and matches by email locally instead,
+# a path that is unambiguously documented to work with a bot token.
+# ---------------------------------------------------------------
+
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
+
+
+def find_slack_user_id_by_email(email: str):
+    if not SLACK_BOT_TOKEN:
+        return None, "Slack is not set up for this workspace yet"
+    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+    cursor = None
+    try:
+        for _ in range(20):  # a firm-sized workspace should resolve well within this many pages
+            params = {"limit": 200}
+            if cursor:
+                params["cursor"] = cursor
+            resp = httpx.get("https://slack.com/api/users.list", headers=headers, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                return None, f"Slack error: {data.get('error', 'unknown')}"
+            for member in data.get("members", []):
+                if (member.get("profile", {}).get("email") or "").lower() == email.lower():
+                    return member.get("id"), None
+            cursor = (data.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                break
+    except Exception:
+        return None, "Could not reach Slack"
+    return None, "No Slack user found with that email in this workspace"
+
+
+def send_slack_message(slack_user_id: str, text: str):
+    if not SLACK_BOT_TOKEN or not slack_user_id:
+        return False
+    try:
+        resp = httpx.post(
+            "https://slack.com/api/chat.postMessage",
+            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+            json={"channel": slack_user_id, "text": text},
+            timeout=10,
+        )
+        return resp.json().get("ok", False)
+    except Exception:
+        return False
+
+
+@app.patch("/api/members/{member_id}/slack", response_model=schemas.MemberOut)
+def connect_slack(member_id: str, payload: schemas.SlackConnect, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Self-service only, matching how connecting Google Calendar already works, nobody
+    # connects this on someone else's behalf
+    if member_id != current_member.id:
+        raise HTTPException(403, "You can only connect your own Slack account")
+    email = payload.slack_email.strip()
+    if not email:
+        raise HTTPException(400, "Enter the email your Slack account uses")
+    slack_user_id, error = find_slack_user_id_by_email(email)
+    if not slack_user_id:
+        raise HTTPException(400, error or "Could not find that Slack user")
+    current_member.slack_email = email
+    current_member.slack_user_id = slack_user_id
+    db.commit()
+    db.refresh(current_member)
+    return current_member
+
+
+@app.post("/api/members/{member_id}/slack/disconnect", response_model=schemas.MemberOut)
+def disconnect_slack(member_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if member_id != current_member.id:
+        raise HTTPException(403, "You can only disconnect your own Slack account")
+    current_member.slack_email = None
+    current_member.slack_user_id = None
+    if current_member.notification_channel == "slack":
+        current_member.notification_channel = "browser"
+    db.commit()
+    db.refresh(current_member)
+    return current_member
+
+
+@app.post("/api/members/{member_id}/slack/test")
+def test_slack(member_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if member_id != current_member.id:
+        raise HTTPException(403, "You can only test your own Slack connection")
+    if not current_member.slack_user_id:
+        raise HTTPException(400, "Connect Slack first")
+    ok = send_slack_message(current_member.slack_user_id, "This is a test notification from Clockbook. If you can see this, it's working.")
+    if not ok:
+        raise HTTPException(400, "Could not send a test message, check the Slack setup")
+    return {"sent": True}
+
+
+@app.patch("/api/members/{member_id}/notification-channel", response_model=schemas.MemberOut)
+def update_notification_channel(member_id: str, payload: schemas.NotificationChannelUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if member_id != current_member.id:
+        raise HTTPException(403, "You can only change your own notification preference")
+    if payload.channel not in ("browser", "slack"):
+        raise HTTPException(400, "Channel must be browser or slack")
+    if payload.channel == "slack" and not current_member.slack_user_id:
+        raise HTTPException(400, "Connect Slack before switching to it")
+    current_member.notification_channel = payload.channel
+    db.commit()
+    db.refresh(current_member)
+    return current_member
+
+
+@app.post("/api/notifications/relay")
+def relay_notification(payload: dict, current_member: models.Member = Depends(get_current_member)):
+    # The one place a notification actually gets sent to Slack. Only ever sends to the
+    # calling person's own resolved Slack id, and only if they have chosen Slack as their
+    # channel, so this can never be used to message anyone else
+    if current_member.notification_channel != "slack" or not current_member.slack_user_id:
+        return {"sent": False, "reason": "not using Slack"}
+    text = (payload or {}).get("text", "").strip()
+    if not text:
+        raise HTTPException(400, "Missing text")
+    ok = send_slack_message(current_member.slack_user_id, text)
+    return {"sent": ok}
 
 
 # ---------------------------------------------------------------

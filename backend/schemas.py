@@ -17,12 +17,23 @@ class MemberOut(BaseModel):
     role: str
     pod_id: Optional[str] = None
     google_calendar_connected: bool = False
+    slack_connected: bool = False
+    slack_email: Optional[str] = None
+    notification_channel: str = "browser"
 
 
 class PodOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
+
+
+class SlackConnect(BaseModel):
+    slack_email: str
+
+
+class NotificationChannelUpdate(BaseModel):
+    channel: str  # "browser" or "slack"
 
 
 class PodCreate(BaseModel):
