@@ -1366,6 +1366,57 @@ def delete_task(task_id: str, current_member: models.Member = Depends(get_curren
     return None
 
 
+def find_orphaned_open_segments(segments):
+    # Any segment other than the very last one that has no end is orphaned, close_open_segment
+    # never looks at these, only ever the last one, so nothing in the app was ever going to
+    # notice or fix them on its own
+    segments = segments or []
+    return [i for i, s in enumerate(segments[:-1]) if not s.get("end")]
+
+
+@app.get("/api/admin/scan-corrupted-tasks")
+def scan_corrupted_tasks(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    results = []
+    for task in db.query(models.TaskInstance).all():
+        orphaned = find_orphaned_open_segments(task.segments)
+        last_segment_open = bool(task.segments) and not task.segments[-1].get("end")
+        stuck_last_segment = last_segment_open and task.status != "running"
+        if orphaned or stuck_last_segment:
+            results.append({
+                "id": task.id, "name": task.name, "client_name": task.client_name, "status": task.status,
+                "current_elapsed_hours": round(elapsed_seconds(task.segments) / 3600, 2),
+                "orphaned_segment_count": len(orphaned),
+                "last_segment_stuck_open": stuck_last_segment,
+            })
+    return {"affected_tasks": results}
+
+
+@app.post("/api/tasks/{task_id}/repair-segments")
+def repair_task_segments(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Closes every orphaned segment, using the next segment's own start time, since that is
+    # the moment the gap this segment represents actually ended. If the very last segment is
+    # also stuck open on a task that isn't running, that mirrors the exact bug already fixed
+    # for new tasks, closed here using submitted_at for a submitted task, or right now for a
+    # paused one, since there is no way to recover the true original moment.
+    require_admin(current_member)
+    task = db.get(models.TaskInstance, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    segments = list(task.segments or [])
+    before_hours = round(elapsed_seconds(segments) / 3600, 2)
+    for i in find_orphaned_open_segments(segments):
+        segments[i] = {**segments[i], "end": segments[i + 1]["start"]}
+    if segments and not segments[-1].get("end") and task.status != "running":
+        fallback_end = task.submitted_at.isoformat() + "Z" if task.status == "submitted" and task.submitted_at else datetime.utcnow().isoformat() + "Z"
+        segments[-1] = {**segments[-1], "end": fallback_end}
+    task.segments = segments
+    db.commit()
+    db.refresh(task)
+    after_hours = round(elapsed_seconds(task.segments) / 3600, 2)
+    return {"task": schemas.TaskOut.model_validate(task), "before_hours": before_hours, "after_hours": after_hours}
+
+
 # ---------------------------------------------------------------
 # Export
 # ---------------------------------------------------------------
