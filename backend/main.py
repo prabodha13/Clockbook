@@ -522,6 +522,12 @@ def get_suggested_tasks(current_member: models.Member = Depends(get_current_memb
         event_id = event.get("id")
         if not event_id or event_id in already_used_ids:
             continue
+        # A recurring event gives every single occurrence its own unique id, the shared
+        # recurringEventId is what actually identifies "this same repeating thing", a
+        # one-off event has no recurringEventId at all, so it falls back to its own id
+        series_id = event.get("recurringEventId") or event_id
+        if series_id in dismissed_ids:
+            continue
         has_meet_link = bool(event.get("hangoutLink")) or any(
             ep.get("entryPointType") == "video"
             for ep in (event.get("conferenceData") or {}).get("entryPoints", [])
@@ -531,6 +537,7 @@ def get_suggested_tasks(current_member: models.Member = Depends(get_current_memb
         start = event.get("start", {})
         suggestions.append({
             "id": event_id,
+            "series_id": series_id,
             "summary": event.get("summary") or "(no title)",
             "start": start.get("dateTime") or start.get("date"),
             "all_day": "dateTime" not in start,
