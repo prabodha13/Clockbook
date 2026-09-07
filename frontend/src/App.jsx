@@ -4113,25 +4113,61 @@ export default function App() {
   const noTrackSnoozeUntilRef = useRef(0);
   const noTrackHandledRef = useRef(false);
   const forgotToTrackGapMsRef = useRef(null);
+  const noTrackBrowserNotificationRef = useRef(null);
+
+  function showNoTrackBrowserNotification(gapMs, silent = false) {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    const text = `No timer has been running for about ${niceDuration(gapMs)}. Did you forget to start a clock?`;
+    try {
+      // The fixed tag makes Chrome/Edge replace the existing Clockbook reminder instead of
+      // stacking a new one. Refreshes are silent so the user is not re-alerted every minute.
+      const n = new Notification("Clockbook", {
+        body: text,
+        tag: "clockbook-no-track-alert",
+        requireInteraction: true,
+        renotify: false,
+        silent,
+      });
+      n.onclick = () => window.focus();
+      noTrackBrowserNotificationRef.current = n;
+    } catch (e) {
+      // Some platforms restrict the Notification constructor, safe to ignore
+    }
+  }
 
   async function sendNoTrackNotification(gapMs) {
     const text = `No timer has been running for about ${niceDuration(gapMs)}. Did you forget to start a clock?`;
-    let sentViaSlack = false;
     try {
-      const result = await api.relayNotification(text);
-      sentViaSlack = !!result.sent;
+      await api.relayNotification(text);
     } catch (err) {
-      sentViaSlack = false;
+      // Slack relay is best-effort; the browser notification below still handles the reminder.
     }
-    if (!sentViaSlack && "Notification" in window && Notification.permission === "granted") {
-      try {
-        const n = new Notification("Clockbook", { body: text, tag: "clockbook-no-track-alert", requireInteraction: true });
-        n.onclick = () => window.focus();
-      } catch (e) {
-        // Some platforms restrict the Notification constructor, safe to ignore
-      }
-    }
+    // Also show the browser notification so its elapsed time can continue updating live while
+    // the no-track prompt remains unanswered.
+    showNoTrackBrowserNotification(gapMs);
   }
+
+  // Once the 10-minute reminder is visible, keep the browser notification's elapsed time
+  // current too. The popup already uses alert.since as a live start point; this mirrors that
+  // into the OS notification once per minute without creating a stack of notifications.
+  useEffect(() => {
+    if (!idleNoTrackAlert) {
+      if (noTrackBrowserNotificationRef.current) {
+        noTrackBrowserNotificationRef.current.close();
+        noTrackBrowserNotificationRef.current = null;
+      }
+      return;
+    }
+
+    function refreshBrowserNotification() {
+      showNoTrackBrowserNotification(Date.now() - idleNoTrackAlert.since, true);
+    }
+
+    // The initial 10-minute notification is sent by sendNoTrackNotification above. Start
+    // refreshing it one minute later so it moves to 11m, 12m, 13m, and so on.
+    const iv = setInterval(refreshBrowserNotification, 60 * 1000);
+    return () => clearInterval(iv);
+  }, [idleNoTrackAlert]);
 
   useEffect(() => {
     const CHECK_MS = 15000;
