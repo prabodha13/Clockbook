@@ -104,8 +104,16 @@ export const api = {
 
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
-  startTask: (id, startCount) =>
-    request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(startCount != null ? { start_count: startCount } : {}) }),
+  startTask: (id, startCount, startAt) => {
+    const body = {};
+    if (startCount != null) body.start_count = startCount;
+    if (startAt) body.start_at = startAt;
+    return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) });
+  },
+  createHelpEvent: (colleagueId, direction, seconds, source) =>
+    request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source }) }),
+  getHelpEventsSummary: () => request("/help-events/summary"),
+  sendHeartbeat: (id) => request(`/tasks/${id}/heartbeat`, { method: "POST" }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
   getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>

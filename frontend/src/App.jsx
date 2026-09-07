@@ -4,7 +4,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
-  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical,
+  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -299,6 +299,7 @@ function Sidebar({ view, setView, isAdmin }) {
     { id: "calendar", label: "Calendar", icon: CalendarIcon },
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
+    { id: "reports", label: "Reports", icon: HeartHandshake },
     ...(isAdmin ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
@@ -3143,8 +3144,86 @@ function AlertsBanner({ onEnable, onDismiss }) {
   );
 }
 
-function SleepAlertModal({ alert, onDismiss, onResume }) {
+function HelpReportView() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(false);
+  const [sortBy, setSortBy] = useState("received_seconds");
+
+  useEffect(() => {
+    api.getHelpEventsSummary()
+      .then(setRows)
+      .catch(() => setError(true));
+  }, []);
+
+  const sorted = useMemo(() => {
+    if (!rows) return [];
+    return [...rows].sort((a, b) => b[sortBy] - a[sortBy]);
+  }, [rows, sortBy]);
+
+  return (
+    <div>
+      <div className="cb-page-head">
+        <div>
+          <div className="cb-page-title cb-serif">Reports</div>
+          <div className="cb-page-sub">Who's been helping out, and who's been getting help. Feeds future reporting, nothing here affects billing.</div>
+        </div>
+      </div>
+      {error && <div className="cb-empty">Could not load this right now.</div>}
+      {!error && rows === null && <TableSkeleton rows={4} />}
+      {!error && rows !== null && rows.length === 0 && (
+        <div className="cb-empty">No help logged yet. This fills in as people use "I helped" or "I received help" from the timer prompts.</div>
+      )}
+      {!error && rows !== null && rows.length > 0 && (
+        <div className="cb-table-wrap">
+          <table className="cb-table">
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("helped_seconds")}>
+                  Time spent helping{sortBy === "helped_seconds" ? " \u2193" : ""}
+                </th>
+                <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("received_seconds")}>
+                  Time received help{sortBy === "received_seconds" ? " \u2193" : ""}
+                </th>
+                <th className="num">Times helped</th>
+                <th className="num">Times received</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((r) => (
+                <tr key={r.member_id}>
+                  <td>{r.member_name}</td>
+                  <td className="num cb-mono">{formatHM(r.helped_seconds)}</td>
+                  <td className="num cb-mono">{formatHM(r.received_seconds)}</td>
+                  <td className="num cb-mono">{r.helped_count}</td>
+                  <td className="num cb-mono">{r.received_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
   const [busy, setBusy] = useState(false);
+  const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
+  const showHelpOptions = alert.gapMs >= 10 * 60 * 1000;
+
+  if (mode === "helped" || mode === "received") {
+    return (
+      <ColleaguePickerModal
+        title={mode === "helped" ? "Who did you help?" : "Who helped you?"}
+        members={members}
+        currentUser={currentUser}
+        onClose={() => setMode("main")}
+        onConfirm={(colleagueId) => onHelp(mode, colleagueId)}
+      />
+    );
+  }
+
   return (
     <div className="cb-overlay">
       <div className="cb-modal">
@@ -3153,17 +3232,145 @@ function SleepAlertModal({ alert, onDismiss, onResume }) {
         </div>
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
-            This computer looks like it was locked or asleep for about{" "}
+            This computer looks like it {alert.causePhrase || "was locked or asleep"} for about{" "}
             <strong>{niceDuration(alert.gapMs)}</strong>. The timer for{" "}
             <strong>{alert.task.client_name}: {alert.task.name}</strong> was paused the moment it went away,
             so that time was not tracked.
           </div>
+          {showHelpOptions && (
+            <div className="cb-hint" style={{ marginTop: 10 }}>
+              If some of that time away was actually spent helping a colleague, or getting help yourself, you can log that below.
+            </div>
+          )}
         </div>
-        <div className="cb-modal-foot">
+        <div className="cb-modal-foot" style={{ flexWrap: "wrap" }}>
           <button className="cb-btn" disabled={busy} onClick={onDismiss}>Got it</button>
+          {showHelpOptions && (
+            <>
+              <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
+              <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
+            </>
+          )}
           <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onResume(); }}>
             Resume timer
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Shared between the idle "forgot to track" prompt and the sleep-alert prompt, so both
+// entry points into "I helped" / "I received help" use the exact same picker.
+function ColleaguePickerModal({ title, members, currentUser, onClose, onConfirm }) {
+  const [colleagueId, setColleagueId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const options = members.filter((m) => m.id !== currentUser.id);
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">{title}</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-field">
+            <label className="cb-label">Colleague</label>
+            <select className="cb-select" value={colleagueId} onChange={(e) => setColleagueId(e.target.value)}>
+              <option value="">Select someone</option>
+              {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button
+            className="cb-btn cb-btn-primary" disabled={!colleagueId || busy}
+            onClick={async () => { setBusy(true); await onConfirm(colleagueId); }}
+          >
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The "no clock running for a while" nudge, entirely separate from the sleep/lock alert
+// above, this fires when the computer has been genuinely active with nothing tracked.
+function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, onHelp }) {
+  const [mode, setMode] = useState("main"); // "main" | "snooze" | "helped" | "received"
+  const [customValue, setCustomValue] = useState("");
+  const [customUnit, setCustomUnit] = useState("minutes");
+  const [busy, setBusy] = useState(false);
+
+  if (mode === "helped" || mode === "received") {
+    return (
+      <ColleaguePickerModal
+        title={mode === "helped" ? "Who did you help?" : "Who helped you?"}
+        members={members}
+        currentUser={currentUser}
+        onClose={() => setMode("main")}
+        onConfirm={(colleagueId) => onHelp(mode, colleagueId)}
+      />
+    );
+  }
+
+  return (
+    <div className="cb-overlay">
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Did you forget to start a clock?</div>
+        </div>
+        <div className="cb-modal-body">
+          {mode === "main" && (
+            <div style={{ lineHeight: 1.5 }}>
+              This computer looks like it has been active for about <strong>{niceDuration(alert.gapMs)}</strong> with nothing being tracked.
+            </div>
+          )}
+          {mode === "snooze" && (
+            <div>
+              <div className="cb-field-row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
+                <button className="cb-btn" disabled={busy} onClick={() => onSnooze(15 * 60000)}>15 min</button>
+                <button className="cb-btn" disabled={busy} onClick={() => onSnooze(30 * 60000)}>30 min</button>
+                <button className="cb-btn" disabled={busy} onClick={() => onSnooze(60 * 60000)}>1 hour</button>
+              </div>
+              <div className="cb-field-row" style={{ alignItems: "flex-end" }}>
+                <div className="cb-field" style={{ flex: "none" }}>
+                  <label className="cb-label">Custom</label>
+                  <input
+                    type="number" min="1" className="cb-input" style={{ width: 80 }}
+                    value={customValue} onChange={(e) => setCustomValue(e.target.value)}
+                  />
+                </div>
+                <select className="cb-select" value={customUnit} onChange={(e) => setCustomUnit(e.target.value)}>
+                  <option value="minutes">minutes</option>
+                  <option value="hours">hours</option>
+                </select>
+                <button
+                  className="cb-btn cb-btn-primary" disabled={!customValue || busy}
+                  onClick={() => onSnooze(parseInt(customValue, 10) * (customUnit === "hours" ? 3600000 : 60000))}
+                >
+                  Remind me
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="cb-modal-foot">
+          {mode === "main" && (
+            <>
+              <button className="cb-btn" disabled={busy} onClick={() => setMode("snooze")}>No</button>
+              <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
+              <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
+              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(); }}>
+                Yes, I forgot
+              </button>
+            </>
+          )}
+          {mode === "snooze" && (
+            <button className="cb-btn cb-btn-ghost" onClick={() => setMode("main")}>Back</button>
+          )}
         </div>
       </div>
     </div>
@@ -3613,6 +3820,141 @@ export default function App() {
   }
 
   // ---------------------------------------------------------------
+  // "Forgot to track" nudge: entirely separate from the sleep and lock detection above, and
+  // does not read or write any of its internal state. Runs its own independent gap check, so
+  // a tick arriving unexpectedly late (sleep, lock, or heavy throttling) resets this on its
+  // own rather than depending on the sleep detector's signals. Only continuous, genuinely
+  // active time with nothing running counts toward the threshold.
+  // ---------------------------------------------------------------
+
+  const NO_TRACK_THRESHOLD_MS = 10 * 60 * 1000;
+  const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(null);
+  const noTrackSinceRef = useRef(Date.now());
+  const noTrackSnoozeUntilRef = useRef(0);
+  const noTrackHandledRef = useRef(false);
+  const forgotToTrackGapMsRef = useRef(null);
+
+  async function sendNoTrackNotification(gapMs) {
+    const text = `No timer has been running for about ${niceDuration(gapMs)}. Did you forget to start a clock?`;
+    let sentViaSlack = false;
+    try {
+      const result = await api.relayNotification(text);
+      sentViaSlack = !!result.sent;
+    } catch (err) {
+      sentViaSlack = false;
+    }
+    if (!sentViaSlack && "Notification" in window && Notification.permission === "granted") {
+      try {
+        const n = new Notification("Clockbook", { body: text, tag: "clockbook-no-track-alert", requireInteraction: true });
+        n.onclick = () => window.focus();
+      } catch (e) {
+        // Some platforms restrict the Notification constructor, safe to ignore
+      }
+    }
+  }
+
+  useEffect(() => {
+    const CHECK_MS = 15000;
+    const GAP_TOLERANCE_MS = 20000; // a tick this late suggests sleep, lock, or throttling, not real activity
+    let lastTick = Date.now();
+    const iv = setInterval(() => {
+      const nowTick = Date.now();
+      const gap = nowTick - lastTick;
+      lastTick = nowTick;
+      const awayJustNow = gap > GAP_TOLERANCE_MS || document.hidden;
+      const hasRunningTask = !!runningTaskRef.current;
+      if (hasRunningTask || awayJustNow) {
+        noTrackSinceRef.current = nowTick;
+        noTrackHandledRef.current = false;
+        return;
+      }
+      if (nowTick < noTrackSnoozeUntilRef.current) return;
+      if (noTrackHandledRef.current) return;
+      if (nowTick - noTrackSinceRef.current < NO_TRACK_THRESHOLD_MS) return;
+      noTrackHandledRef.current = true;
+      const gapMs = nowTick - noTrackSinceRef.current;
+      setIdleNoTrackAlert({ gapMs });
+      sendNoTrackNotification(gapMs);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, CHECK_MS);
+    return () => clearInterval(iv);
+  }, []);
+
+  async function logHelpEvent(direction, colleagueId, seconds, source) {
+    try {
+      await api.createHelpEvent(colleagueId, direction, seconds, source);
+      showToast(direction === "helped" ? "Logged, thanks for helping out" : "Logged, glad you got help");
+    } catch (err) {
+      showToast("Could not log that, please try again", true);
+    }
+  }
+
+  // ---------------------------------------------------------------
+  // Browser-gone detection: catches a closed tab, a crashed browser, or the machine actually
+  // shutting down, none of which leave any JS running to notice the gap the way sleep and
+  // lock detection can, since those depend on this same execution context waking back up.
+  // The only signal available here is a periodic "still here" ping while a timer runs, and a
+  // check for a stale one the next time this app loads at all, on any device.
+  // ---------------------------------------------------------------
+
+  const HEARTBEAT_STALE_MS = 2 * 60 * 1000;
+  const staleCheckedRef = useRef(false);
+
+  useEffect(() => {
+    if (!myRunningTask) return;
+    const iv = setInterval(() => {
+      api.sendHeartbeat(myRunningTask.id).catch(() => {
+        // A missed ping is fine, this is just a periodic best-effort signal, the next
+        // successful one (or the stale check on a future load) is what actually matters
+      });
+    }, 45000);
+    return () => clearInterval(iv);
+  }, [myRunningTask && myRunningTask.id]);
+
+  // Best-effort pause fired the instant this page starts to unload: a tab closing, the
+  // browser quitting, or the OS shutting down. This is not guaranteed to always land, a hard
+  // power loss gives no such warning at all, which is exactly why the heartbeat-based stale
+  // check above still exists underneath this as the real safety net. Reads the running task
+  // fresh from the ref at the moment of unload, so this only needs registering once.
+  useEffect(() => {
+    function firePauseBeacon() {
+      const task = runningTaskRef.current;
+      const token = getToken();
+      if (!task || !token) return;
+      const payload = JSON.stringify({ token, end_at: new Date(Date.now() + clockOffsetRef.current).toISOString() });
+      const blob = new Blob([payload], { type: "application/json" });
+      navigator.sendBeacon(`/api/tasks/${task.id}/pause-beacon`, blob);
+    }
+    window.addEventListener("pagehide", firePauseBeacon);
+    window.addEventListener("beforeunload", firePauseBeacon);
+    return () => {
+      window.removeEventListener("pagehide", firePauseBeacon);
+      window.removeEventListener("beforeunload", firePauseBeacon);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (dataLoading || staleCheckedRef.current || !currentUser) return;
+    staleCheckedRef.current = true;
+    const task = tasks.find((t) => t.owner_id === currentUser.id && t.status === "running");
+    if (!task) return;
+    const lastSeen = task.last_heartbeat_at ? new Date(task.last_heartbeat_at).getTime() : new Date(task.segments[task.segments.length - 1].start).getTime();
+    const gapMs = Date.now() + clockOffsetRef.current - lastSeen;
+    if (gapMs < HEARTBEAT_STALE_MS) return;
+    (async () => {
+      try {
+        const updated = await api.pauseTask(task.id, new Date(lastSeen).toISOString());
+        mergeTask(updated);
+        setSleepAlert({ task, gapMs, sleepStartMs: lastSeen, causePhrase: "was closed, shut down, or lost connection" });
+      } catch (err) {
+        // If this fails, the task is still visibly running on the dashboard and the person
+        // can pause or adjust it themselves, nothing is silently lost
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dataLoading, currentUser]);
+
+  // ---------------------------------------------------------------
   // Google Calendar meeting check (optional, per person, entirely separate from the sleep
   // and lock detection above). Only ever runs at all for someone who has connected their own
   // calendar, and only ever checks while they have a timer of their own running.
@@ -3979,7 +4321,20 @@ export default function App() {
       const task = await api.createTask(payload);
       created.push(task);
     }
-    setTasks((prev) => [...created, ...prev]);
+    let finalTasks = created;
+    if (forgotToTrackGapMsRef.current != null && created.length > 0) {
+      const gapMs = forgotToTrackGapMsRef.current;
+      forgotToTrackGapMsRef.current = null;
+      const backdatedIso = new Date(Date.now() - gapMs + clockOffsetRef.current).toISOString();
+      try {
+        const started = await api.startTask(created[0].id, null, backdatedIso);
+        finalTasks = [started, ...created.slice(1)];
+      } catch (err) {
+        // If backdating fails for any reason, the task still exists as a plain to-do,
+        // nothing is lost, the person can just start it themselves
+      }
+    }
+    setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
   }
 
@@ -4119,6 +4474,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
+            {view === "reports" && <HelpReportView />}
             {view === "settings" && isAdmin && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
@@ -4157,10 +4513,42 @@ export default function App() {
       {sleepAlert && (
         <SleepAlertModal
           alert={sleepAlert}
+          members={members}
+          currentUser={currentUser}
           onDismiss={() => setSleepAlert(null)}
           onResume={async () => {
             requestStart(sleepAlert.task);
             setSleepAlert(null);
+          }}
+          onHelp={async (direction, colleagueId) => {
+            await logHelpEvent(direction, colleagueId, sleepAlert.gapMs / 1000, "sleep_alert");
+            setSleepAlert(null);
+          }}
+        />
+      )}
+      {idleNoTrackAlert && (
+        <IdleNoTrackModal
+          alert={idleNoTrackAlert}
+          members={members}
+          currentUser={currentUser}
+          onSnooze={(snoozeMs) => {
+            noTrackSnoozeUntilRef.current = Date.now() + snoozeMs;
+            noTrackSinceRef.current = Date.now();
+            noTrackHandledRef.current = false;
+            setIdleNoTrackAlert(null);
+          }}
+          onStartNew={async () => {
+            forgotToTrackGapMsRef.current = idleNoTrackAlert.gapMs;
+            noTrackSinceRef.current = Date.now();
+            noTrackHandledRef.current = false;
+            setIdleNoTrackAlert(null);
+            setShowNewTask(true);
+          }}
+          onHelp={async (direction, colleagueId) => {
+            await logHelpEvent(direction, colleagueId, idleNoTrackAlert.gapMs / 1000, "idle_prompt");
+            noTrackSinceRef.current = Date.now();
+            noTrackHandledRef.current = false;
+            setIdleNoTrackAlert(null);
           }}
         />
       )}
