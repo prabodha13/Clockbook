@@ -367,6 +367,11 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
   const canReset = isMine || isAdmin;
   const elapsed = elapsedSeconds(task, now);
   const owner = members.find((m) => m.id === task.owner_id);
+  // A task created from logging help given or received can still be deleted by whoever
+  // logged it for a short window afterward, matching the backend's own 30-minute allowance,
+  // identified by the fixed task_type this specific flow always sets
+  const isHelpEntry = task.task_type === "Non-billable: Colleague Support";
+  const withinHelpGraceWindow = isHelpEntry && task.submitted_at && (now - new Date(task.submitted_at).getTime()) <= 30 * 60 * 1000;
   return (
     <div className="cb-row">
       <div className="cb-row-main">
@@ -424,7 +429,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             Complete
           </button>
         )}
-        {(isAdmin || (isMine && task.status !== "submitted")) && (
+        {(isAdmin || (isMine && (task.status !== "submitted" || withinHelpGraceWindow))) && (
           <button
             className="cb-icon-btn cb-btn-danger"
             title="Delete"
@@ -3151,14 +3156,27 @@ function HelpReportView() {
   const [details, setDetails] = useState(null);
   const [detailsError, setDetailsError] = useState(false);
 
-  useEffect(() => {
+  function loadReports() {
     api.getHelpEventsSummary()
       .then(setRows)
       .catch(() => setError(true));
     api.getHelpEventsDetail()
       .then(setDetails)
       .catch(() => setDetailsError(true));
-  }, []);
+  }
+
+  useEffect(() => { loadReports(); }, []);
+
+  async function deleteEntry(entry) {
+    if (!entry.task_id) return; // Logged before this could be linked to a task, nothing to remove here
+    if (!window.confirm(`Remove this entry? "${entry.member_name}" ${entry.direction === "helped" ? "helped" : "received help from"} "${entry.colleague_name}" for ${formatHM(entry.seconds)}.`)) return;
+    try {
+      await api.deleteTask(entry.task_id);
+      loadReports();
+    } catch (err) {
+      alert("Could not remove this entry, it may be outside the window this can be deleted in.");
+    }
+  }
 
   const sorted = useMemo(() => {
     if (!rows) return [];
@@ -3227,6 +3245,7 @@ function HelpReportView() {
                 <th>Colleague</th>
                 <th className="num">Duration</th>
                 <th>When</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>
@@ -3237,6 +3256,15 @@ function HelpReportView() {
                   <td>{d.colleague_name}</td>
                   <td className="num cb-mono">{formatHM(d.seconds)}</td>
                   <td>{formatDate(d.created_at)}, {new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
+                  <td>
+                    <button
+                      className="cb-icon-btn cb-btn-danger" disabled={!d.task_id}
+                      title={d.task_id ? "Delete this entry" : "Logged before this could be linked to a task, nothing to remove here"}
+                      onClick={() => deleteEntry(d)}
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

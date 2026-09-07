@@ -280,6 +280,7 @@ html, body, #root {
 .cb-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .cb-table tr:last-child td { border-bottom: none; }
 .cb-table td.num { text-align: right; }
+.cb-table th.num { text-align: right; }
 
 .cb-filter-bar { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
 .cb-tabs { display: flex; gap: 2px; background: var(--paper); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
