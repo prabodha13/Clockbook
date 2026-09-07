@@ -3369,7 +3369,7 @@ function HelpReportView() {
                                                     <td>{formatDate(e.created_at)}, {new Date(e.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
                                                     <td>{e.member_name}</td>
                                                     <td>{e.direction === "helped" ? `Helped ${e.colleague_name}` : `Received help from ${e.colleague_name}`}</td>
-                                                    <td className="num cb-mono">{formatHM(e.seconds)}</td>
+                                                    <td className="num cb-mono">{formatHM(e.seconds)}{e.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                                                   </tr>
                                                 ))}
                                               </tbody>
@@ -3421,7 +3421,7 @@ function HelpReportView() {
                   <td>{d.member_name}</td>
                   <td>{d.direction === "helped" ? "Helped" : "Received help from"}</td>
                   <td>{d.colleague_name}</td>
-                  <td className="num cb-mono">{formatHM(d.seconds)}</td>
+                  <td className="num cb-mono">{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                   <td>{formatDate(d.created_at)}, {new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
                   <td>
                     <button
@@ -3453,8 +3453,9 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
         title={mode === "helped" ? "Who did you help?" : "Who helped you?"}
         members={members}
         currentUser={currentUser}
+        initialSeconds={alert.gapMs / 1000}
         onClose={() => setMode("main")}
-        onConfirm={(colleagueId) => onHelp(mode, colleagueId)}
+        onConfirm={(colleagueId, seconds, isAdjusted) => onHelp(mode, colleagueId, seconds, isAdjusted)}
       />
     );
   }
@@ -3497,9 +3498,18 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
 
 // Shared between the idle "forgot to track" prompt and the sleep-alert prompt, so both
 // entry points into "I helped" / "I received help" use the exact same picker.
-function ColleaguePickerModal({ title, members, currentUser, onClose, onConfirm }) {
+function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onClose, onConfirm }) {
   const [colleagueId, setColleagueId] = useState("");
   const [busy, setBusy] = useState(false);
+  // Frozen once, at the moment this opens, so the field doesn't shift under the person while
+  // they're looking at or editing it, same fix already applied to the Complete modal
+  const [frozenSeconds] = useState(initialSeconds);
+  const initialMinutes = Math.round(frozenSeconds / 60);
+  const [hours, setHours] = useState(String(Math.floor(initialMinutes / 60)));
+  const [minutes, setMinutes] = useState(String(initialMinutes % 60));
+  const editedSeconds = (parseInt(hours || "0", 10) * 3600) + (parseInt(minutes || "0", 10) * 60);
+  const roundedInitialSeconds = Math.floor(initialMinutes / 60) * 3600 + (initialMinutes % 60) * 60;
+  const isAdjusted = editedSeconds !== roundedInitialSeconds;
   const options = members.filter((m) => m.id !== currentUser.id);
   return (
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -3516,12 +3526,25 @@ function ColleaguePickerModal({ title, members, currentUser, onClose, onConfirm 
               {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
+          <div className="cb-field-row" style={{ marginTop: 12 }}>
+            <div className="cb-field" style={{ flex: "none" }}>
+              <label className="cb-label">Hours</label>
+              <input type="number" min="0" className="cb-input" style={{ width: 70 }} value={hours} onChange={(e) => setHours(e.target.value)} />
+            </div>
+            <div className="cb-field" style={{ flex: "none" }}>
+              <label className="cb-label">Minutes</label>
+              <input type="number" min="0" max="59" className="cb-input" style={{ width: 70 }} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            </div>
+          </div>
+          <div className="cb-hint" style={{ marginTop: 6 }}>
+            Based on how long this computer looked inactive{isAdjusted ? ", you are changing this" : ""}.
+          </div>
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={!colleagueId || busy}
-            onClick={async () => { setBusy(true); await onConfirm(colleagueId); }}
+            className="cb-btn cb-btn-primary" disabled={!colleagueId || busy || editedSeconds <= 0}
+            onClick={async () => { setBusy(true); await onConfirm(colleagueId, editedSeconds, isAdjusted); }}
           >
             Confirm
           </button>
@@ -3555,8 +3578,9 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
         title={mode === "helped" ? "Who did you help?" : "Who helped you?"}
         members={members}
         currentUser={currentUser}
+        initialSeconds={gapMs / 1000}
         onClose={() => setMode("main")}
-        onConfirm={(colleagueId) => onHelp(mode, colleagueId, gapMs)}
+        onConfirm={(colleagueId, seconds, isAdjusted) => onHelp(mode, colleagueId, seconds, isAdjusted)}
       />
     );
   }
@@ -4152,9 +4176,9 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  async function logHelpEvent(direction, colleagueId, seconds, source) {
+  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false) {
     try {
-      await api.createHelpEvent(colleagueId, direction, seconds, source);
+      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted);
       showToast(direction === "helped" ? "Logged, thanks for helping out" : "Logged, glad you got help");
     } catch (err) {
       showToast("Could not log that, please try again", true);
@@ -4792,8 +4816,8 @@ export default function App() {
             requestStart(sleepAlert.task);
             setSleepAlert(null);
           }}
-          onHelp={async (direction, colleagueId) => {
-            await logHelpEvent(direction, colleagueId, sleepAlert.gapMs / 1000, "sleep_alert");
+          onHelp={async (direction, colleagueId, seconds, isAdjusted) => {
+            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted);
             setSleepAlert(null);
           }}
         />
@@ -4816,8 +4840,8 @@ export default function App() {
             setIdleNoTrackAlert(null);
             setShowNewTask(true);
           }}
-          onHelp={async (direction, colleagueId, liveGapMs) => {
-            await logHelpEvent(direction, colleagueId, liveGapMs / 1000, "idle_prompt");
+          onHelp={async (direction, colleagueId, seconds, isAdjusted) => {
+            await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted);
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
