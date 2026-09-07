@@ -3178,6 +3178,70 @@ function HelpReportView() {
     }
   }
 
+  const [expandedPerson, setExpandedPerson] = useState(null);
+  const [expandedHelper, setExpandedHelper] = useState(null);
+
+  // Level 1: per person, both sides of the ledger kept separate on purpose, since each side
+  // is logged independently and a mismatch between them (one side reported, the other never
+  // did) is itself useful information, not something to silently merge away
+  const helpReceived = useMemo(() => {
+    if (!details) return [];
+    const byPerson = {};
+    function ensure(name) {
+      if (!byPerson[name]) byPerson[name] = { person: name, selfSeconds: 0, selfCount: 0, helperSeconds: 0, helperCount: 0, helpers: new Set() };
+      return byPerson[name];
+    }
+    for (const d of details) {
+      if (d.direction === "received") {
+        const row = ensure(d.member_name);
+        row.selfSeconds += d.seconds;
+        row.selfCount += 1;
+        row.helpers.add(d.colleague_name);
+      } else {
+        const row = ensure(d.colleague_name);
+        row.helperSeconds += d.seconds;
+        row.helperCount += 1;
+        row.helpers.add(d.member_name);
+      }
+    }
+    return Object.values(byPerson)
+      .map((r) => ({ ...r, helpersCount: r.helpers.size }))
+      .sort((a, b) => (b.selfSeconds + b.helperSeconds) - (a.selfSeconds + a.helperSeconds));
+  }, [details]);
+
+  // Level 2: for the expanded person, the same self-reported vs helper-reported comparison,
+  // broken down per individual helper instead of aggregated across all of them
+  const helperBreakdown = useMemo(() => {
+    if (!details || !expandedPerson) return [];
+    const byHelper = {};
+    function ensure(name) {
+      if (!byHelper[name]) byHelper[name] = { helper: name, selfSeconds: 0, selfCount: 0, helperSeconds: 0, helperCount: 0 };
+      return byHelper[name];
+    }
+    for (const d of details) {
+      if (d.direction === "received" && d.member_name === expandedPerson) {
+        const row = ensure(d.colleague_name);
+        row.selfSeconds += d.seconds;
+        row.selfCount += 1;
+      } else if (d.direction === "helped" && d.colleague_name === expandedPerson) {
+        const row = ensure(d.member_name);
+        row.helperSeconds += d.seconds;
+        row.helperCount += 1;
+      }
+    }
+    return Object.values(byHelper).sort((a, b) => (b.selfSeconds + b.helperSeconds) - (a.selfSeconds + a.helperSeconds));
+  }, [details, expandedPerson]);
+
+  // Level 3: the raw individual entries between exactly this person and this helper, both
+  // directions, only fields that already exist on a help event, nothing invented
+  const pairEntries = useMemo(() => {
+    if (!details || !expandedPerson || !expandedHelper) return [];
+    return details.filter((d) =>
+      (d.direction === "received" && d.member_name === expandedPerson && d.colleague_name === expandedHelper) ||
+      (d.direction === "helped" && d.member_name === expandedHelper && d.colleague_name === expandedPerson)
+    );
+  }, [details, expandedPerson, expandedHelper]);
+
   const sorted = useMemo(() => {
     if (!rows) return [];
     return [...rows].sort((a, b) => b[sortBy] - a[sortBy]);
@@ -3221,6 +3285,109 @@ function HelpReportView() {
                   <td className="num cb-mono">{r.helped_count}</td>
                   <td className="num cb-mono">{r.received_count}</td>
                 </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="cb-group-head" style={{ marginTop: 28 }}>
+        <div className="cb-group-title">Help received</div>
+        {details && <div className="cb-group-count">{helpReceived.length}</div>}
+      </div>
+      <div className="cb-hint" style={{ marginBottom: 10 }}>
+        Each side logs independently, so the two totals can differ, that gap is itself worth noticing. Click a person to see who helped them, click a helper to see the individual entries.
+      </div>
+      {!detailsError && details === null && <TableSkeleton rows={4} />}
+      {!detailsError && details !== null && helpReceived.length === 0 && (
+        <div className="cb-empty">No help logged yet.</div>
+      )}
+      {!detailsError && details !== null && helpReceived.length > 0 && (
+        <div className="cb-table-wrap">
+          <table className="cb-table">
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th className="num">Received (self-reported)</th>
+                <th className="num">Received (per helpers)</th>
+                <th className="num">Helpers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {helpReceived.map((r) => (
+                <Fragment key={r.person}>
+                  <tr
+                    className="cb-row-clickable"
+                    onClick={() => { setExpandedPerson(expandedPerson === r.person ? null : r.person); setExpandedHelper(null); }}
+                  >
+                    <td>{expandedPerson === r.person ? "\u25be" : "\u25b8"} {r.person}</td>
+                    <td className="num cb-mono">{formatHM(r.selfSeconds)} &middot; {r.selfCount}x</td>
+                    <td className="num cb-mono">{formatHM(r.helperSeconds)} &middot; {r.helperCount}x</td>
+                    <td className="num cb-mono">{r.helpersCount}</td>
+                  </tr>
+                  {expandedPerson === r.person && (
+                    <tr>
+                      <td colSpan={4} style={{ padding: 0, background: "var(--paper)" }}>
+                        <div style={{ padding: "12px 16px 16px 32px" }}>
+                          <div className="cb-hint" style={{ marginBottom: 8 }}>Helped by, for {r.person}:</div>
+                          {helperBreakdown.length === 0 && <div className="cb-empty">No detail available.</div>}
+                          {helperBreakdown.length > 0 && (
+                            <table className="cb-table" style={{ background: "transparent" }}>
+                              <thead>
+                                <tr>
+                                  <th>Helper</th>
+                                  <th className="num">As helper reported</th>
+                                  <th className="num">As {r.person} reported</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {helperBreakdown.map((h) => (
+                                  <Fragment key={h.helper}>
+                                    <tr
+                                      className="cb-row-clickable"
+                                      onClick={() => setExpandedHelper(expandedHelper === h.helper ? null : h.helper)}
+                                    >
+                                      <td>{expandedHelper === h.helper ? "\u25be" : "\u25b8"} {h.helper}</td>
+                                      <td className="num cb-mono">{formatHM(h.helperSeconds)} &middot; {h.helperCount}x</td>
+                                      <td className="num cb-mono">{formatHM(h.selfSeconds)} &middot; {h.selfCount}x</td>
+                                    </tr>
+                                    {expandedHelper === h.helper && (
+                                      <tr>
+                                        <td colSpan={3} style={{ padding: 0 }}>
+                                          <div style={{ padding: "10px 16px 14px 48px" }}>
+                                            <table className="cb-table" style={{ background: "transparent" }}>
+                                              <thead>
+                                                <tr>
+                                                  <th>When</th>
+                                                  <th>Reported by</th>
+                                                  <th>Direction</th>
+                                                  <th className="num">Duration</th>
+                                                </tr>
+                                              </thead>
+                                              <tbody>
+                                                {pairEntries.map((e) => (
+                                                  <tr key={e.id}>
+                                                    <td>{formatDate(e.created_at)}, {new Date(e.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
+                                                    <td>{e.member_name}</td>
+                                                    <td>{e.direction === "helped" ? `Helped ${e.colleague_name}` : `Received help from ${e.colleague_name}`}</td>
+                                                    <td className="num cb-mono">{formatHM(e.seconds)}</td>
+                                                  </tr>
+                                                ))}
+                                              </tbody>
+                                            </table>
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    )}
+                                  </Fragment>
+                                ))}
+                              </tbody>
+                            </table>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -3393,7 +3560,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
         <div className="cb-modal-body">
           {mode === "main" && (
             <div style={{ lineHeight: 1.5 }}>
-              This computer looks like it has been active for about <strong>{niceDuration(alert.gapMs)}</strong> with nothing being tracked.
+              This computer looks like it has been active for about <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(alert.gapMs)}</strong> with nothing being tracked.
             </div>
           )}
           {mode === "snooze" && (

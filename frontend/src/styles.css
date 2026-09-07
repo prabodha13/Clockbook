@@ -256,7 +256,7 @@ html, body, #root {
 .cb-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; border-bottom: 1px solid var(--line); }
 .cb-modal-title { font-size: 16.5px; font-weight: 500; }
 .cb-modal-body { padding: 20px; }
-.cb-modal-foot { padding: 14px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; gap: 8px; }
+.cb-modal-foot { padding: 14px 20px; border-top: 1px solid var(--line); display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 
 /* Templates */
 .cb-tmpl-card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; margin-bottom: 16px; overflow: hidden; }
@@ -279,6 +279,8 @@ html, body, #root {
 .cb-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-soft); padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; background: var(--paper); }
 .cb-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
 .cb-table tr:last-child td { border-bottom: none; }
+.cb-row-clickable { cursor: pointer; }
+.cb-row-clickable:hover td { background: var(--paper); }
 .cb-table td.num { text-align: right; }
 .cb-table th.num { text-align: right; }
 
@@ -342,4 +344,9 @@ html, body, #root {
   .cb-tmpl-task-row { grid-template-columns: 1fr; }
   .cb-row { flex-wrap: wrap; }
   .cb-row-time { text-align: left; }
+}
+
+@media (max-width: 480px) {
+  .cb-modal-foot { flex-direction: column; align-items: stretch; }
+  .cb-modal-foot .cb-btn { width: 100%; justify-content: center; }
 }
