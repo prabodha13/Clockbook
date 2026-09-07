@@ -291,7 +291,7 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView, isAdmin }) {
+function Sidebar({ view, setView, isAdmin, isSuperAdmin }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
@@ -299,7 +299,7 @@ function Sidebar({ view, setView, isAdmin }) {
     { id: "calendar", label: "Calendar", icon: CalendarIcon },
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
-    { id: "reports", label: "Reports", icon: HeartHandshake },
+    ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
     ...(isAdmin ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
@@ -4416,7 +4416,7 @@ export default function App() {
   return (
     <div className="cb-root">
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} isAdmin={isAdmin} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={currentUser.role === "super_admin"} />
         <div className="cb-main">
           <TopBar
             currentUser={currentUser}
@@ -4474,7 +4474,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && <HelpReportView />}
+            {view === "reports" && currentUser.role === "super_admin" && <HelpReportView />}
             {view === "settings" && isAdmin && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
