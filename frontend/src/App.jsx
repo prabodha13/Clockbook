@@ -3855,13 +3855,17 @@ export default function App() {
 
   useEffect(() => {
     const CHECK_MS = 15000;
-    const GAP_TOLERANCE_MS = 20000; // a tick this late suggests sleep, lock, or throttling, not real activity
+    // Deliberately does NOT treat document.hidden as "away". Switching to check email or
+    // Slack for a moment is completely normal and should not restart this countdown, only a
+    // genuinely large gap between ticks (real sleep, a lock screen, or the tab being
+    // background-throttled for a long stretch) is treated as a real absence.
+    const GAP_TOLERANCE_MS = 45000;
     let lastTick = Date.now();
     const iv = setInterval(() => {
       const nowTick = Date.now();
       const gap = nowTick - lastTick;
       lastTick = nowTick;
-      const awayJustNow = gap > GAP_TOLERANCE_MS || document.hidden;
+      const awayJustNow = gap > GAP_TOLERANCE_MS;
       const hasRunningTask = !!runningTaskRef.current;
       if (hasRunningTask || awayJustNow) {
         noTrackSinceRef.current = nowTick;
