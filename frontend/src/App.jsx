@@ -3148,11 +3148,16 @@ function HelpReportView() {
   const [rows, setRows] = useState(null);
   const [error, setError] = useState(false);
   const [sortBy, setSortBy] = useState("received_seconds");
+  const [details, setDetails] = useState(null);
+  const [detailsError, setDetailsError] = useState(false);
 
   useEffect(() => {
     api.getHelpEventsSummary()
       .then(setRows)
       .catch(() => setError(true));
+    api.getHelpEventsDetail()
+      .then(setDetails)
+      .catch(() => setDetailsError(true));
   }, []);
 
   const sorted = useMemo(() => {
@@ -3197,6 +3202,41 @@ function HelpReportView() {
                   <td className="num cb-mono">{formatHM(r.received_seconds)}</td>
                   <td className="num cb-mono">{r.helped_count}</td>
                   <td className="num cb-mono">{r.received_count}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div className="cb-group-head" style={{ marginTop: 28 }}>
+        <div className="cb-group-title">Individual entries</div>
+        {details && <div className="cb-group-count">{details.length}</div>}
+      </div>
+      {detailsError && <div className="cb-empty">Could not load this right now.</div>}
+      {!detailsError && details === null && <TableSkeleton rows={3} />}
+      {!detailsError && details !== null && details.length === 0 && (
+        <div className="cb-empty">Nothing logged yet.</div>
+      )}
+      {!detailsError && details !== null && details.length > 0 && (
+        <div className="cb-table-wrap">
+          <table className="cb-table">
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th>Action</th>
+                <th>Colleague</th>
+                <th className="num">Duration</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {details.map((d) => (
+                <tr key={d.id}>
+                  <td>{d.member_name}</td>
+                  <td>{d.direction === "helped" ? "Helped" : "Received help from"}</td>
+                  <td>{d.colleague_name}</td>
+                  <td className="num cb-mono">{formatHM(d.seconds)}</td>
+                  <td>{formatDate(d.created_at)}, {new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
                 </tr>
               ))}
             </tbody>
@@ -3765,6 +3805,8 @@ export default function App() {
   }, []);
 
   const idleDetectorStartedRef = useRef(false);
+  const isScreenLockedRef = useRef(false);
+  const idleDetectorActiveRef = useRef(false);
 
   async function enableIdleDetection() {
     if (idleDetectorStartedRef.current) return;
@@ -3778,6 +3820,11 @@ export default function App() {
       let lockedSince = null;
       let lockedTask = null;
       detector.addEventListener("change", () => {
+        // Mirrors the OS-reported lock state into a shared ref, purely additive, read
+        // elsewhere (the no-track countdown) as a more reliable signal than inferring sleep
+        // from JS timing, since this reflects the real lock state even if this tab itself
+        // was throttled or frozen in the background rather than the machine actually sleeping
+        isScreenLockedRef.current = detector.screenState === "locked";
         if (detector.screenState === "locked") {
           // Chrome fires this event again partway through the same lock once userState
           // separately shifts to idle, even though screenState is still just "locked". If a
@@ -3806,6 +3853,10 @@ export default function App() {
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
       await detector.start({ threshold: 60000, signal: controller.signal });
+      // Only reachable if start() actually succeeded, if it throws, execution jumps to the
+      // catch block below and this line never runs, so this can never be left true after a
+      // denied permission, an unsupported context, or a failed start.
+      idleDetectorActiveRef.current = true;
     } catch (err) {
       // Permission denied, unsupported context, or not triggered by a user gesture
     }
@@ -3856,23 +3907,28 @@ export default function App() {
   useEffect(() => {
     const CHECK_MS = 15000;
     // Deliberately does NOT treat document.hidden as "away". Switching to check email or
-    // Slack for a moment is completely normal and should not restart this countdown, only a
-    // genuinely large gap between ticks (real sleep, a lock screen, or the tab being
-    // background-throttled for a long stretch) is treated as a real absence.
-    // Chrome's background-tab throttling ("Intensive Timer Throttling") can delay a timer
-    // tick in a backgrounded tab by up to roughly a minute once the tab has been hidden for
-    // a while. 45s was not enough margin above that, someone genuinely working in another
-    // tab (Excel, email, Xero, etc.) could trip a false "away" reset purely from throttling.
-    // 2 minutes sits comfortably above that worst case while still being well short of the
-    // 10-minute threshold this feature is built around, so a real sleep or lock (which lasts
-    // far longer than a couple of minutes in practice) is still caught reliably.
+    // Slack for a moment is completely normal and should not restart this countdown.
+    // isScreenLockedRef reflects the OS's actual reported lock state (via the IdleDetector
+    // API used for the sleep alert above) when that's available, which is the reliable
+    // signal: it stays accurate even if this tab itself gets throttled or fully frozen in
+    // the background, which a gap-based guess alone cannot tell apart from real sleep. The
+    // gap check below remains only as a fallback for browsers or situations where
+    // IdleDetector isn't available or hasn't been granted permission.
     const GAP_TOLERANCE_MS = 2 * 60 * 1000;
     let lastTick = Date.now();
     const iv = setInterval(() => {
       const nowTick = Date.now();
       const gap = nowTick - lastTick;
       lastTick = nowTick;
-      const awayJustNow = gap > GAP_TOLERANCE_MS;
+      // When IdleDetector genuinely started, its real OS-reported lock state is trusted
+      // exclusively, the timing gap is not consulted at all in that case, since a frozen or
+      // heavily throttled background tab can produce a large gap while the lock state
+      // correctly still says "not locked", and the gap must not override that. The gap
+      // fallback only applies when IdleDetector never started at all (unsupported browser,
+      // permission denied, or the start() call itself failed).
+      const awayJustNow = idleDetectorActiveRef.current
+        ? isScreenLockedRef.current
+        : gap > GAP_TOLERANCE_MS;
       const hasRunningTask = !!runningTaskRef.current;
       if (hasRunningTask || awayJustNow) {
         noTrackSinceRef.current = nowTick;

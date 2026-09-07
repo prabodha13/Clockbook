@@ -113,6 +113,7 @@ export const api = {
   createHelpEvent: (colleagueId, direction, seconds, source) =>
     request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source }) }),
   getHelpEventsSummary: () => request("/help-events/summary"),
+  getHelpEventsDetail: () => request("/help-events/detail"),
   sendHeartbeat: (id) => request(`/tasks/${id}/heartbeat`, { method: "POST" }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
