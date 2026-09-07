@@ -104,6 +104,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_calendar_event_id VARCHAR"))
             if "source_template_name" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
+            if "last_heartbeat_at" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
 
 
 @asynccontextmanager
@@ -786,6 +788,49 @@ def relay_notification(payload: dict, current_member: models.Member = Depends(ge
     return {"sent": ok}
 
 
+@app.post("/api/help-events", response_model=schemas.HelpEventOut, status_code=201)
+def create_help_event(payload: schemas.HelpEventCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if payload.direction not in ("helped", "received"):
+        raise HTTPException(400, "direction must be 'helped' or 'received'")
+    if payload.seconds < 0:
+        raise HTTPException(400, "seconds cannot be negative")
+    colleague = db.get(models.Member, payload.colleague_id)
+    if not colleague:
+        raise HTTPException(404, "Colleague not found")
+    event = models.HelpEvent(
+        member_id=current_member.id,
+        colleague_id=payload.colleague_id,
+        direction=payload.direction,
+        seconds=payload.seconds,
+        source=payload.source,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+@app.get("/api/help-events/summary", response_model=list[schemas.HelpSummaryRow])
+def help_events_summary(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Every member who has either given or received help shows up here, so this starts from
+    # the member list rather than the events, or someone with only one side of the ledger
+    # (e.g. only ever helped, never received) would be missing from their own row
+    members = db.query(models.Member).all()
+    events = db.query(models.HelpEvent).all()
+    by_member = {m.id: {"member_id": m.id, "member_name": m.name, "helped_seconds": 0.0, "received_seconds": 0.0, "helped_count": 0, "received_count": 0} for m in members}
+    for e in events:
+        row = by_member.get(e.member_id)
+        if not row:
+            continue
+        if e.direction == "helped":
+            row["helped_seconds"] += e.seconds
+            row["helped_count"] += 1
+        else:
+            row["received_seconds"] += e.seconds
+            row["received_count"] += 1
+    return [r for r in by_member.values() if r["helped_count"] > 0 or r["received_count"] > 0]
+
+
 # ---------------------------------------------------------------
 # Clients
 # ---------------------------------------------------------------
@@ -1242,13 +1287,48 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
         task.status == "running" and bool(task.segments) and not task.segments[-1].get("end")
     )
     if not already_running_with_open_segment:
-        task.segments = [*(task.segments or []), {"start": datetime.utcnow().isoformat() + "Z", "end": None}]
+        start_iso = datetime.utcnow().isoformat() + "Z"
+        if payload.start_at:
+            try:
+                parsed = datetime.fromisoformat(payload.start_at.replace("Z", "+00:00")).replace(tzinfo=None)
+                # Never allow a backdated start in the future, or further back than the "forgot
+                # to track" flow would ever ask for, this only exists to backdate a genuinely
+                # missed short window, not to let an arbitrary historical time be entered here
+                if parsed <= datetime.utcnow() and (datetime.utcnow() - parsed).total_seconds() <= 3600:
+                    start_iso = parsed.isoformat() + "Z"
+            except ValueError:
+                pass
+        task.segments = [*(task.segments or []), {"start": start_iso, "end": None}]
     task.status = "running"
+    # Seeds this so a task isn't immediately eligible to be treated as stale the moment it
+    # starts, before the browser has had a chance to send its first periodic heartbeat
+    task.last_heartbeat_at = datetime.utcnow()
     db.commit()
     db.refresh(task)
     print(f"[timer-diagnostic] start task={task.id} status={task.status} "
           f"last_segment_start={task.segments[-1]['start'] if task.segments else None} "
           f"last_segment_end={task.segments[-1].get('end') if task.segments else None}")
+    return task
+
+
+@app.post("/api/tasks/{task_id}/heartbeat", response_model=schemas.TaskOut)
+def heartbeat_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # A lightweight, periodic "still here" ping sent while a timer runs. This is the only
+    # signal that can catch a browser disappearing outright (closed, crashed, or the machine
+    # shut down), none of which leave any JS running to detect the gap the way sleep and lock
+    # detection can, since those rely on the same execution context waking back up.
+    task = db.get(models.TaskInstance, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
+    if task.status != "running":
+        # Nothing to keep alive, but not an error, the browser may not know yet that this
+        # was paused or submitted elsewhere
+        return task
+    task.last_heartbeat_at = datetime.utcnow()
+    db.commit()
+    db.refresh(task)
     return task
 
 
@@ -1268,6 +1348,37 @@ def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), c
           f"last_segment_start={task.segments[-1]['start'] if task.segments else None} "
           f"last_segment_end={task.segments[-1].get('end') if task.segments else None} "
           f"open_segments_remaining={open_count}")
+    return task
+
+
+@app.post("/api/tasks/{task_id}/pause-beacon", response_model=schemas.TaskOut)
+def pause_task_beacon(task_id: str, payload: schemas.TaskPauseBeacon, db: Session = Depends(get_db)):
+    # A dedicated endpoint for navigator.sendBeacon, fired as the page is unloading (a tab
+    # closing, a browser quitting, or the OS shutting down). Beacons cannot set custom
+    # headers, so the session token travels in the body instead of the usual Authorization
+    # header, everything else about the auth check is identical to normal requests. This is
+    # a best-effort attempt to pause instantly rather than waiting for the next login to
+    # notice via the heartbeat, it is not guaranteed to always arrive, which is exactly why
+    # that heartbeat-based check still exists underneath this as the real safety net.
+    session = db.get(models.Session, payload.token)
+    if not session:
+        raise HTTPException(401, "Session expired")
+    current_member = db.get(models.Member, session.member_id)
+    if not current_member:
+        raise HTTPException(401, "Account no longer exists")
+    task = db.get(models.TaskInstance, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.owner_id and task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
+    if task.status != "running":
+        return task  # Already paused or submitted elsewhere, nothing to do, not an error
+    task.segments = close_open_segment(task.segments, payload.end_at)
+    task.status = "paused"
+    db.commit()
+    db.refresh(task)
+    print(f"[timer-diagnostic] pause-beacon task={task.id} status={task.status} "
+          f"last_segment_end={task.segments[-1].get('end') if task.segments else None}")
     return task
 
 

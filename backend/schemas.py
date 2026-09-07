@@ -184,8 +184,9 @@ class TaskOut(BaseModel):
     pay_period_number: Optional[int] = None
     source_calendar_event_id: Optional[str] = None
     source_template_name: Optional[str] = None
+    last_heartbeat_at: Optional[datetime] = None
 
-    @field_serializer("created_at", "submitted_at")
+    @field_serializer("created_at", "submitted_at", "last_heartbeat_at")
     def serialize_as_utc(self, value: Optional[datetime], _info):
         # Stored as naive UTC in the database, this marks it as UTC for the browser
         # so it is not mistaken for local time
@@ -214,6 +215,11 @@ class TaskPause(BaseModel):
     end_at: Optional[str] = None
 
 
+class TaskPauseBeacon(BaseModel):
+    token: str
+    end_at: Optional[str] = None
+
+
 class TaskSubmit(BaseModel):
     note: str = ""
     end_count: Optional[int] = None
@@ -224,7 +230,35 @@ class TaskSubmit(BaseModel):
 
 class TaskStart(BaseModel):
     start_count: Optional[int] = None
+    start_at: Optional[str] = None
 
 
 class TaskReassign(BaseModel):
     owner_id: str
+
+
+class HelpEventCreate(BaseModel):
+    colleague_id: str
+    direction: str  # "helped" or "received"
+    seconds: float
+    source: str = "idle_prompt"
+
+
+class HelpEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    member_id: str
+    colleague_id: str
+    direction: str
+    seconds: float
+    source: str
+    created_at: datetime
+
+
+class HelpSummaryRow(BaseModel):
+    member_id: str
+    member_name: str
+    helped_seconds: float
+    received_seconds: float
+    helped_count: int
+    received_count: int

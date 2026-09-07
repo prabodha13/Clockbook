@@ -162,3 +162,15 @@ class TaskInstance(Base):
     pay_period_number = Column(Integer, nullable=True)  # 1-52, 1-26, or 1-12 respectively
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
     source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed
+    last_heartbeat_at = Column(DateTime, nullable=True)  # updated periodically while running, a stale value means the browser tracking it is gone (closed, crashed, or the machine shut down)
+
+
+class HelpEvent(Base):
+    __tablename__ = "help_events"
+    id = Column(String, primary_key=True, default=lambda: gen_id("help"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)  # the person reporting this event
+    colleague_id = Column(String, ForeignKey("members.id"), nullable=False)  # who was helped, or who helped them
+    direction = Column(String, nullable=False)  # "helped" (member helped colleague) or "received" (member received help from colleague)
+    seconds = Column(Float, nullable=False)
+    source = Column(String, default="idle_prompt")  # "idle_prompt" or "sleep_alert", which flow this came from
+    created_at = Column(DateTime, default=datetime.utcnow)
