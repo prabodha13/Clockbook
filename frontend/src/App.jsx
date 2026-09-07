@@ -3859,7 +3859,14 @@ export default function App() {
     // Slack for a moment is completely normal and should not restart this countdown, only a
     // genuinely large gap between ticks (real sleep, a lock screen, or the tab being
     // background-throttled for a long stretch) is treated as a real absence.
-    const GAP_TOLERANCE_MS = 45000;
+    // Chrome's background-tab throttling ("Intensive Timer Throttling") can delay a timer
+    // tick in a backgrounded tab by up to roughly a minute once the tab has been hidden for
+    // a while. 45s was not enough margin above that, someone genuinely working in another
+    // tab (Excel, email, Xero, etc.) could trip a false "away" reset purely from throttling.
+    // 2 minutes sits comfortably above that worst case while still being well short of the
+    // 10-minute threshold this feature is built around, so a real sleep or lock (which lasts
+    // far longer than a couple of minutes in practice) is still caught reliably.
+    const GAP_TOLERANCE_MS = 2 * 60 * 1000;
     let lastTick = Date.now();
     const iv = setInterval(() => {
       const nowTick = Date.now();
