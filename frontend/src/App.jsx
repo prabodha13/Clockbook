@@ -3445,7 +3445,15 @@ function HelpReportView() {
 function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
-  const showHelpOptions = alert.gapMs >= 10 * 60 * 1000;
+  // Keep the away period live until the user classifies or ignores it. This lets someone who
+  // genuinely left their desk to help a colleague see the full elapsed away time rather than
+  // only the frozen duration that existed when the alert was first created.
+  const [liveNow, setLiveNow] = useState(Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+  const liveGapMs = Math.max(0, liveNow - alert.sleepStartMs);
 
   if (mode === "helped" || mode === "received") {
     return (
@@ -3453,7 +3461,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
         title={mode === "helped" ? "Who did you help?" : "Who helped you?"}
         members={members}
         currentUser={currentUser}
-        initialSeconds={alert.gapMs / 1000}
+        initialSeconds={liveGapMs / 1000}
         onClose={() => setMode("main")}
         onConfirm={(colleagueId, seconds, isAdjusted) => onHelp(mode, colleagueId, seconds, isAdjusted)}
       />
@@ -3464,32 +3472,31 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
     <div className="cb-overlay">
       <div className="cb-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">Timer paused automatically</div>
+          <div className="cb-modal-title">Away time detected</div>
         </div>
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
             This computer looks like it {alert.causePhrase || "was locked or asleep"} for about{" "}
-            <strong>{niceDuration(alert.gapMs)}</strong>. The timer for{" "}
-            <strong>{alert.task.client_name}: {alert.task.name}</strong> was paused the moment it went away,
-            so that time was not tracked.
+            <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(liveGapMs)}</strong>.
+            {alert.task ? (
+              <> The timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> was paused when the away period started, so this time was not added to that task.</>
+            ) : (
+              <> No task timer was running when the away period started.</>
+            )}
           </div>
-          {showHelpOptions && (
-            <div className="cb-hint" style={{ marginTop: 10 }}>
-              If some of that time away was actually spent helping a colleague, or getting help yourself, you can log that below.
-            </div>
-          )}
+          <div className="cb-hint" style={{ marginTop: 10 }}>
+            If this time was spent helping a colleague or receiving help, you can record it below. Otherwise choose Ignore and nothing will be logged.
+          </div>
         </div>
         <div className="cb-modal-foot" style={{ flexWrap: "wrap" }}>
-          <button className="cb-btn" disabled={busy} onClick={onDismiss}>Got it</button>
-          {showHelpOptions && (
-            <>
-              <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
-              <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
-            </>
+          <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onDismiss}>Ignore</button>
+          <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
+          <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
+          {alert.task && (
+            <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onResume(); }}>
+              Resume timer
+            </button>
           )}
-          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onResume(); }}>
-            Resume timer
-          </button>
         </div>
       </div>
     </div>
@@ -3959,7 +3966,7 @@ export default function App() {
   // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
   // person with this once they are actually back to see it
   function showAwayAlert(task, gapMs, sleepStartMs) {
-    setSleepAlert({ task, gapMs, sleepStartMs });
+    setSleepAlert({ task: task || null, gapMs, sleepStartMs });
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
     // delivers it straight to the notification center with no visible toast. Waiting a
     // couple of seconds is an attempt to land just outside that window instead, this is an
@@ -3968,7 +3975,9 @@ export default function App() {
       if ("Notification" in window && Notification.permission === "granted") {
         try {
           const n = new Notification("Clockbook", {
-            body: `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`,
+            body: task
+              ? `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`
+              : `Clockbook detected about ${niceDuration(gapMs)} of away time with no timer running.`,
             tag: "clockbook-sleep-alert",
             requireInteraction: true,
           });
@@ -3985,8 +3994,9 @@ export default function App() {
     if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
     lastAlertRef.current = Date.now();
     const task = runningTaskRef.current;
-    if (!task) return;
-    await pauseTaskAt(task, sleepStartMs);
+    // If a task was running, cut it off exactly when the machine went away. If no task was
+    // running, still preserve the same away period so it can be classified as help or ignored.
+    if (task) await pauseTaskAt(task, sleepStartMs);
     showAwayAlert(task, gapMs, sleepStartMs);
   }
 
@@ -4082,7 +4092,7 @@ export default function App() {
           const task = lockedTask;
           lockedSince = null;
           lockedTask = null;
-          if (task) showAwayAlert(task, gap, sleepStart);
+          showAwayAlert(task, gap, sleepStart);
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
@@ -4854,7 +4864,7 @@ export default function App() {
           currentUser={currentUser}
           onDismiss={() => setSleepAlert(null)}
           onResume={async () => {
-            requestStart(sleepAlert.task);
+            if (sleepAlert.task) requestStart(sleepAlert.task);
             setSleepAlert(null);
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted) => {
