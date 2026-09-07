@@ -3538,6 +3538,16 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
   const [customValue, setCustomValue] = useState("");
   const [customUnit, setCustomUnit] = useState("minutes");
   const [busy, setBusy] = useState(false);
+  // The untracked time keeps growing for as long as this sits open and unanswered, someone
+  // helping a colleague for 25 minutes shouldn't have that logged as the 10 minutes it took
+  // to first trigger this popup, so this recomputes live rather than using a frozen value
+  // from the moment it first appeared.
+  const [liveNow, setLiveNow] = useState(Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setLiveNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+  const gapMs = liveNow - alert.since;
 
   if (mode === "helped" || mode === "received") {
     return (
@@ -3546,7 +3556,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
         members={members}
         currentUser={currentUser}
         onClose={() => setMode("main")}
-        onConfirm={(colleagueId) => onHelp(mode, colleagueId)}
+        onConfirm={(colleagueId) => onHelp(mode, colleagueId, gapMs)}
       />
     );
   }
@@ -3560,7 +3570,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
         <div className="cb-modal-body">
           {mode === "main" && (
             <div style={{ lineHeight: 1.5 }}>
-              This computer looks like it has been active for about <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(alert.gapMs)}</strong> with nothing being tracked.
+              This computer looks like it has been active for about <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(gapMs)}</strong> with nothing being tracked.
             </div>
           )}
           {mode === "snooze" && (
@@ -3598,7 +3608,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
               <button className="cb-btn" disabled={busy} onClick={() => setMode("snooze")}>No</button>
               <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
               <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
-              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(); }}>
+              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs); }}>
                 Yes, I forgot
               </button>
             </>
@@ -4135,7 +4145,7 @@ export default function App() {
       if (nowTick - noTrackSinceRef.current < NO_TRACK_THRESHOLD_MS) return;
       noTrackHandledRef.current = true;
       const gapMs = nowTick - noTrackSinceRef.current;
-      setIdleNoTrackAlert({ gapMs });
+      setIdleNoTrackAlert({ since: noTrackSinceRef.current });
       sendNoTrackNotification(gapMs);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, CHECK_MS);
@@ -4799,15 +4809,15 @@ export default function App() {
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
           }}
-          onStartNew={async () => {
-            forgotToTrackGapMsRef.current = idleNoTrackAlert.gapMs;
+          onStartNew={async (liveGapMs) => {
+            forgotToTrackGapMsRef.current = liveGapMs;
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
             setShowNewTask(true);
           }}
-          onHelp={async (direction, colleagueId) => {
-            await logHelpEvent(direction, colleagueId, idleNoTrackAlert.gapMs / 1000, "idle_prompt");
+          onHelp={async (direction, colleagueId, liveGapMs) => {
+            await logHelpEvent(direction, colleagueId, liveGapMs / 1000, "idle_prompt");
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
