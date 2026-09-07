@@ -3612,14 +3612,15 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
                 <button className="cb-btn" disabled={busy} onClick={() => onSnooze(60 * 60000)}>1 hour</button>
               </div>
               <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Custom</label>
-              <div className="cb-field-row" style={{ alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "stretch", flexWrap: "wrap", gap: 10 }}>
                 <input
-                  type="number" min="1" className="cb-input" style={{ width: 96, flex: "0 0 96px" }}
+                  type="number" min="1" className="cb-input"
+                  style={{ width: 100, flex: "0 0 100px", height: 42, boxSizing: "border-box", margin: 0 }}
                   value={customValue} onChange={(e) => setCustomValue(e.target.value)}
                 />
                 <select
                   className="cb-select"
-                  style={{ flex: "1 1 150px", minWidth: 130 }}
+                  style={{ flex: "1 1 150px", minWidth: 130, height: 42, boxSizing: "border-box", margin: 0 }}
                   value={customUnit}
                   onChange={(e) => setCustomUnit(e.target.value)}
                 >
@@ -3628,7 +3629,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
                 </select>
                 <button
                   className="cb-btn cb-btn-primary"
-                  style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}
+                  style={{ flex: "0 0 auto", whiteSpace: "nowrap", height: 42, boxSizing: "border-box", margin: 0, alignSelf: "stretch" }}
                   disabled={!customValue || busy}
                   onClick={() => onSnooze(parseInt(customValue, 10) * (customUnit === "hours" ? 3600000 : 60000))}
                 >
