@@ -812,6 +812,8 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
 
 @app.get("/api/help-events/summary", response_model=list[schemas.HelpSummaryRow])
 def help_events_summary(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can view this report")
     # Every member who has either given or received help shows up here, so this starts from
     # the member list rather than the events, or someone with only one side of the ledger
     # (e.g. only ever helped, never received) would be missing from their own row
