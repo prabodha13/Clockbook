@@ -111,6 +111,8 @@ def run_startup_migrations():
         with engine.begin() as conn:
             if "task_id" not in existing_help_event_columns:
                 conn.execute(text("ALTER TABLE help_events ADD COLUMN task_id VARCHAR"))
+            if "adjusted" not in existing_help_event_columns:
+                conn.execute(text("ALTER TABLE help_events ADD COLUMN adjusted BOOLEAN DEFAULT FALSE"))
 
 
 @asynccontextmanager
@@ -840,6 +842,7 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
         seconds=payload.seconds,
         source=payload.source,
         task_id=task.id,
+        adjusted=payload.adjusted,
     )
     db.add(event)
     db.commit()
@@ -885,6 +888,7 @@ def help_events_detail(current_member: models.Member = Depends(get_current_membe
             seconds=e.seconds,
             created_at=e.created_at,
             task_id=e.task_id,
+            adjusted=e.adjusted,
         )
         for e in events
     ]
