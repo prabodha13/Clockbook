@@ -106,6 +106,11 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
             if "last_heartbeat_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
+    if "help_events" in inspector.get_table_names():
+        existing_help_event_columns = {c["name"] for c in inspector.get_columns("help_events")}
+        with engine.begin() as conn:
+            if "task_id" not in existing_help_event_columns:
+                conn.execute(text("ALTER TABLE help_events ADD COLUMN task_id VARCHAR"))
 
 
 @asynccontextmanager
@@ -788,6 +793,17 @@ def relay_notification(payload: dict, current_member: models.Member = Depends(ge
     return {"sent": ok}
 
 
+def get_or_create_internal_support_client(db: Session):
+    # A single, dedicated client standing in for firm-internal time that isn't tied to any
+    # real client, reused every time rather than creating a new one per event
+    client = db.query(models.Client).filter(models.Client.name == "Internal Support").first()
+    if not client:
+        client = models.Client(name="Internal Support")
+        db.add(client)
+        db.flush()
+    return client
+
+
 @app.post("/api/help-events", response_model=schemas.HelpEventOut, status_code=201)
 def create_help_event(payload: schemas.HelpEventCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if payload.direction not in ("helped", "received"):
@@ -797,12 +813,33 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
     colleague = db.get(models.Member, payload.colleague_id)
     if not colleague:
         raise HTTPException(404, "Colleague not found")
+
+    client = get_or_create_internal_support_client(db)
+    now = datetime.utcnow()
+    start = now - timedelta(seconds=payload.seconds)
+    task_name = f"Helped {colleague.name}" if payload.direction == "helped" else f"Received help from {colleague.name}"
+    task = models.TaskInstance(
+        client_id=client.id,
+        client_name=client.name,
+        name=task_name,
+        task_type="Non-billable: Colleague Support",
+        owner_id=current_member.id,
+        status="submitted",
+        segments=[{"start": start.isoformat() + "Z", "end": now.isoformat() + "Z"}],
+        note=f"Logged from the {'timer paused' if payload.source == 'sleep_alert' else 'forgot to track'} prompt.",
+        submitted_at=now,
+        submitted_by_id=current_member.id,
+    )
+    db.add(task)
+    db.flush()
+
     event = models.HelpEvent(
         member_id=current_member.id,
         colleague_id=payload.colleague_id,
         direction=payload.direction,
         seconds=payload.seconds,
         source=payload.source,
+        task_id=task.id,
     )
     db.add(event)
     db.commit()
@@ -831,6 +868,25 @@ def help_events_summary(current_member: models.Member = Depends(get_current_memb
             row["received_seconds"] += e.seconds
             row["received_count"] += 1
     return [r for r in by_member.values() if r["helped_count"] > 0 or r["received_count"] > 0]
+
+
+@app.get("/api/help-events/detail", response_model=list[schemas.HelpEventDetail])
+def help_events_detail(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can view this report")
+    events = db.query(models.HelpEvent).order_by(models.HelpEvent.created_at.desc()).all()
+    names = {m.id: m.name for m in db.query(models.Member).all()}
+    return [
+        schemas.HelpEventDetail(
+            id=e.id,
+            member_name=names.get(e.member_id, "Unknown"),
+            colleague_name=names.get(e.colleague_id, "Unknown"),
+            direction=e.direction,
+            seconds=e.seconds,
+            created_at=e.created_at,
+        )
+        for e in events
+    ]
 
 
 # ---------------------------------------------------------------
@@ -1469,11 +1525,23 @@ def delete_task(task_id: str, current_member: models.Member = Depends(get_curren
     task = db.get(models.TaskInstance, task_id)
     if not task:
         return None
+    linked_help_event = db.query(models.HelpEvent).filter(models.HelpEvent.task_id == task_id).first()
     if not is_admin_or_above(current_member.role):
         if task.owner_id != current_member.id:
             raise HTTPException(403, "This task belongs to someone else")
         if task.status == "submitted":
-            raise HTTPException(403, "Only an admin can delete a task that has already been submitted")
+            # A task created from logging help given or received can still be removed by the
+            # person who logged it, but only for a short window afterward, matching the
+            # 30-minute "changed my mind" allowance for these specifically. Past that, or for
+            # any other submitted task, only an admin can remove it, unchanged from before.
+            within_grace_window = (
+                linked_help_event is not None
+                and (datetime.utcnow() - linked_help_event.created_at).total_seconds() <= 1800
+            )
+            if not within_grace_window:
+                raise HTTPException(403, "Only an admin can delete a task that has already been submitted")
+    if linked_help_event:
+        db.delete(linked_help_event)
     db.delete(task)
     db.commit()
     return None

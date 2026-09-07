@@ -253,6 +253,7 @@ class HelpEventOut(BaseModel):
     seconds: float
     source: str
     created_at: datetime
+    task_id: Optional[str] = None
 
 
 class HelpSummaryRow(BaseModel):
@@ -262,3 +263,16 @@ class HelpSummaryRow(BaseModel):
     received_seconds: float
     helped_count: int
     received_count: int
+
+
+class HelpEventDetail(BaseModel):
+    id: str
+    member_name: str
+    colleague_name: str
+    direction: str
+    seconds: float
+    created_at: datetime
+
+    @field_serializer("created_at")
+    def serialize_as_utc(self, value: datetime, _info):
+        return value.isoformat() + "Z"
