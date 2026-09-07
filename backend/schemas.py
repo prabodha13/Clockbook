@@ -272,6 +272,7 @@ class HelpEventDetail(BaseModel):
     direction: str
     seconds: float
     created_at: datetime
+    task_id: Optional[str] = None
 
     @field_serializer("created_at")
     def serialize_as_utc(self, value: datetime, _info):

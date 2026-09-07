@@ -884,6 +884,7 @@ def help_events_detail(current_member: models.Member = Depends(get_current_membe
             direction=e.direction,
             seconds=e.seconds,
             created_at=e.created_at,
+            task_id=e.task_id,
         )
         for e in events
     ]
