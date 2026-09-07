@@ -3599,25 +3599,30 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
           )}
           {mode === "snooze" && (
             <div>
-              <div className="cb-field-row" style={{ marginBottom: 10, flexWrap: "wrap" }}>
+              <div className="cb-field-row" style={{ marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
                 <button className="cb-btn" disabled={busy} onClick={() => onSnooze(15 * 60000)}>15 min</button>
                 <button className="cb-btn" disabled={busy} onClick={() => onSnooze(30 * 60000)}>30 min</button>
                 <button className="cb-btn" disabled={busy} onClick={() => onSnooze(60 * 60000)}>1 hour</button>
               </div>
-              <div className="cb-field-row" style={{ alignItems: "flex-end" }}>
-                <div className="cb-field" style={{ flex: "none" }}>
-                  <label className="cb-label">Custom</label>
-                  <input
-                    type="number" min="1" className="cb-input" style={{ width: 80 }}
-                    value={customValue} onChange={(e) => setCustomValue(e.target.value)}
-                  />
-                </div>
-                <select className="cb-select" value={customUnit} onChange={(e) => setCustomUnit(e.target.value)}>
+              <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Custom</label>
+              <div className="cb-field-row" style={{ alignItems: "center", flexWrap: "wrap", gap: 10 }}>
+                <input
+                  type="number" min="1" className="cb-input" style={{ width: 96, flex: "0 0 96px" }}
+                  value={customValue} onChange={(e) => setCustomValue(e.target.value)}
+                />
+                <select
+                  className="cb-select"
+                  style={{ flex: "1 1 150px", minWidth: 130 }}
+                  value={customUnit}
+                  onChange={(e) => setCustomUnit(e.target.value)}
+                >
                   <option value="minutes">minutes</option>
                   <option value="hours">hours</option>
                 </select>
                 <button
-                  className="cb-btn cb-btn-primary" disabled={!customValue || busy}
+                  className="cb-btn cb-btn-primary"
+                  style={{ flex: "0 0 auto", whiteSpace: "nowrap" }}
+                  disabled={!customValue || busy}
                   onClick={() => onSnooze(parseInt(customValue, 10) * (customUnit === "hours" ? 3600000 : 60000))}
                 >
                   Remind me
@@ -3638,7 +3643,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
             </>
           )}
           {mode === "snooze" && (
-            <button className="cb-btn cb-btn-ghost" onClick={() => setMode("main")}>Back</button>
+            <button className="cb-btn cb-btn-ghost" style={{ marginRight: "auto" }} onClick={() => setMode("main")}>Back</button>
           )}
         </div>
       </div>
