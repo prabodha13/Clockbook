@@ -810,17 +810,21 @@ def get_or_create_internal_support_client(db: Session):
 
 @app.post("/api/ad-hoc-meetings/start", response_model=schemas.TaskOut, status_code=201)
 def start_ad_hoc_meeting(payload: schemas.AdHocMeetingCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    colleague = db.get(models.Member, payload.colleague_id)
-    if not colleague:
-        raise HTTPException(404, "Colleague not found")
-    if colleague.id == current_member.id:
-        raise HTTPException(400, "Select another colleague")
+    # colleague_id is optional so the Ctrl+M shortcut can start immediately. The dashboard
+    # button can still choose a colleague before starting, and both paths use the same timer.
+    colleague = None
+    if payload.colleague_id:
+        colleague = db.get(models.Member, payload.colleague_id)
+        if not colleague:
+            raise HTTPException(404, "Colleague not found")
+        if colleague.id == current_member.id:
+            raise HTTPException(400, "Select another colleague")
 
     client = get_or_create_internal_support_client(db)
     task = models.TaskInstance(
         client_id=client.id,
         client_name=client.name,
-        name=f"Ad hoc meeting with {colleague.name}",
+        name=f"Ad hoc meeting with {colleague.name}" if colleague else "Ad hoc meeting",
         task_type="Non-billable: Colleague Meeting",
         owner_id=current_member.id,
         status="todo",
@@ -834,6 +838,68 @@ def start_ad_hoc_meeting(payload: schemas.AdHocMeetingCreate, current_member: mo
     # Reuse the app's existing start-task path so the normal one-running-timer rule stays
     # exactly the same: any current timer is paused and this meeting becomes the active timer.
     return start_task(task.id, schemas.TaskStart(), current_member, db)
+
+
+@app.post("/api/ad-hoc-meetings/{task_id}/finish", response_model=schemas.TaskOut)
+def finish_ad_hoc_meeting(task_id: str, payload: schemas.AdHocMeetingFinish, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    task = db.get(models.TaskInstance, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
+    if task.task_type != "Non-billable: Colleague Meeting":
+        raise HTTPException(400, "This is not an ad hoc meeting")
+    if task.status not in ("running", "paused"):
+        raise HTTPException(400, "This meeting is already completed")
+
+    colleague = db.get(models.Member, payload.colleague_id)
+    if not colleague:
+        raise HTTPException(404, "Colleague not found")
+    if colleague.id == current_member.id:
+        raise HTTPException(400, "Select another colleague")
+    if payload.interaction not in ("general", "helped", "received"):
+        raise HTTPException(400, "interaction must be general, helped, or received")
+    context = payload.context.strip()
+    if not context:
+        raise HTTPException(400, "Meeting context is required")
+
+    task.segments = close_open_segment(task.segments)
+    seconds = elapsed_seconds(task.segments)
+    task.status = "submitted"
+    task.submitted_at = datetime.utcnow()
+    task.submitted_by_id = current_member.id
+    task.pushed_to_karbon = False
+    task.note = context
+
+    if payload.interaction == "helped":
+        task.name = f"Helped {colleague.name}"
+        task.task_type = "Non-billable: Colleague Support"
+    elif payload.interaction == "received":
+        task.name = f"Received help from {colleague.name}"
+        task.task_type = "Non-billable: Colleague Support"
+    else:
+        task.name = f"Ad hoc meeting with {colleague.name}"
+
+    db.flush()
+
+    # Help classifications feed the existing help report without creating a second task or
+    # duplicating the tracked time. General collaboration remains a normal meeting only.
+    if payload.interaction in ("helped", "received"):
+        event = models.HelpEvent(
+            member_id=current_member.id,
+            colleague_id=colleague.id,
+            direction=payload.interaction,
+            seconds=seconds,
+            source="ad_hoc_meeting",
+            task_id=task.id,
+            adjusted=False,
+            context=context,
+        )
+        db.add(event)
+
+    db.commit()
+    db.refresh(task)
+    return task
 
 
 @app.post("/api/help-events", response_model=schemas.HelpEventOut, status_code=201)

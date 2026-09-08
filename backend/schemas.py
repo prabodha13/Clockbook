@@ -238,7 +238,13 @@ class TaskReassign(BaseModel):
 
 
 class AdHocMeetingCreate(BaseModel):
+    colleague_id: Optional[str] = None
+
+
+class AdHocMeetingFinish(BaseModel):
     colleague_id: str
+    interaction: str  # "general", "helped", or "received"
+    context: str
 
 
 class HelpEventCreate(BaseModel):
