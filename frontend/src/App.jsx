@@ -838,14 +838,17 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
       }));
   })();
 
-  const myTasks = tasks.filter((t) => t.owner_id === currentUser.id);
-  const todaySeconds = myTasks.reduce((sum, t) => {
+  // Keep the dashboard summary in sync with the person being viewed.
+  // "Everyone" keeps the existing behavior of showing the signed-in person's own summary.
+  const statsMember = viewedMember || currentUser;
+  const statsTasks = tasks.filter((t) => t.owner_id === statsMember.id);
+  const todaySeconds = statsTasks.reduce((sum, t) => {
     if (t.status === "submitted" && isToday(t.submitted_at)) return sum + elapsedSeconds(t, now);
     if (t.status === "running" || t.status === "paused") return sum + elapsedSeconds(t, now);
     return sum;
   }, 0);
-  const myRunningCount = myTasks.filter((t) => t.status === "running" || t.status === "paused").length;
-  const mySubmittedTodayCount = myTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
+  const myRunningCount = statsTasks.filter((t) => t.status === "running" || t.status === "paused").length;
+  const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
 
   if (showActiveOnly) {
@@ -951,11 +954,11 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
       <div className="cb-stats">
         <div className="cb-stat">
           <div className="cb-stat-num cb-mono">{formatHM(todaySeconds)}</div>
-          <div className="cb-stat-label">Tracked today ({currentUser.name.split(" ")[0]})</div>
+          <div className="cb-stat-label">Tracked today ({statsMember.name.split(" ")[0]})</div>
         </div>
         <div className="cb-stat">
           <div className="cb-stat-num">{myRunningCount}</div>
-          <div className="cb-stat-label">Your tasks in progress</div>
+          <div className="cb-stat-label">{viewedMember ? `${viewedMember.name.split(" ")[0]}'s tasks in progress` : "Your tasks in progress"}</div>
         </div>
         <div className="cb-stat">
           <div className="cb-stat-num">{mySubmittedTodayCount}</div>
