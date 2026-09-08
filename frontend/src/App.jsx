@@ -24,6 +24,31 @@ function elapsedSeconds(task, nowMs) {
   return total;
 }
 
+// Only count the portion of each segment that falls inside today in the viewer's
+// local timezone. This prevents an old paused/running task, or a task submitted
+// today with earlier segments, from inflating the Dashboard's "Tracked today" total.
+function elapsedSecondsToday(task, nowMs) {
+  const nowDate = new Date(nowMs);
+  const todayStartMs = new Date(
+    nowDate.getFullYear(),
+    nowDate.getMonth(),
+    nowDate.getDate(),
+    0, 0, 0, 0
+  ).getTime();
+
+  let total = 0;
+  for (const seg of task.segments || []) {
+    const rawStart = new Date(seg.start).getTime();
+    const rawEnd = seg.end ? new Date(seg.end).getTime() : nowMs;
+    if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
+
+    const start = Math.max(rawStart, todayStartMs);
+    const end = Math.min(rawEnd, nowMs);
+    total += Math.max(0, end - start) / 1000;
+  }
+  return total;
+}
+
 function formatHMS(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds));
   const h = Math.floor(s / 3600);
@@ -842,11 +867,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
   // "Everyone" keeps the existing behavior of showing the signed-in person's own summary.
   const statsMember = viewedMember || currentUser;
   const statsTasks = tasks.filter((t) => t.owner_id === statsMember.id);
-  const todaySeconds = statsTasks.reduce((sum, t) => {
-    if (t.status === "submitted" && isToday(t.submitted_at)) return sum + elapsedSeconds(t, now);
-    if (t.status === "running" || t.status === "paused") return sum + elapsedSeconds(t, now);
-    return sum;
-  }, 0);
+  const todaySeconds = statsTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
   const myRunningCount = statsTasks.filter((t) => t.status === "running" || t.status === "paused").length;
   const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
