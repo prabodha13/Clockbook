@@ -206,31 +206,6 @@ function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [inactivityAuditEnabled, setInactivityAuditEnabled] = useState(null);
-  const [savingInactivityAudit, setSavingInactivityAudit] = useState(false);
-
-  useEffect(() => {
-    if (!isSuperAdmin) return;
-    let alive = true;
-    api.getInactivityAuditStatus()
-      .then((r) => { if (alive) setInactivityAuditEnabled(!!r.enabled); })
-      .catch(() => { if (alive) setInactivityAuditEnabled(false); });
-    return () => { alive = false; };
-  }, [isSuperAdmin]);
-
-  async function toggleInactivityAudit() {
-    if (!isSuperAdmin || savingInactivityAudit || inactivityAuditEnabled == null) return;
-    setSavingInactivityAudit(true);
-    setError("");
-    try {
-      const result = await api.setInactivityAuditStatus(!inactivityAuditEnabled);
-      setInactivityAuditEnabled(!!result.enabled);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSavingInactivityAudit(false);
-    }
-  }
   const [busy, setBusy] = useState(false);
 
   async function submit(e) {
@@ -2005,6 +1980,36 @@ function SettingsView({
   const [repairingId, setRepairingId] = useState(null);
   const [repairResults, setRepairResults] = useState({});
   const [error, setError] = useState("");
+  const [inactivityAuditEnabled, setInactivityAuditEnabled] = useState(null);
+  const [savingInactivityAudit, setSavingInactivityAudit] = useState(false);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    let alive = true;
+    api.getInactivityAuditStatus()
+      .then((r) => { if (alive) setInactivityAuditEnabled(!!r.enabled); })
+      .catch((err) => {
+        if (alive) {
+          setInactivityAuditEnabled(false);
+          setError(err.message);
+        }
+      });
+    return () => { alive = false; };
+  }, [isSuperAdmin]);
+
+  async function toggleInactivityAudit() {
+    if (!isSuperAdmin || savingInactivityAudit || inactivityAuditEnabled == null) return;
+    setSavingInactivityAudit(true);
+    setError("");
+    try {
+      const result = await api.setInactivityAuditStatus(!inactivityAuditEnabled);
+      setInactivityAuditEnabled(!!result.enabled);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingInactivityAudit(false);
+    }
+  }
 
   async function submitRole(e) {
     e.preventDefault();
@@ -2166,6 +2171,34 @@ function SettingsView({
               <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {isSuperAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Audit</div>
+              <div className="cb-tmpl-name">Inactivity audit recording</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>
+              Records supported screen-lock and sleep/inactive-browser periods for the super-admin inactivity audit report. Turning this off stops new audit events from being recorded.
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600 }}>
+                Status: {inactivityAuditEnabled == null ? "Loading..." : inactivityAuditEnabled ? "Enabled" : "Disabled"}
+              </span>
+              <button
+                className={`cb-btn cb-btn-sm ${inactivityAuditEnabled ? "" : "cb-btn-primary"}`}
+                disabled={savingInactivityAudit || inactivityAuditEnabled == null}
+                onClick={toggleInactivityAudit}
+              >
+                {savingInactivityAudit ? "Saving..." : inactivityAuditEnabled ? "Turn off" : "Turn on"}
+              </button>
+            </div>
           </div>
         </div>
       )}
