@@ -110,8 +110,8 @@ export const api = {
     if (startAt) body.start_at = startAt;
     return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) });
   },
-  createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false) =>
-    request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted }) }),
+  createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false, context = "") =>
+    request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted, context }) }),
   getHelpEventsSummary: () => request("/help-events/summary"),
   getHelpEventsDetail: () => request("/help-events/detail"),
   sendHeartbeat: (id) => request(`/tasks/${id}/heartbeat`, { method: "POST" }),

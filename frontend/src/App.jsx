@@ -3360,6 +3360,7 @@ function HelpReportView() {
                                                   <th>When</th>
                                                   <th>Reported by</th>
                                                   <th>Direction</th>
+                                                  <th>Context</th>
                                                   <th className="num">Duration</th>
                                                 </tr>
                                               </thead>
@@ -3369,6 +3370,7 @@ function HelpReportView() {
                                                     <td>{formatDate(e.created_at)}, {new Date(e.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
                                                     <td>{e.member_name}</td>
                                                     <td>{e.direction === "helped" ? `Helped ${e.colleague_name}` : `Received help from ${e.colleague_name}`}</td>
+                                                    <td>{e.context || "—"}</td>
                                                     <td className="num cb-mono">{formatHM(e.seconds)}{e.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                                                   </tr>
                                                 ))}
@@ -3410,6 +3412,7 @@ function HelpReportView() {
                 <th>Person</th>
                 <th>Action</th>
                 <th>Colleague</th>
+                <th>Context</th>
                 <th className="num">Duration</th>
                 <th>When</th>
                 <th></th>
@@ -3421,6 +3424,7 @@ function HelpReportView() {
                   <td>{d.member_name}</td>
                   <td>{d.direction === "helped" ? "Helped" : "Received help from"}</td>
                   <td>{d.colleague_name}</td>
+                  <td>{d.context || "—"}</td>
                   <td className="num cb-mono">{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                   <td>{formatDate(d.created_at)}, {new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
                   <td>
@@ -3507,6 +3511,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
 // entry points into "I helped" / "I received help" use the exact same picker.
 function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onClose, onConfirm }) {
   const [colleagueId, setColleagueId] = useState("");
+  const [context, setContext] = useState("");
   const [busy, setBusy] = useState(false);
   // Frozen once, at the moment this opens, so the field doesn't shift under the person while
   // they're looking at or editing it, same fix already applied to the Complete modal
@@ -3546,12 +3551,23 @@ function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onC
           <div className="cb-hint" style={{ marginTop: 6 }}>
             Based on how long this computer looked inactive{isAdjusted ? ", you are changing this" : ""}.
           </div>
+          <div className="cb-field" style={{ marginTop: 12 }}>
+            <label className="cb-label">What was the help about?</label>
+            <textarea
+              className="cb-input"
+              rows={3}
+              value={context}
+              onChange={(e) => setContext(e.target.value)}
+              placeholder="Briefly describe the help given or received"
+              required
+            />
+          </div>
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={!colleagueId || busy || editedSeconds <= 0}
-            onClick={async () => { setBusy(true); await onConfirm(colleagueId, editedSeconds, isAdjusted); }}
+            className="cb-btn cb-btn-primary" disabled={!colleagueId || !context.trim() || busy || editedSeconds <= 0}
+            onClick={async () => { setBusy(true); await onConfirm(colleagueId, editedSeconds, isAdjusted, context.trim()); }}
           >
             Confirm
           </button>
@@ -4249,9 +4265,9 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false) {
+  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false, context = "") {
     try {
-      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted);
+      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted, context);
       showToast(direction === "helped" ? "Logged, thanks for helping out" : "Logged, glad you got help");
     } catch (err) {
       showToast("Could not log that, please try again", true);
@@ -4889,8 +4905,8 @@ export default function App() {
             if (sleepAlert.task) requestStart(sleepAlert.task);
             setSleepAlert(null);
           }}
-          onHelp={async (direction, colleagueId, seconds, isAdjusted) => {
-            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted);
+          onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
+            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted, context);
             setSleepAlert(null);
           }}
         />
@@ -4913,8 +4929,8 @@ export default function App() {
             setIdleNoTrackAlert(null);
             setShowNewTask(true);
           }}
-          onHelp={async (direction, colleagueId, seconds, isAdjusted) => {
-            await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted);
+          onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
+            await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted, context);
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
