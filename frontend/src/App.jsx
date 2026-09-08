@@ -3556,6 +3556,71 @@ function AdHocMeetingModal({ members, currentUser, onClose, onStart }) {
   );
 }
 
+function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfirm }) {
+  const namePrefix = "Ad hoc meeting with ";
+  const existingName = task.name && task.name.startsWith(namePrefix) ? task.name.slice(namePrefix.length) : "";
+  const existingColleague = members.find((m) => m.id !== currentUser.id && m.name === existingName);
+  const [colleagueId, setColleagueId] = useState(existingColleague ? existingColleague.id : "");
+  const [interaction, setInteraction] = useState("general");
+  const [context, setContext] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const options = members.filter((m) => m.id !== currentUser.id);
+  const valid = !!colleagueId && context.trim().length >= 3;
+
+  async function finish() {
+    if (!valid || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirm(task.id, colleagueId, interaction, context.trim());
+    } catch (err) {
+      setError(err.message || "Could not complete the meeting");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 500 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><Video size={17} />Complete ad hoc meeting</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-field">
+            <label className="cb-label">Who was the meeting with?</label>
+            <select className="cb-select" value={colleagueId} onChange={(e) => setColleagueId(e.target.value)} autoFocus>
+              <option value="">Select a colleague...</option>
+              {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div className="cb-field">
+            <label className="cb-label">What kind of interaction was it?</label>
+            <div className="cb-tabs" style={{ width: "100%" }}>
+              <button type="button" className={`cb-tab ${interaction === "general" ? "active" : ""}`} onClick={() => setInteraction("general")}>General meeting</button>
+              <button type="button" className={`cb-tab ${interaction === "helped" ? "active" : ""}`} onClick={() => setInteraction("helped")}>I helped them</button>
+              <button type="button" className={`cb-tab ${interaction === "received" ? "active" : ""}`} onClick={() => setInteraction("received")}>They helped me</button>
+            </div>
+          </div>
+          <div className="cb-field">
+            <label className="cb-label">What was it about?</label>
+            <textarea className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Brief context..." />
+            <div className="cb-hint">Required. This becomes the meeting/support context in Clockbook.</div>
+          </div>
+          {error && <div className="cb-error">{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="cb-btn cb-btn-primary" disabled={!valid || busy} onClick={finish}>
+            <CheckCircle2 size={14} />{busy ? "Completing..." : "Complete meeting"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ManualHelpModal({ members, currentUser, onClose, onConfirm }) {
   const [direction, setDirection] = useState("helped");
   const [colleagueId, setColleagueId] = useState("");
@@ -3959,6 +4024,29 @@ export default function App() {
     const iv = setInterval(() => setNow(Date.now() + clockOffsetRef.current), 1000);
     return () => clearInterval(iv);
   }, []);
+
+  // Ctrl+M is intentionally scoped to the Clockbook page. It is only handled while this
+  // app has focus, never globally at the OS level, and never while the person is typing in
+  // an input, select, textarea, or editable field. The normal start-task endpoint still
+  // enforces one running timer, so an existing task is paused before this meeting starts.
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser) return;
+    function handleShortcut(e) {
+      if (e.repeat || !e.ctrlKey || e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== "m") return;
+      const target = e.target;
+      const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
+      if (tag === "input" || tag === "textarea" || tag === "select" || (target && target.isContentEditable)) return;
+      e.preventDefault();
+      const alreadyMeeting = tasks.some((t) => t.owner_id === currentUser.id && t.status === "running" && t.task_type === "Non-billable: Colleague Meeting");
+      if (alreadyMeeting) {
+        showToast("An ad hoc meeting is already running");
+        return;
+      }
+      startAdHocMeeting(null);
+    }
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [authState, currentUser, tasks]);
 
   const showToast = useCallback((msg, isError) => {
     setToast({ msg, isError: !!isError });
@@ -4823,8 +4911,8 @@ export default function App() {
     setTrackedMetrics((prev) => prev.filter((m) => m.id !== id));
   }
 
-  async function startAdHocMeeting(colleagueId) {
-    const colleague = members.find((m) => m.id === colleagueId);
+  async function startAdHocMeeting(colleagueId = null) {
+    const colleague = colleagueId ? members.find((m) => m.id === colleagueId) : null;
     try {
       await api.startAdHocMeeting(colleagueId);
       const refreshed = await api.getTasks();
@@ -4833,6 +4921,18 @@ export default function App() {
       showToast(`Now tracking ad hoc meeting${colleague ? ` with ${colleague.name}` : ""}`);
     } catch (err) {
       showToast(err.message || "Could not start the meeting", true);
+      throw err;
+    }
+  }
+
+  async function finishAdHocMeeting(taskId, colleagueId, interaction, context) {
+    try {
+      const updated = await api.finishAdHocMeeting(taskId, colleagueId, interaction, context);
+      mergeTask(updated);
+      setCompletingTask(null);
+      showToast("Ad hoc meeting completed");
+    } catch (err) {
+      showToast(err.message || "Could not complete the meeting", true);
       throw err;
     }
   }
@@ -5052,9 +5152,14 @@ export default function App() {
           }}
         />
       )}
-      {completingTask && (
+      {completingTask && completingTask.task_type === "Non-billable: Colleague Meeting" ? (
+        <AdHocMeetingFinishModal
+          task={completingTask} members={members} currentUser={currentUser}
+          onClose={() => setCompletingTask(null)} onConfirm={finishAdHocMeeting}
+        />
+      ) : completingTask ? (
         <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
-      )}
+      ) : null}
       {showAddMember && (
         <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={addTeammate} />
       )}
