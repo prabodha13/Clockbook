@@ -206,6 +206,31 @@ function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [inactivityAuditEnabled, setInactivityAuditEnabled] = useState(null);
+  const [savingInactivityAudit, setSavingInactivityAudit] = useState(false);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    let alive = true;
+    api.getInactivityAuditStatus()
+      .then((r) => { if (alive) setInactivityAuditEnabled(!!r.enabled); })
+      .catch(() => { if (alive) setInactivityAuditEnabled(false); });
+    return () => { alive = false; };
+  }, [isSuperAdmin]);
+
+  async function toggleInactivityAudit() {
+    if (!isSuperAdmin || savingInactivityAudit || inactivityAuditEnabled == null) return;
+    setSavingInactivityAudit(true);
+    setError("");
+    try {
+      const result = await api.setInactivityAuditStatus(!inactivityAuditEnabled);
+      setInactivityAuditEnabled(!!result.enabled);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingInactivityAudit(false);
+    }
+  }
   const [busy, setBusy] = useState(false);
 
   async function submit(e) {
@@ -3542,6 +3567,122 @@ function HelpReportView() {
   );
 }
 
+function InactivityAuditView({ members }) {
+  const localDate = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const today = new Date();
+  const weekAgo = new Date();
+  weekAgo.setDate(today.getDate() - 6);
+  const [dateFrom, setDateFrom] = useState(localDate(weekAgo));
+  const [dateTo, setDateTo] = useState(localDate(today));
+  const [enabled, setEnabled] = useState(null);
+  const [events, setEvents] = useState(null);
+  const [personId, setPersonId] = useState("");
+  const [error, setError] = useState(false);
+
+  const load = useCallback(async () => {
+    setError(false);
+    try {
+      const status = await api.getInactivityAuditStatus();
+      setEnabled(!!status.enabled);
+      if (!status.enabled) {
+        setEvents([]);
+        return;
+      }
+      setEvents(await api.getInactivityEvents(dateFrom, dateTo));
+    } catch (err) {
+      setError(true);
+    }
+  }, [dateFrom, dateTo]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const filteredEvents = useMemo(() => {
+    const rows = events || [];
+    return personId ? rows.filter((e) => e.member_id === personId) : rows;
+  }, [events, personId]);
+
+  const summary = useMemo(() => {
+    const byMember = new Map();
+    for (const e of filteredEvents) {
+      if (!byMember.has(e.member_id)) byMember.set(e.member_id, { member_id: e.member_id, member_name: e.member_name, seconds: 0, count: 0, longest: 0 });
+      const row = byMember.get(e.member_id);
+      row.seconds += e.seconds;
+      row.count += 1;
+      row.longest = Math.max(row.longest, e.seconds);
+    }
+    return Array.from(byMember.values()).sort((a, b) => b.seconds - a.seconds);
+  }, [filteredEvents]);
+
+  const kindLabel = (kind) => kind === "screen_locked" ? "Screen locked" : kind === "sleep_gap" ? "Sleep / suspended browser" : "Browser closed / offline gap";
+
+  return (
+    <div>
+      <div className="cb-page-head">
+        <div>
+          <div className="cb-page-title cb-serif">Inactivity audit</div>
+          <div className="cb-page-sub">Super-admin audit of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+          <div>
+            <div className="cb-label">Person</div>
+            <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ minWidth: 170 }}>
+              <option value="">All people</option>
+              {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
+          <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
+          <button className="cb-btn" onClick={load}>Refresh</button>
+        </div>
+      </div>
+      {enabled === false && <div className="cb-notice">Inactivity audit recording is currently off. A super admin can turn it on from Settings.</div>}
+      {error && <div className="cb-empty">Could not load the inactivity audit.</div>}
+      {enabled && events === null && <TableSkeleton rows={4} />}
+      {enabled && events !== null && (
+        <>
+          <div className="cb-group-head" style={{ marginTop: 18 }}><div className="cb-group-title">Summary</div><div className="cb-group-count">{summary.length}</div></div>
+          {summary.length === 0 ? <div className="cb-empty">No inactivity events were recorded in this period.</div> : (
+            <div className="cb-table-wrap">
+              <table className="cb-table"><thead><tr><th>Person</th><th className="num">Total detected</th><th className="num">Periods</th><th className="num">Longest</th></tr></thead>
+              <tbody>{summary.map((r) => <tr key={r.member_id}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.seconds)}</td><td className="num cb-mono">{r.count}</td><td className="num cb-mono">{formatHM(r.longest)}</td></tr>)}</tbody></table>
+            </div>
+          )}
+          <div className="cb-group-head" style={{ marginTop: 28 }}><div className="cb-group-title">Individual periods</div><div className="cb-group-count">{filteredEvents.length}</div></div>
+          {filteredEvents.length > 0 && (
+            <div className="cb-table-wrap">
+              <table className="cb-table"><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Duration</th></tr></thead>
+              <tbody>{filteredEvents.map((e) => <tr key={e.id}>
+                <td>{e.member_name}</td><td>{kindLabel(e.kind)}</td>
+                <td>{formatDate(e.started_at)}, {new Date(e.started_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
+                <td>{formatDate(e.ended_at)}, {new Date(e.ended_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
+                <td className="num cb-mono">{formatHM(e.seconds)}</td>
+              </tr>)}</tbody></table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function SuperAdminReportsView({ members }) {
+  const [mode, setMode] = useState("help");
+  return (
+    <div>
+      <div className="cb-tabs cb-tabs-plain" style={{ marginBottom: 16, width: "fit-content" }}>
+        <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
+        <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Inactivity audit</button>
+      </div>
+      {mode === "help" ? <HelpReportView /> : <InactivityAuditView members={members} />}
+    </div>
+  );
+}
+
 function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
@@ -4305,11 +4446,26 @@ export default function App() {
     }
   }
 
+  async function recordInactivity(kind, startedMs, endedMs, task) {
+    try {
+      const result = await api.createInactivityEvent(
+        kind,
+        new Date(startedMs + clockOffsetRef.current).toISOString(),
+        new Date(endedMs + clockOffsetRef.current).toISOString(),
+        task ? task.id : null,
+      );
+      return result && result.recorded ? result.id : null;
+    } catch (err) {
+      // Audit recording must never interfere with the user's timer or away-time recovery flow.
+      return null;
+    }
+  }
+
   // Shows the same "you were away" popup and notification as before, kept separate from
   // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
   // person with this once they are actually back to see it
-  function showAwayAlert(task, gapMs, sleepStartMs) {
-    setSleepAlert({ task: task || null, gapMs, sleepStartMs });
+  function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise = null) {
+    setSleepAlert({ task: task || null, gapMs, sleepStartMs, inactivityEventPromise });
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
     // delivers it straight to the notification center with no visible toast. Waiting a
     // couple of seconds is an attempt to land just outside that window instead, this is an
@@ -4337,10 +4493,11 @@ export default function App() {
     if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
     lastAlertRef.current = Date.now();
     const task = runningTaskRef.current;
+    const inactivityEventPromise = recordInactivity("sleep_gap", sleepStartMs, sleepStartMs + gapMs, task);
     // If a task was running, cut it off exactly when the machine went away. If no task was
     // running, still preserve the same away period so it can be classified as help or ignored.
     if (task) await pauseTaskAt(task, sleepStartMs);
-    showAwayAlert(task, gapMs, sleepStartMs);
+    showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise);
   }
 
   const wasHiddenSinceLastCheckRef = useRef(false);
@@ -4435,7 +4592,9 @@ export default function App() {
           const task = lockedTask;
           lockedSince = null;
           lockedTask = null;
-          showAwayAlert(task, gap, sleepStart);
+          lastAlertRef.current = Date.now();
+          const inactivityEventPromise = recordInactivity("screen_locked", sleepStart, sleepStart + gap, task);
+          showAwayAlert(task, gap, sleepStart, inactivityEventPromise);
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
@@ -4570,9 +4729,9 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false, context = "") {
+  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false, context = "", inactivityEventId = null) {
     try {
-      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted, context);
+      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted, context, inactivityEventId);
       showToast(direction === "helped" ? "Logged, thanks for helping out" : "Logged, glad you got help");
     } catch (err) {
       showToast("Could not log that, please try again", true);
@@ -4635,7 +4794,8 @@ export default function App() {
       try {
         const updated = await api.pauseTask(task.id, new Date(lastSeen).toISOString());
         mergeTask(updated);
-        setSleepAlert({ task, gapMs, sleepStartMs: lastSeen, causePhrase: "was closed, shut down, or lost connection" });
+        const inactivityEventPromise = recordInactivity("stale_gap", lastSeen - clockOffsetRef.current, Date.now(), task);
+        setSleepAlert({ task, gapMs, sleepStartMs: lastSeen, causePhrase: "was closed, shut down, or lost connection", inactivityEventPromise });
       } catch (err) {
         // If this fails, the task is still visibly running on the dashboard and the person
         // can pause or adjust it themselves, nothing is silently lost
@@ -5204,7 +5364,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && currentUser.role === "super_admin" && <HelpReportView />}
+            {view === "reports" && currentUser.role === "super_admin" && <SuperAdminReportsView members={members} />}
             {view === "settings" && isAdmin && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
@@ -5268,7 +5428,10 @@ export default function App() {
             setSleepAlert(null);
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
-            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted, context);
+            const inactivityEventId = sleepAlert.inactivityEventPromise
+              ? await sleepAlert.inactivityEventPromise
+              : null;
+            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted, context, inactivityEventId);
             setSleepAlert(null);
           }}
         />

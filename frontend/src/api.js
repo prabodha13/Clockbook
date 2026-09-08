@@ -110,14 +110,25 @@ export const api = {
     if (startAt) body.start_at = startAt;
     return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) });
   },
-  createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false, context = "") =>
-    request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted, context }) }),
+  createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false, context = "", inactivityEventId = null) =>
+    request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted, context, inactivity_event_id: inactivityEventId }) }),
   startAdHocMeeting: (colleagueId = null) =>
     request("/ad-hoc-meetings/start", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId }) }),
   finishAdHocMeeting: (taskId, colleagueId, interaction, context) =>
     request(`/ad-hoc-meetings/${taskId}/finish`, { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, interaction, context }) }),
   getHelpEventsSummary: () => request("/help-events/summary"),
   getHelpEventsDetail: () => request("/help-events/detail"),
+  createInactivityEvent: (kind, startedAt, endedAt, taskId = null) =>
+    request("/inactivity-events", { method: "POST", body: JSON.stringify({ kind, started_at: startedAt, ended_at: endedAt, task_id: taskId }) }),
+  getInactivityAuditStatus: () => request("/inactivity-events/status"),
+  setInactivityAuditStatus: (enabled) => request("/inactivity-events/status", { method: "PUT", body: JSON.stringify({ enabled }) }),
+  getInactivityEvents: (dateFrom = "", dateTo = "") => {
+    const params = new URLSearchParams();
+    if (dateFrom) params.set("date_from", dateFrom);
+    if (dateTo) params.set("date_to", dateTo);
+    const qs = params.toString();
+    return request(`/inactivity-events${qs ? `?${qs}` : ""}`);
+  },
   sendHeartbeat: (id) => request(`/tasks/${id}/heartbeat`, { method: "POST" }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
