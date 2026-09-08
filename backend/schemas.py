@@ -243,6 +243,7 @@ class HelpEventCreate(BaseModel):
     seconds: float
     source: str = "idle_prompt"
     adjusted: bool = False
+    context: str
 
 
 class HelpEventOut(BaseModel):
@@ -256,6 +257,7 @@ class HelpEventOut(BaseModel):
     created_at: datetime
     task_id: Optional[str] = None
     adjusted: bool = False
+    context: str = ""
 
 
 class HelpSummaryRow(BaseModel):
@@ -276,6 +278,7 @@ class HelpEventDetail(BaseModel):
     created_at: datetime
     task_id: Optional[str] = None
     adjusted: bool = False
+    context: str = ""
 
     @field_serializer("created_at")
     def serialize_as_utc(self, value: datetime, _info):

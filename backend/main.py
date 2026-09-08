@@ -113,6 +113,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE help_events ADD COLUMN task_id VARCHAR"))
             if "adjusted" not in existing_help_event_columns:
                 conn.execute(text("ALTER TABLE help_events ADD COLUMN adjusted BOOLEAN DEFAULT FALSE"))
+            if "context" not in existing_help_event_columns:
+                conn.execute(text("ALTER TABLE help_events ADD COLUMN context TEXT DEFAULT ''"))
 
 
 @asynccontextmanager
@@ -812,6 +814,9 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
         raise HTTPException(400, "direction must be 'helped' or 'received'")
     if payload.seconds < 0:
         raise HTTPException(400, "seconds cannot be negative")
+    context = payload.context.strip()
+    if not context:
+        raise HTTPException(400, "Help context is required")
     colleague = db.get(models.Member, payload.colleague_id)
     if not colleague:
         raise HTTPException(404, "Colleague not found")
@@ -828,7 +833,7 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
         owner_id=current_member.id,
         status="submitted",
         segments=[{"start": start.isoformat() + "Z", "end": now.isoformat() + "Z"}],
-        note=f"Logged from the {'timer paused' if payload.source == 'sleep_alert' else 'forgot to track'} prompt.",
+        note=context,
         submitted_at=now,
         submitted_by_id=current_member.id,
     )
@@ -843,6 +848,7 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
         source=payload.source,
         task_id=task.id,
         adjusted=payload.adjusted,
+        context=context,
     )
     db.add(event)
     db.commit()
@@ -889,6 +895,7 @@ def help_events_detail(current_member: models.Member = Depends(get_current_membe
             created_at=e.created_at,
             task_id=e.task_id,
             adjusted=e.adjusted,
+            context=e.context or "",
         )
         for e in events
     ]

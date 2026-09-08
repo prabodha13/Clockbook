@@ -176,3 +176,4 @@ class HelpEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     task_id = Column(String, ForeignKey("tasks.id"), nullable=True)  # the real, non-billable task created alongside this event, so the time shows up in Submitted today and Export too
     adjusted = Column(Boolean, default=False)  # true if the person changed the pre-filled duration before confirming, matching the same visible flagging tasks already have
+    context = Column(Text, default="")  # required description of what the help was about for reporting
