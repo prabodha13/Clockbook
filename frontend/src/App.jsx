@@ -831,14 +831,14 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
 }
 
 function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
-  const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | a member id
+  const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const isSuperAdmin = currentUser.role === "super_admin";
   const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
 
   const visibleTasks = (() => {
-    if (!isAdmin || viewFilter === "everyone") return tasks;
+    if (!isAdmin || viewFilter === "everyone" || viewFilter === "team") return tasks;
     if (viewFilter === "mine") return tasks.filter((t) => t.owner_id === currentUser.id);
     return tasks.filter((t) => t.owner_id === viewFilter);
   })();
@@ -871,6 +871,20 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
   const myRunningCount = statsTasks.filter((t) => t.status === "running" || t.status === "paused").length;
   const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
+
+  const teamRows = isAdmin
+    ? members
+        .map((member) => {
+          const memberTasks = tasks.filter((t) => t.owner_id === member.id);
+          const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
+          const inProgressCount = memberTasks.filter((t) => t.status === "running" || t.status === "paused").length;
+          const submittedTodayCount = memberTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
+          const runningTask = memberTasks.find((t) => t.status === "running");
+          const pausedTask = !runningTask ? memberTasks.find((t) => t.status === "paused") : null;
+          return { member, trackedToday, inProgressCount, submittedTodayCount, runningTask, pausedTask };
+        })
+        .sort((a, b) => a.member.name.localeCompare(b.member.name))
+    : [];
 
   if (showActiveOnly) {
     const runningTasks = tasks.filter((t) => t.status === "running");
@@ -939,11 +953,13 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
         <div>
           <div className="cb-page-title cb-serif">Dashboard</div>
           <div className="cb-page-sub">
-            {viewedMember
-              ? `Just ${viewedMember.name.split(" ")[0]}'s active work.`
-              : isAdmin && viewFilter === "mine"
-                ? "Just your own active work."
-                : "Your firm's active work, tracked client by client."}
+            {viewFilter === "team"
+              ? "A live view of today's activity across the team."
+              : viewedMember
+                ? `Just ${viewedMember.name.split(" ")[0]}'s active work.`
+                : isAdmin && viewFilter === "mine"
+                  ? "Just your own active work."
+                  : "Your firm's active work, tracked client by client."}
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -952,6 +968,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
               <div className="cb-tabs cb-tabs-plain">
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>Just me</button>
+                <button className={`cb-tab cb-tab-plain ${viewFilter === "team" ? "active" : ""}`} onClick={() => setViewFilter("team")}>Team View</button>
               </div>
               {pickableMembers.length > 0 && (
                 <select
@@ -972,6 +989,53 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
         </div>
       </div>
 
+      {isAdmin && viewFilter === "team" && (
+        <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
+          <table className="cb-table">
+            <thead>
+              <tr>
+                <th>Team member</th>
+                <th className="num">Tracked today</th>
+                <th className="num">In progress</th>
+                <th className="num">Submitted today</th>
+                <th>Current status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {teamRows.map(({ member, trackedToday, inProgressCount, submittedTodayCount, runningTask, pausedTask }) => {
+                return (
+                  <tr
+                    key={member.id}
+                    style={{ cursor: "pointer" }}
+                    title={`Open ${member.name}'s dashboard`}
+                    onClick={() => setViewFilter(member.id === currentUser.id ? "mine" : member.id)}
+                  >
+                    <td style={{ fontWeight: 600 }}>{member.name}</td>
+                    <td className="num cb-mono">{formatHM(trackedToday)}</td>
+                    <td className="num cb-mono">{inProgressCount}</td>
+                    <td className="num cb-mono">{submittedTodayCount}</td>
+                    <td>
+                      {runningTask ? (
+                        <span style={{ color: "var(--green)", fontWeight: 600 }}>
+                          <span className="cb-live-dot" style={{ display: "inline-block", marginRight: 6 }} />
+                          Tracking: {runningTask.name}
+                        </span>
+                      ) : pausedTask ? (
+                        <span>Paused: {pausedTask.name}</span>
+                      ) : (
+                        <span style={{ color: "var(--ink-soft)" }}>No timer running</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {viewFilter !== "team" && (
+        <>
       <div className="cb-stats">
         <div className="cb-stat">
           <div className="cb-stat-num cb-mono">{formatHM(todaySeconds)}</div>
@@ -1033,6 +1097,8 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
       )}
 
       <Group title="Submitted today" items={submittedToday} empty="Nothing submitted yet today." />
+        </>
+      )}
     </div>
   );
 }
