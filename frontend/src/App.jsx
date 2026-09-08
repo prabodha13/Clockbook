@@ -3467,7 +3467,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
         currentUser={currentUser}
         initialSeconds={liveGapMs / 1000}
         onClose={() => setMode("main")}
-        onConfirm={(colleagueId, seconds, isAdjusted) => onHelp(mode, colleagueId, seconds, isAdjusted)}
+        onConfirm={(colleagueId, seconds, isAdjusted, context) => onHelp(mode, colleagueId, seconds, isAdjusted, context)}
       />
     );
   }
@@ -3603,7 +3603,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
         currentUser={currentUser}
         initialSeconds={gapMs / 1000}
         onClose={() => setMode("main")}
-        onConfirm={(colleagueId, seconds, isAdjusted) => onHelp(mode, colleagueId, seconds, isAdjusted)}
+        onConfirm={(colleagueId, seconds, isAdjusted, context) => onHelp(mode, colleagueId, seconds, isAdjusted, context)}
       />
     );
   }
