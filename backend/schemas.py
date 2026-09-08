@@ -237,6 +237,10 @@ class TaskReassign(BaseModel):
     owner_id: str
 
 
+class AdHocMeetingCreate(BaseModel):
+    colleague_id: str
+
+
 class HelpEventCreate(BaseModel):
     colleague_id: str
     direction: str  # "helped" or "received"

@@ -808,6 +808,34 @@ def get_or_create_internal_support_client(db: Session):
     return client
 
 
+@app.post("/api/ad-hoc-meetings/start", response_model=schemas.TaskOut, status_code=201)
+def start_ad_hoc_meeting(payload: schemas.AdHocMeetingCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    colleague = db.get(models.Member, payload.colleague_id)
+    if not colleague:
+        raise HTTPException(404, "Colleague not found")
+    if colleague.id == current_member.id:
+        raise HTTPException(400, "Select another colleague")
+
+    client = get_or_create_internal_support_client(db)
+    task = models.TaskInstance(
+        client_id=client.id,
+        client_name=client.name,
+        name=f"Ad hoc meeting with {colleague.name}",
+        task_type="Non-billable: Colleague Meeting",
+        owner_id=current_member.id,
+        status="todo",
+        segments=[],
+        note="",
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+
+    # Reuse the app's existing start-task path so the normal one-running-timer rule stays
+    # exactly the same: any current timer is paused and this meeting becomes the active timer.
+    return start_task(task.id, schemas.TaskStart(), current_member, db)
+
+
 @app.post("/api/help-events", response_model=schemas.HelpEventOut, status_code=201)
 def create_help_event(payload: schemas.HelpEventCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if payload.direction not in ("helped", "received"):
