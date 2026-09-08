@@ -872,8 +872,13 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
   const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
 
-  const teamRows = isAdmin
-    ? members
+  const teamMembers = isAdmin
+    ? (isSuperAdmin
+        ? members
+        : members.filter((member) => member.pod_id && member.pod_id === currentUser.pod_id))
+    : [];
+
+  const teamRows = teamMembers
         .map((member) => {
           const memberTasks = tasks.filter((t) => t.owner_id === member.id);
           const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
@@ -883,8 +888,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
           const pausedTask = !runningTask ? memberTasks.find((t) => t.status === "paused") : null;
           return { member, trackedToday, inProgressCount, submittedTodayCount, runningTask, pausedTask };
         })
-        .sort((a, b) => a.member.name.localeCompare(b.member.name))
-    : [];
+        .sort((a, b) => a.member.name.localeCompare(b.member.name));
 
   if (showActiveOnly) {
     const runningTasks = tasks.filter((t) => t.status === "running");
