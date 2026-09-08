@@ -805,7 +805,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const isSuperAdmin = currentUser.role === "super_admin";
@@ -942,6 +942,8 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
               )}
             </div>
           )}
+          <button className="cb-btn" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
+          <button className="cb-btn" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
           <button className="cb-btn cb-btn-primary" onClick={onNewTask}><Plus size={15} />New task</button>
         </div>
       </div>
@@ -3507,6 +3509,125 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
   );
 }
 
+function AdHocMeetingModal({ members, currentUser, onClose, onStart }) {
+  const [colleagueId, setColleagueId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const options = members.filter((m) => m.id !== currentUser.id);
+
+  async function start() {
+    if (!colleagueId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onStart(colleagueId);
+    } catch (err) {
+      setError(err.message || "Could not start the meeting");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 460 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><Video size={17} />Ad hoc meeting</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-hint" style={{ marginBottom: 14 }}>Start tracking a quick meeting or collaboration with a colleague.</div>
+          <div className="cb-field">
+            <label className="cb-label">Who are you meeting with?</label>
+            <select className="cb-select" value={colleagueId} onChange={(e) => setColleagueId(e.target.value)} autoFocus>
+              <option value="">Select a colleague...</option>
+              {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="cb-btn cb-btn-primary" disabled={!colleagueId || busy} onClick={start}>
+            <Play size={14} />{busy ? "Starting..." : "Start meeting"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ManualHelpModal({ members, currentUser, onClose, onConfirm }) {
+  const [direction, setDirection] = useState("helped");
+  const [colleagueId, setColleagueId] = useState("");
+  const [hours, setHours] = useState("0");
+  const [minutes, setMinutes] = useState("");
+  const [context, setContext] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const options = members.filter((m) => m.id !== currentUser.id);
+  const seconds = (parseInt(hours || "0", 10) * 3600) + (parseInt(minutes || "0", 10) * 60);
+
+  async function save() {
+    if (!colleagueId || seconds <= 0 || !context.trim() || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onConfirm(direction, colleagueId, seconds, context.trim());
+    } catch (err) {
+      setError(err.message || "Could not log the help");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 520 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><HeartHandshake size={17} />Log colleague help</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-field">
+            <label className="cb-label">Type</label>
+            <div className="cb-tabs" style={{ width: "fit-content" }}>
+              <button type="button" className={`cb-tab ${direction === "helped" ? "active" : ""}`} onClick={() => setDirection("helped")}>I helped someone</button>
+              <button type="button" className={`cb-tab ${direction === "received" ? "active" : ""}`} onClick={() => setDirection("received")}>I received help</button>
+            </div>
+          </div>
+          <div className="cb-field" style={{ marginTop: 14 }}>
+            <label className="cb-label">Colleague</label>
+            <select className="cb-select" value={colleagueId} onChange={(e) => setColleagueId(e.target.value)}>
+              <option value="">Select a colleague...</option>
+              {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div className="cb-field-row" style={{ marginTop: 14 }}>
+            <div className="cb-field" style={{ flex: "none" }}>
+              <label className="cb-label">Hours</label>
+              <input type="number" min="0" className="cb-input" style={{ width: 80 }} value={hours} onChange={(e) => setHours(e.target.value)} />
+            </div>
+            <div className="cb-field" style={{ flex: "none" }}>
+              <label className="cb-label">Minutes</label>
+              <input type="number" min="0" max="59" className="cb-input" style={{ width: 80 }} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            </div>
+          </div>
+          <div className="cb-field" style={{ marginTop: 14 }}>
+            <label className="cb-label">What was the help about?</label>
+            <textarea className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Briefly describe the help given or received" required />
+          </div>
+          {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button className="cb-btn cb-btn-primary" disabled={!colleagueId || seconds <= 0 || !context.trim() || busy} onClick={save}>
+            {busy ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Shared between the idle "forgot to track" prompt and the sleep-alert prompt, so both
 // entry points into "I helped" / "I received help" use the exact same picker.
 function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onClose, onConfirm }) {
@@ -3802,6 +3923,8 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
+  const [showManualHelp, setShowManualHelp] = useState(false);
   const [completingTask, setCompletingTask] = useState(null);
   const [startCountPrompt, setStartCountPrompt] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
@@ -4700,6 +4823,33 @@ export default function App() {
     setTrackedMetrics((prev) => prev.filter((m) => m.id !== id));
   }
 
+  async function startAdHocMeeting(colleagueId) {
+    const colleague = members.find((m) => m.id === colleagueId);
+    try {
+      await api.startAdHocMeeting(colleagueId);
+      const refreshed = await api.getTasks();
+      setTasks(refreshed);
+      setShowAdHocMeeting(false);
+      showToast(`Now tracking ad hoc meeting${colleague ? ` with ${colleague.name}` : ""}`);
+    } catch (err) {
+      showToast(err.message || "Could not start the meeting", true);
+      throw err;
+    }
+  }
+
+  async function logManualHelp(direction, colleagueId, seconds, context) {
+    try {
+      await api.createHelpEvent(colleagueId, direction, seconds, "manual", false, context);
+      setShowManualHelp(false);
+      showToast(direction === "helped" ? "Logged, thanks for helping out" : "Logged, glad you got help");
+      const refreshed = await api.getTasks();
+      setTasks(refreshed);
+    } catch (err) {
+      showToast(err.message || "Could not log that, please try again", true);
+      throw err;
+    }
+  }
+
   async function createTasks(payloads) {
     const created = [];
     for (const payload of payloads) {
@@ -4821,6 +4971,7 @@ export default function App() {
                 tasks={tasks} now={now} currentUser={currentUser} members={members} isAdmin={isAdmin}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
+                onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)}
                 clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
                 onCreateTasks={createTasks}
               />
@@ -4872,6 +5023,18 @@ export default function App() {
         </div>
       </div>
 
+      {showAdHocMeeting && (
+        <AdHocMeetingModal
+          members={members} currentUser={currentUser}
+          onClose={() => setShowAdHocMeeting(false)} onStart={startAdHocMeeting}
+        />
+      )}
+      {showManualHelp && (
+        <ManualHelpModal
+          members={members} currentUser={currentUser}
+          onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
+        />
+      )}
       {showNewTask && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}

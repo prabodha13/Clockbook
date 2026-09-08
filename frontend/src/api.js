@@ -112,6 +112,8 @@ export const api = {
   },
   createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false, context = "") =>
     request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted, context }) }),
+  startAdHocMeeting: (colleagueId) =>
+    request("/ad-hoc-meetings/start", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId }) }),
   getHelpEventsSummary: () => request("/help-events/summary"),
   getHelpEventsDetail: () => request("/help-events/detail"),
   sendHeartbeat: (id) => request(`/tasks/${id}/heartbeat`, { method: "POST" }),
