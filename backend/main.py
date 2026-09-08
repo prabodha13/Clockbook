@@ -36,6 +36,24 @@ DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query"]
 DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
 
 
+
+
+def inactivity_audit_enabled(db: Session) -> bool:
+    setting = db.get(models.SystemSetting, "inactivity_audit_enabled")
+    return bool(setting and setting.value.strip().lower() in ("1", "true", "yes", "on"))
+
+
+def set_inactivity_audit_enabled(db: Session, enabled: bool) -> bool:
+    setting = db.get(models.SystemSetting, "inactivity_audit_enabled")
+    if setting is None:
+        setting = models.SystemSetting(key="inactivity_audit_enabled", value="true" if enabled else "false")
+        db.add(setting)
+    else:
+        setting.value = "true" if enabled else "false"
+    db.commit()
+    return enabled
+
+
 def run_startup_migrations():
     # Base.metadata.create_all only creates tables that do not exist yet, it never adds a
     # new column to a table that is already there. Since this app has no separate migration
@@ -115,6 +133,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE help_events ADD COLUMN adjusted BOOLEAN DEFAULT FALSE"))
             if "context" not in existing_help_event_columns:
                 conn.execute(text("ALTER TABLE help_events ADD COLUMN context TEXT DEFAULT ''"))
+            if "inactivity_event_id" not in existing_help_event_columns:
+                conn.execute(text("ALTER TABLE help_events ADD COLUMN inactivity_event_id VARCHAR"))
 
 
 @asynccontextmanager
@@ -915,6 +935,14 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
     if not colleague:
         raise HTTPException(404, "Colleague not found")
 
+    linked_inactivity = None
+    if payload.inactivity_event_id:
+        linked_inactivity = db.get(models.InactivityEvent, payload.inactivity_event_id)
+        if not linked_inactivity or linked_inactivity.member_id != current_member.id:
+            raise HTTPException(400, "Invalid inactivity event")
+        if payload.source != "sleep_alert":
+            raise HTTPException(400, "Only sleep/lock help can resolve an inactivity event")
+
     client = get_or_create_internal_support_client(db)
     now = datetime.utcnow()
     start = now - timedelta(seconds=payload.seconds)
@@ -943,11 +971,102 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
         task_id=task.id,
         adjusted=payload.adjusted,
         context=context,
+        inactivity_event_id=linked_inactivity.id if linked_inactivity else None,
     )
     db.add(event)
     db.commit()
     db.refresh(event)
     return event
+
+
+@app.post("/api/inactivity-events")
+def create_inactivity_event(payload: schemas.InactivityEventCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Recording is controlled live from Clockbook Settings. When disabled, clients can
+    # keep calling this endpoint without errors and nothing is persisted.
+    if not inactivity_audit_enabled(db):
+        return {"recorded": False}
+    if payload.kind not in ("screen_locked", "sleep_gap", "stale_gap"):
+        raise HTTPException(400, "Unknown inactivity event type")
+    started = payload.started_at.replace(tzinfo=None) if payload.started_at.tzinfo else payload.started_at
+    ended = payload.ended_at.replace(tzinfo=None) if payload.ended_at.tzinfo else payload.ended_at
+    if ended <= started:
+        raise HTTPException(400, "ended_at must be after started_at")
+    seconds = (ended - started).total_seconds()
+    if seconds < 1:
+        raise HTTPException(400, "Inactivity period is too short")
+    event = models.InactivityEvent(
+        member_id=current_member.id,
+        kind=payload.kind,
+        started_at=started,
+        ended_at=ended,
+        seconds=seconds,
+        task_id=payload.task_id,
+    )
+    db.add(event)
+    db.commit()
+    return {"recorded": True, "id": event.id}
+
+
+@app.get("/api/inactivity-events/status")
+def inactivity_audit_status(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "This report requires a super admin")
+    return {"enabled": inactivity_audit_enabled(db)}
+
+
+@app.put("/api/inactivity-events/status")
+def update_inactivity_audit_status(payload: schemas.InactivityAuditSettingUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can change this setting")
+    return {"enabled": set_inactivity_audit_enabled(db, payload.enabled)}
+
+
+@app.get("/api/inactivity-events", response_model=list[schemas.InactivityEventDetail])
+def get_inactivity_events(date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "This report requires a super admin")
+    if not inactivity_audit_enabled(db):
+        return []
+    query = db.query(models.InactivityEvent).order_by(models.InactivityEvent.started_at.desc())
+    if date_from:
+        try:
+            start = datetime.strptime(date_from, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(400, "date_from must be YYYY-MM-DD")
+        query = query.filter(models.InactivityEvent.started_at >= start)
+    if date_to:
+        try:
+            end = datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            raise HTTPException(400, "date_to must be YYYY-MM-DD")
+        query = query.filter(models.InactivityEvent.started_at < end)
+    events = query.all()
+
+    # Help classifications made from a sleep/lock prompt carry the exact inactivity-event
+    # ID that produced that prompt. Exclude only those explicitly linked rows. This avoids
+    # any time-window guessing and cannot accidentally hide a different away period.
+    excluded_event_ids = {
+        row[0]
+        for row in (
+            db.query(models.HelpEvent.inactivity_event_id)
+            .filter(
+                models.HelpEvent.source == "sleep_alert",
+                models.HelpEvent.inactivity_event_id.isnot(None),
+            )
+            .all()
+        )
+        if row[0]
+    }
+
+    visible_events = [e for e in events if e.id not in excluded_event_ids]
+    member_names = {m.id: m.name for m in db.query(models.Member).all()}
+    return [
+        schemas.InactivityEventDetail(
+            id=e.id, member_id=e.member_id, member_name=member_names.get(e.member_id, "Unknown"),
+            kind=e.kind, started_at=e.started_at, ended_at=e.ended_at, seconds=e.seconds, task_id=e.task_id
+        )
+        for e in visible_events
+    ]
 
 
 @app.get("/api/help-events/summary", response_model=list[schemas.HelpSummaryRow])

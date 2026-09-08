@@ -11,6 +11,13 @@ def gen_id(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+
+
+class SystemSetting(Base):
+    __tablename__ = "system_settings"
+    key = Column(String, primary_key=True)
+    value = Column(String, nullable=False, default="")
+
 class Pod(Base):
     # A team/pod grouping for staff. When a regular admin is assigned to a pod, they only
     # see task and time data for people in that same pod, super admins always see everyone
@@ -176,4 +183,17 @@ class HelpEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     task_id = Column(String, ForeignKey("tasks.id"), nullable=True)  # the real, non-billable task created alongside this event, so the time shows up in Submitted today and Export too
     adjusted = Column(Boolean, default=False)  # true if the person changed the pre-filled duration before confirming, matching the same visible flagging tasks already have
-    context = Column(Text, default="")  # required description of what the help was about for reporting
+    context = Column(Text, default="")
+    inactivity_event_id = Column(String, nullable=True)  # exact away-period this help classification resolved, if it came from the sleep/lock prompt
+
+
+class InactivityEvent(Base):
+    __tablename__ = "inactivity_events"
+    id = Column(String, primary_key=True, default=lambda: gen_id("away"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    kind = Column(String, nullable=False)  # screen_locked, sleep_gap, or stale_gap
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=False)
+    seconds = Column(Float, nullable=False)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

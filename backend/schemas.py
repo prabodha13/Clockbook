@@ -254,6 +254,7 @@ class HelpEventCreate(BaseModel):
     source: str = "idle_prompt"
     adjusted: bool = False
     context: str
+    inactivity_event_id: Optional[str] = None
 
 
 class HelpEventOut(BaseModel):
@@ -268,6 +269,7 @@ class HelpEventOut(BaseModel):
     task_id: Optional[str] = None
     adjusted: bool = False
     context: str = ""
+    inactivity_event_id: Optional[str] = None
 
 
 class HelpSummaryRow(BaseModel):
@@ -293,3 +295,29 @@ class HelpEventDetail(BaseModel):
     @field_serializer("created_at")
     def serialize_as_utc(self, value: datetime, _info):
         return value.isoformat() + "Z"
+
+
+class InactivityEventCreate(BaseModel):
+    kind: str
+    started_at: datetime
+    ended_at: datetime
+    task_id: Optional[str] = None
+
+
+class InactivityEventDetail(BaseModel):
+    id: str
+    member_id: str
+    member_name: str
+    kind: str
+    started_at: datetime
+    ended_at: datetime
+    seconds: float
+    task_id: Optional[str] = None
+
+    @field_serializer("started_at", "ended_at")
+    def serialize_datetime_as_utc(self, value: datetime, _info):
+        return value.isoformat() + "Z"
+
+
+class InactivityAuditSettingUpdate(BaseModel):
+    enabled: bool
