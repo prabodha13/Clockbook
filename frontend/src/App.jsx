@@ -3564,7 +3564,7 @@ function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onC
 // The "no clock running for a while" nudge, entirely separate from the sleep/lock alert
 // above, this fires when the computer has been genuinely active with nothing tracked.
 function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, onHelp }) {
-  const [mode, setMode] = useState("main"); // "main" | "snooze" | "helped" | "received"
+  const [mode, setMode] = useState("main"); // "main" | "snooze" | "forgot" | "helped" | "received"
   const [customValue, setCustomValue] = useState("");
   const [customUnit, setCustomUnit] = useState("minutes");
   const [busy, setBusy] = useState(false);
@@ -3602,6 +3602,16 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
           {mode === "main" && (
             <div style={{ lineHeight: 1.5 }}>
               This computer looks like it has been active for about <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(gapMs)}</strong> with nothing being tracked.
+            </div>
+          )}
+          {mode === "forgot" && (
+            <div>
+              <div style={{ lineHeight: 1.5, marginBottom: 14 }}>
+                You have about <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(gapMs)}</strong> of untracked time. How should the new task start?
+              </div>
+              <div className="cb-hint">
+                Include lost time backdates the new task by this amount. Start fresh begins the new task from now with no recovered time.
+              </div>
             </div>
           )}
           {mode === "snooze" && (
@@ -3645,8 +3655,19 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
               <button className="cb-btn" disabled={busy} onClick={() => setMode("snooze")}>No</button>
               <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
               <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
-              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs); }}>
+              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={() => setMode("forgot")}>
                 Yes, I forgot
+              </button>
+            </>
+          )}
+          {mode === "forgot" && (
+            <>
+              <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={() => setMode("main")}>Back</button>
+              <button className="cb-btn" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs, false); }}>
+                Start fresh
+              </button>
+              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs, true); }}>
+                Include {niceDuration(gapMs)}
               </button>
             </>
           )}
@@ -4885,8 +4906,8 @@ export default function App() {
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
           }}
-          onStartNew={async (liveGapMs) => {
-            forgotToTrackGapMsRef.current = liveGapMs;
+          onStartNew={async (liveGapMs, includeLostTime = true) => {
+            forgotToTrackGapMsRef.current = includeLostTime ? liveGapMs : null;
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
