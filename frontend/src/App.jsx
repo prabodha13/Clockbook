@@ -317,7 +317,7 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView, isAdmin, isSuperAdmin }) {
+function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = false }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
@@ -326,7 +326,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin }) {
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
     ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
-    ...(isAdmin ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
+    ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
     <div className="cb-sidebar">
@@ -1995,6 +1995,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
 function SettingsView({
   roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
+  realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -2119,6 +2120,39 @@ function SettingsView({
           <div className="cb-page-sub">The fixed lists everyone picks from when setting up templates or logging a task.</div>
         </div>
       </div>
+      {realIsSuperAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Demo</div>
+              <div className="cb-tmpl-name">View mode</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>
+              Preview Clockbook as a normal staff member or admin without changing your real Super Admin role. Settings stays available so you can always switch back.
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {[
+                ["member", "Staff View"],
+                ["admin", "Admin View"],
+                ["super_admin", "Super Admin View"],
+              ].map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  className={`cb-btn cb-btn-sm ${viewMode === mode ? "cb-btn-primary" : ""}`}
+                  onClick={() => onViewModeChange && onViewModeChange(mode)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {effectiveIsAdmin && (
       <div className="cb-tmpl-card">
         <div className="cb-tmpl-head">
           <div>
@@ -2172,6 +2206,7 @@ function SettingsView({
           {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
         </div>
       </div>
+      )}
 
       {isSuperAdmin && (
         <div className="cb-tmpl-card">
@@ -4281,6 +4316,14 @@ export default function App() {
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState("dashboard");
+  const [superAdminViewMode, setSuperAdminViewMode] = useState(() => {
+    try {
+      const saved = localStorage.getItem("clockbook_super_admin_view_mode");
+      return ["member", "admin", "super_admin"].includes(saved) ? saved : "super_admin";
+    } catch (err) {
+      return "super_admin";
+    }
+  });
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
@@ -4474,7 +4517,18 @@ export default function App() {
   // The header pins whichever task the person was last active on, running or paused, so
   // pausing does not make it disappear, it only gets replaced once another task starts.
   const myPinnedTask = myRunningTask || myMostRecentPaused;
-  const isAdmin = currentUser ? isAdminRole(currentUser.role) : false;
+  const realIsSuperAdmin = currentUser?.role === "super_admin";
+  const effectiveRole = realIsSuperAdmin ? superAdminViewMode : currentUser?.role;
+  const effectiveCurrentUser = currentUser ? { ...currentUser, role: effectiveRole } : null;
+  const isAdmin = effectiveCurrentUser ? isAdminRole(effectiveCurrentUser.role) : false;
+  const effectiveIsSuperAdmin = effectiveCurrentUser?.role === "super_admin";
+
+  function changeSuperAdminViewMode(mode) {
+    if (!realIsSuperAdmin || !["member", "admin", "super_admin"].includes(mode)) return;
+    setSuperAdminViewMode(mode);
+    try { localStorage.setItem("clockbook_super_admin_view_mode", mode); } catch (err) {}
+    if (mode !== "super_admin" && view === "reports") setView("dashboard");
+  }
 
   // Watches for this computer actually going to sleep or having its screen locked, and
   // pauses any running timer the moment it is detected rather than waiting to ask, since by
@@ -5355,10 +5409,10 @@ export default function App() {
   return (
     <div className="cb-root">
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={currentUser.role === "super_admin"} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} />
         <div className="cb-main">
           <TopBar
-            currentUser={currentUser}
+            currentUser={effectiveCurrentUser}
             onLogout={handleLogout}
             pinnedTask={myPinnedTask}
             now={now}
@@ -5372,7 +5426,7 @@ export default function App() {
           <div className="cb-content">
             {view === "dashboard" && (
               <Dashboard
-                tasks={tasks} now={now} currentUser={currentUser} members={members} isAdmin={isAdmin}
+                tasks={tasks} now={now} currentUser={effectiveCurrentUser} members={members} isAdmin={isAdmin}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
                 onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)}
@@ -5405,7 +5459,7 @@ export default function App() {
             )}
             {view === "staff" && (
               <StaffView
-                members={members} currentUser={currentUser} isAdmin={isAdmin}
+                members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
@@ -5414,13 +5468,15 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && currentUser.role === "super_admin" && <SuperAdminReportsView members={members} />}
-            {view === "settings" && isAdmin && (
+            {view === "reports" && effectiveIsSuperAdmin && <SuperAdminReportsView members={members} />}
+            {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
-                pods={pods} isSuperAdmin={currentUser.role === "super_admin"} onAddPod={addPod} onDeletePod={deletePodHandler}
+                pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
+                realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
+                effectiveIsAdmin={isAdmin}
               />
             )}
           </div>
@@ -5429,20 +5485,20 @@ export default function App() {
 
       {showAdHocMeeting && (
         <AdHocMeetingModal
-          members={members} currentUser={currentUser}
+          members={members} currentUser={effectiveCurrentUser}
           onClose={() => setShowAdHocMeeting(false)} onStart={startAdHocMeeting}
         />
       )}
       {showManualHelp && (
         <ManualHelpModal
-          members={members} currentUser={currentUser}
+          members={members} currentUser={effectiveCurrentUser}
           onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
         />
       )}
       {showNewTask && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
-          roles={roles} taskTypes={taskTypes} currentUser={currentUser}
+          roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
           onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
         />
       )}
