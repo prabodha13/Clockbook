@@ -1488,7 +1488,7 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     return task
 
 
-@app.put("/api/templates/{template_id}/tasks/reorder", response_model=schemas.TemplateOut)
+@app.put("/api/templates/{template_id}/tasks-order", response_model=schemas.TemplateOut)
 def reorder_template_tasks(template_id: str, payload: schemas.TemplateTaskReorder, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     tpl = db.get(models.Template, template_id)
