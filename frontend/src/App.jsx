@@ -2,14 +2,13 @@ import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, Fra
 import { createPortal } from "react-dom";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
-  ChevronDown, ChevronUp, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
+  ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
   Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
 const MEMBER_TINTS = ["#245C43", "#B5590F", "#5B6660", "#5C4A8C", "#8C2F3A", "#2E5C7A"];
-const UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__";
 
 function isAdminRole(role) {
   return role === "admin" || role === "super_admin";
@@ -317,7 +316,7 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = false }) {
+function Sidebar({ view, setView, isAdmin, isSuperAdmin }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
@@ -326,7 +325,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
     ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
-    ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
+    ...(isAdmin ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
     <div className="cb-sidebar">
@@ -347,7 +346,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete }) {
   const isAdmin = isAdminRole(currentUser.role);
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
@@ -358,7 +357,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
           <div className="cb-tracking-dot" />
           <div className="cb-tracking-text">
             <div className="cb-tracking-label">{isPaused ? "Paused" : "Now tracking"}</div>
-            <div className="cb-tracking-name">{pinnedTask.client_name}: {taskDisplayHeading(pinnedTask)}</div>
+            <div className="cb-tracking-name">{pinnedTask.client_name}: {pinnedTask.name}</div>
           </div>
           <div className="cb-tracking-time cb-mono">{formatHMS(elapsed)}</div>
           <div className="cb-tracking-actions">
@@ -374,9 +373,6 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
       <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button className="cb-btn cb-btn-sm" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
-          <Video size={13} />Meeting
-        </button>
         <div className="cb-user-btn" style={{ cursor: "default" }}>
           <Avatar member={currentUser} />
           {currentUser.name}
@@ -405,7 +401,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
     <div className="cb-row">
       <div className="cb-row-main">
         {!hideClient && <div className="cb-row-client"><Building2 size={11} />{task.client_name}</div>}
-        <div className="cb-row-task">{taskDisplayHeading(task)}</div>
+        <div className="cb-row-task">{taskHeading(task.name, task.bank_account_name, task.pay_period_type, task.pay_period_number)}</div>
         <div className="cb-row-meta">
           {task.role && <span>{task.role}</span>}
           {task.task_type && <span>{task.task_type}</span>}
@@ -834,7 +830,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const isSuperAdmin = currentUser.role === "super_admin";
@@ -842,7 +838,6 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
 
   const visibleTasks = (() => {
-    if (forceSelfOnly) return tasks.filter((t) => t.owner_id === currentUser.id);
     if (!isAdmin || viewFilter === "everyone" || viewFilter === "team") return tasks;
     if (viewFilter === "mine") return tasks.filter((t) => t.owner_id === currentUser.id);
     return tasks.filter((t) => t.owner_id === viewFilter);
@@ -1027,10 +1022,10 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
                       {runningTask ? (
                         <span style={{ color: "var(--green)", fontWeight: 600 }}>
                           <span className="cb-live-dot" style={{ display: "inline-block", marginRight: 6 }} />
-                          Tracking: {taskDisplayHeading(runningTask)}
+                          Tracking: {runningTask.name}
                         </span>
                       ) : pausedTask ? (
-                        <span>Paused: {taskDisplayHeading(pausedTask)}</span>
+                        <span>Paused: {pausedTask.name}</span>
                       ) : (
                         <span style={{ color: "var(--ink-soft)" }}>No timer running</span>
                       )}
@@ -1128,13 +1123,6 @@ function taskHeading(name, bankAccountName, payPeriodType, payPeriodNumber) {
   const periodLabel = payPeriodLabel(payPeriodType, payPeriodNumber);
   if (periodLabel) parts.push(periodLabel);
   return parts.join(" \u2014 ");
-}
-
-function taskDisplayHeading(task) {
-  const taskName = task.source_template_name
-    ? `${task.source_template_name} - ${task.name}`
-    : task.name;
-  return taskHeading(taskName, task.bank_account_name, task.pay_period_type, task.pay_period_number);
 }
 
 function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSecondary }) {
@@ -1571,14 +1559,12 @@ function StartCountModal({ task, onClose, onSubmit }) {
   );
 }
 
-function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit }) {
+function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
   const [note, setNote] = useState(task.note || "");
   const [endCount, setEndCount] = useState(task.end_count != null ? String(task.end_count) : "");
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState(task.role || "");
   const [taskType, setTaskType] = useState(task.task_type || "");
-  const needsClient = task.client_id === UNASSIGNED_CLIENT_ID;
-  const [clientId, setClientId] = useState(needsClient ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
   // Snapshot the tracked time once, when the modal first opens. This used to be recalculated
   // from the live clock on every render, so if the task kept running while this dialog was
@@ -1612,16 +1598,6 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
               {task.role || "no role set yet"}, {task.task_type || "no task type set yet"}
             </div>
           </div>
-          {needsClient && (
-            <div className="cb-field">
-              <label className="cb-label">Client</label>
-              <SearchableSelect
-                options={clients} value={clientId} onChange={setClientId}
-                placeholder="Select the client before completing..." getLabel={(c) => c.name}
-              />
-              <div className="cb-hint">A client is required to complete this meeting.</div>
-            </div>
-          )}
           {(needsRole || needsTaskType) && (
             <div className="cb-field-row">
               {needsRole && (
@@ -1682,12 +1658,12 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)}
+            className="cb-btn cb-btn-primary" disabled={busy || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)}
             onClick={async () => {
               setBusy(true);
               await onSubmit(
                 task.id, note, needsCount ? parseInt(endCount, 10) : null, isAdjusted ? editedSeconds : null,
-                needsRole ? role : null, needsTaskType ? taskType : null, needsClient ? clientId : null
+                needsRole ? role : null, needsTaskType ? taskType : null
               );
             }}
           >
@@ -1753,7 +1729,7 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
-function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask, onMoveTask, canMoveUp, canMoveDown }) {
+function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask }) {
   const [name, setName] = useState(task.name);
   const [role, setRole] = useState(task.role);
   const [taskType, setTaskType] = useState(task.task_type);
@@ -1809,11 +1785,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
             <option value={taskType}>{taskType}</option>
           )}
         </select>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button className="cb-icon-btn" type="button" title="Move up" disabled={!canMoveUp} onClick={() => onMoveTask(template.id, task.id, -1)}><ChevronUp size={13} /></button>
-          <button className="cb-icon-btn" type="button" title="Move down" disabled={!canMoveDown} onClick={() => onMoveTask(template.id, task.id, 1)}><ChevronDown size={13} /></button>
-          <button className="cb-icon-btn cb-btn-danger" type="button" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
-        </div>
+        <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
       </div>
       <div className="cb-tmpl-task-options">
         <label className="cb-tmpl-task-option-checkbox">
@@ -1851,7 +1823,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   );
 }
 
-function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onMoveTask, onDeleteTemplate, onRenameTemplate }) {
+function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onRenameTemplate }) {
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [editedField, setEditedField] = useState(template.field);
   const [editedName, setEditedName] = useState(template.name);
@@ -1938,12 +1910,11 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
               <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
             </div>
           )}
-          {template.tasks.map((t, taskIndex) =>
+          {template.tasks.map((t) =>
             isAdmin ? (
               <TemplateTaskEditor
                 key={t.id} template={template} task={t} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-                onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onMoveTask={onMoveTask}
-                canMoveUp={taskIndex > 0} canMoveDown={taskIndex < template.tasks.length - 1}
+                onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask}
               />
             ) : (
               <div className="cb-row" key={t.id}>
@@ -1999,7 +1970,6 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
 function SettingsView({
   roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
-  realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -2010,36 +1980,6 @@ function SettingsView({
   const [repairingId, setRepairingId] = useState(null);
   const [repairResults, setRepairResults] = useState({});
   const [error, setError] = useState("");
-  const [inactivityAuditEnabled, setInactivityAuditEnabled] = useState(null);
-  const [savingInactivityAudit, setSavingInactivityAudit] = useState(false);
-
-  useEffect(() => {
-    if (!isSuperAdmin) return;
-    let alive = true;
-    api.getInactivityAuditStatus()
-      .then((r) => { if (alive) setInactivityAuditEnabled(!!r.enabled); })
-      .catch((err) => {
-        if (alive) {
-          setInactivityAuditEnabled(false);
-          setError(err.message);
-        }
-      });
-    return () => { alive = false; };
-  }, [isSuperAdmin]);
-
-  async function toggleInactivityAudit() {
-    if (!isSuperAdmin || savingInactivityAudit || inactivityAuditEnabled == null) return;
-    setSavingInactivityAudit(true);
-    setError("");
-    try {
-      const result = await api.setInactivityAuditStatus(!inactivityAuditEnabled);
-      setInactivityAuditEnabled(!!result.enabled);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSavingInactivityAudit(false);
-    }
-  }
 
   async function submitRole(e) {
     e.preventDefault();
@@ -2124,39 +2064,6 @@ function SettingsView({
           <div className="cb-page-sub">The fixed lists everyone picks from when setting up templates or logging a task.</div>
         </div>
       </div>
-      {realIsSuperAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
-            <div>
-              <div className="cb-tmpl-field">Demo</div>
-              <div className="cb-tmpl-name">View mode</div>
-            </div>
-          </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>
-              Preview Clockbook as a normal staff member or admin without changing your real Super Admin role. Settings stays available so you can always switch back.
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {[
-                ["member", "Staff View"],
-                ["admin", "Admin View"],
-                ["super_admin", "Super Admin View"],
-              ].map(([mode, label]) => (
-                <button
-                  key={mode}
-                  type="button"
-                  className={`cb-btn cb-btn-sm ${viewMode === mode ? "cb-btn-primary" : ""}`}
-                  onClick={() => onViewModeChange && onViewModeChange(mode)}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {effectiveIsAdmin && (
       <div className="cb-tmpl-card">
         <div className="cb-tmpl-head">
           <div>
@@ -2210,9 +2117,8 @@ function SettingsView({
           {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
         </div>
       </div>
-      )}
 
-      {effectiveIsAdmin && (
+      {isSuperAdmin && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
             <div>
@@ -2223,51 +2129,18 @@ function SettingsView({
           <div style={{ padding: 16 }}>
             <div className="cb-hint" style={{ marginBottom: 10 }}>
               Assign an admin to a pod on the Staff page and they will only see time and task data for people in that same pod. An admin with no pod keeps seeing everyone, and super admins always see everyone regardless of pod.
-              {!isSuperAdmin && " Pod creation, deletion, and assignment are managed by a Super Admin."}
             </div>
             {pods.map((p) => (
               <div key={p.id} className="cb-client-account-row">
                 <div style={{ fontSize: 13.5 }}>{p.name}</div>
-                {isSuperAdmin && (
-                  <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeletePod(p.id)}><Trash2 size={13} /></button>
-                )}
+                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeletePod(p.id)}><Trash2 size={13} /></button>
               </div>
             ))}
             {pods.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No pods created yet.</div>}
-            {isSuperAdmin && (
-              <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 360 }}>
-                <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
-                <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
-              </form>
-            )}
-          </div>
-        </div>
-      )}
-
-      {isSuperAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
-            <div>
-              <div className="cb-tmpl-field">Audit</div>
-              <div className="cb-tmpl-name">Inactivity audit recording</div>
-            </div>
-          </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>
-              Records supported screen-lock and sleep/inactive-browser periods for the super-admin inactivity audit report. Turning this off stops new audit events from being recorded.
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <span style={{ fontSize: 13.5, fontWeight: 600 }}>
-                Status: {inactivityAuditEnabled == null ? "Loading..." : inactivityAuditEnabled ? "Enabled" : "Disabled"}
-              </span>
-              <button
-                className={`cb-btn cb-btn-sm ${inactivityAuditEnabled ? "" : "cb-btn-primary"}`}
-                disabled={savingInactivityAudit || inactivityAuditEnabled == null}
-                onClick={toggleInactivityAudit}
-              >
-                {savingInactivityAudit ? "Saving..." : inactivityAuditEnabled ? "Turn off" : "Turn on"}
-              </button>
-            </div>
+            <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 360 }}>
+              <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
+              <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
+            </form>
           </div>
         </div>
       )}
@@ -2320,7 +2193,7 @@ function SettingsView({
   );
 }
 
-function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onMoveTask, onDeleteTemplate, onAddTemplate, onRenameTemplate }) {
+function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate, onRenameTemplate }) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -2369,7 +2242,7 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
         templates.map((t) => (
           <TemplateEditor
             key={t.id} template={t} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-            onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onMoveTask={onMoveTask} onDeleteTemplate={onDeleteTemplate}
+            onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onDeleteTemplate={onDeleteTemplate}
             onRenameTemplate={onRenameTemplate}
           />
         ))
@@ -2639,8 +2512,9 @@ function formatDayHeader(iso) {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
+function CalendarPage({ onConnectCalendar }) {
   const [state, setState] = useState({ loading: true, connected: false, events: [], error: "" });
+  const [selectedDayKey, setSelectedDayKey] = useState("");
 
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true }));
@@ -2654,30 +2528,79 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const groups = [];
-  for (const ev of state.events) {
-    const dayKey = ev.start.slice(0, 10);
-    let group = groups.find((g) => g.dayKey === dayKey);
-    if (!group) { group = { dayKey, events: [] }; groups.push(group); }
-    group.events.push(ev);
+  const groups = useMemo(() => {
+    const result = [];
+    for (const ev of state.events) {
+      const dayKey = ev.start.slice(0, 10);
+      let group = result.find((g) => g.dayKey === dayKey);
+      if (!group) {
+        group = { dayKey, events: [], date: new Date(ev.start) };
+        result.push(group);
+      }
+      group.events.push(ev);
+    }
+    return result;
+  }, [state.events]);
+
+  const weekDays = useMemo(() => {
+    const today = new Date();
+    const arr = [];
+    for (let i = 0; i < 7; i += 1) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      const group = groups.find((g) => g.dayKey === key);
+      arr.push({
+        key,
+        date: d,
+        count: group ? group.events.length : 0,
+        hasMeet: !!(group && group.events.some((ev) => ev.has_meet_link)),
+      });
+    }
+    return arr;
+  }, [groups]);
+
+  useEffect(() => {
+    if (!weekDays.length) return;
+    if (!selectedDayKey || !weekDays.some((d) => d.key === selectedDayKey)) {
+      setSelectedDayKey(weekDays[0].key);
+    }
+  }, [weekDays, selectedDayKey]);
+
+  const selectedDay = weekDays.find((d) => d.key === selectedDayKey) || weekDays[0] || null;
+  const selectedEvents = groups.find((g) => g.dayKey === selectedDayKey)?.events || [];
+  const meetingCount = state.events.filter((ev) => ev.has_meet_link).length;
+  const allDayCount = state.events.filter((ev) => ev.all_day).length;
+  const nextEvent = state.events.find((ev) => ev.all_day || new Date(ev.start).getTime() >= Date.now()) || null;
+
+  function sameLocalDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+
+  function dayChipLabel(date) {
+    const today = new Date();
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    if (sameLocalDay(date, today)) return 'Today';
+    if (sameLocalDay(date, tomorrow)) return 'Tomorrow';
+    return date.toLocaleDateString(undefined, { weekday: 'short' });
+  }
+
+  function fullDateLabel(date) {
+    return date.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
   }
 
   return (
     <div>
-      <div className="cb-page-head">
+      <div className="cb-page-head" style={{ alignItems: 'flex-start' }}>
         <div>
           <div className="cb-page-title cb-serif">Calendar</div>
-          <div className="cb-page-sub">Your own upcoming events from Google Calendar, next 7 days.</div>
+          <div className="cb-page-sub">A cleaner week view of your Google Calendar for the next 7 days.</div>
         </div>
         {state.connected && (
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="cb-btn cb-btn-primary" onClick={onQuickMeeting}>
-              <Video size={14} />Quick Meeting
-            </button>
-            <button className="cb-btn cb-btn-ghost" onClick={load} title="Re-check your calendar">
-              <RotateCcw size={14} />Refresh
-            </button>
-          </div>
+          <button className="cb-btn cb-btn-ghost" onClick={load} title="Re-check your calendar">
+            <RotateCcw size={14} />Refresh
+          </button>
         )}
       </div>
 
@@ -2697,30 +2620,149 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
         <div className="cb-error" style={{ marginBottom: 10 }}>{state.error}</div>
       )}
 
-      {!state.loading && state.connected && !state.error && groups.length === 0 && (
-        <div className="cb-empty">Nothing on your calendar for the next 7 days.</div>
-      )}
+      {!state.loading && state.connected && !state.error && (
+        <div style={{ display: 'grid', gap: 16 }}>
+          <div style={{
+            background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 18, padding: 18,
+            boxShadow: '0 8px 24px rgba(19, 36, 28, 0.05)'
+          }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 12, marginBottom: 16 }}>
+              <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '14px 16px', background: '#FCFCFA' }}>
+                <div className="cb-page-sub" style={{ marginBottom: 4 }}>Upcoming events</div>
+                <div className="cb-serif" style={{ fontSize: 28, fontWeight: 700 }}>{state.events.length}</div>
+              </div>
+              <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '14px 16px', background: '#FCFCFA' }}>
+                <div className="cb-page-sub" style={{ marginBottom: 4 }}>Google Meet calls</div>
+                <div className="cb-serif" style={{ fontSize: 28, fontWeight: 700 }}>{meetingCount}</div>
+              </div>
+              <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '14px 16px', background: '#FCFCFA' }}>
+                <div className="cb-page-sub" style={{ marginBottom: 4 }}>All-day items</div>
+                <div className="cb-serif" style={{ fontSize: 28, fontWeight: 700 }}>{allDayCount}</div>
+              </div>
+              <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: '14px 16px', background: '#F5FAF6' }}>
+                <div className="cb-page-sub" style={{ marginBottom: 4 }}>Connection</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, color: 'var(--green)' }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: 'var(--green)', display: 'inline-block' }} />
+                  Google Calendar connected
+                </div>
+              </div>
+            </div>
 
-      {!state.loading && state.connected && groups.map((g) => (
-        <div className="cb-group" key={g.dayKey}>
-          <div className="cb-group-head">
-            <div className="cb-group-title">{formatDayHeader(g.events[0].start)}</div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(92px, 1fr))', gap: 10 }}>
+              {weekDays.map((d) => {
+                const active = d.key === selectedDayKey;
+                return (
+                  <button
+                    key={d.key}
+                    onClick={() => setSelectedDayKey(d.key)}
+                    style={{
+                      textAlign: 'left', borderRadius: 16, padding: '12px 12px', cursor: 'pointer',
+                      border: active ? '1px solid var(--green)' : '1px solid var(--line)',
+                      background: active ? '#F3F8F5' : '#FFFFFF',
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>{dayChipLabel(d.date)}</div>
+                    <div className="cb-serif" style={{ fontSize: 22, lineHeight: 1.2, marginTop: 4 }}>{d.date.getDate()}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>
+                      {d.count === 0 ? 'No events' : `${d.count} event${d.count === 1 ? '' : 's'}`}
+                    </div>
+                    {d.hasMeet && <div style={{ fontSize: 11, marginTop: 6, color: 'var(--green)', fontWeight: 700 }}>Has Meet</div>}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-          <div className="cb-card-list">
-            {g.events.map((ev) => (
-              <div className="cb-row" key={ev.id}>
-                <div className="cb-row-main">
-                  <div className="cb-row-task">{ev.summary}</div>
-                  <div className="cb-row-meta">
-                    <span>{formatEventTime(ev.start, ev.all_day)}</span>
-                    {ev.has_meet_link && <span><Video size={11} style={{ verticalAlign: -2, marginRight: 3 }} />Google Meet</span>}
+
+          {groups.length === 0 ? (
+            <div className="cb-empty">Nothing on your calendar for the next 7 days.</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.75fr) minmax(280px, 1fr)', gap: 16 }}>
+              <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 18, padding: 18, boxShadow: '0 8px 24px rgba(19, 36, 28, 0.05)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 16, flexWrap: 'wrap' }}>
+                  <div>
+                    <div className="cb-page-sub" style={{ marginBottom: 4 }}>Selected day</div>
+                    <div className="cb-serif" style={{ fontSize: 28, fontWeight: 700 }}>{selectedDay ? fullDateLabel(selectedDay.date) : 'This week'}</div>
+                  </div>
+                  <div style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '8px 12px', fontSize: 13, fontWeight: 700, color: 'var(--muted)' }}>
+                    {selectedEvents.length} event{selectedEvents.length === 1 ? '' : 's'}
+                  </div>
+                </div>
+
+                {selectedEvents.length === 0 ? (
+                  <div className="cb-empty" style={{ margin: 0 }}>Nothing scheduled for this day.</div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 12 }}>
+                    {selectedEvents.map((ev, idx) => (
+                      <div key={ev.id} style={{
+                        border: '1px solid var(--line)', borderRadius: 16, padding: 16, background: idx === 0 ? '#FCFCFA' : '#FFFFFF'
+                      }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
+                          <div className="cb-row-task" style={{ fontSize: 20 }}>{ev.summary}</div>
+                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>
+                              {formatEventTime(ev.start, ev.all_day)}
+                            </span>
+                            {ev.has_meet_link && (
+                              <span style={{ border: '1px solid #D6E8DB', background: '#F3F8F5', color: 'var(--green)', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                                <Video size={12} />Google Meet
+                              </span>
+                            )}
+                            {ev.all_day && (
+                              <span style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>All day</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="cb-page-sub">{ev.has_meet_link ? 'Meeting detected — Clockbook can prompt you to track or pause around the start time.' : 'Calendar event from your Google account.'}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: 'grid', gap: 16, alignContent: 'start' }}>
+                <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 18, padding: 18, boxShadow: '0 8px 24px rgba(19, 36, 28, 0.05)' }}>
+                  <div className="cb-page-sub" style={{ marginBottom: 6 }}>Next up</div>
+                  {nextEvent ? (
+                    <>
+                      <div className="cb-serif" style={{ fontSize: 22, fontWeight: 700, marginBottom: 10 }}>{nextEvent.summary}</div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        <span style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>{formatDayHeader(nextEvent.start)}</span>
+                        <span style={{ border: '1px solid var(--line)', borderRadius: 999, padding: '5px 10px', fontSize: 12, fontWeight: 700, color: 'var(--muted)' }}>{formatEventTime(nextEvent.start, nextEvent.all_day)}</span>
+                      </div>
+                      <div className="cb-page-sub" style={{ marginTop: 10 }}>{nextEvent.has_meet_link ? 'This one includes a Google Meet link.' : 'No Meet link detected for this event.'}</div>
+                    </>
+                  ) : (
+                    <div className="cb-empty" style={{ margin: 0 }}>No upcoming events.</div>
+                  )}
+                </div>
+
+                <div style={{ background: 'var(--paper)', border: '1px solid var(--line)', borderRadius: 18, padding: 18, boxShadow: '0 8px 24px rgba(19, 36, 28, 0.05)' }}>
+                  <div className="cb-page-sub" style={{ marginBottom: 8 }}>Week overview</div>
+                  <div style={{ display: 'grid', gap: 10 }}>
+                    {groups.map((g) => (
+                      <button key={g.dayKey} onClick={() => setSelectedDayKey(g.dayKey)} style={{
+                        border: '1px solid var(--line)', borderRadius: 14, background: g.dayKey === selectedDayKey ? '#F3F8F5' : '#FFFFFF',
+                        textAlign: 'left', padding: '12px 14px', cursor: 'pointer'
+                      }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}>
+                          <div>
+                            <div style={{ fontWeight: 700 }}>{formatDayHeader(g.events[0].start)}</div>
+                            <div className="cb-page-sub">{fullDateLabel(new Date(g.events[0].start))}</div>
+                          </div>
+                          <div style={{ textAlign: 'right' }}>
+                            <div style={{ fontWeight: 700 }}>{g.events.length}</div>
+                            <div className="cb-page-sub">event{g.events.length === 1 ? '' : 's'}</div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -2758,13 +2800,14 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
 
   const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
 
-  // Groups by Client + Role + Task Type + User. Entries from different users must never
-  // be combined into one line, even when the client, role and task type are the same.
-  // A group of exactly one task renders with no fold at all.
+  // Groups by Client + Role + Task Type, since that combination is what actually becomes
+  // one line on a Karbon timesheet, regardless of which template, or no template at all, the
+  // underlying tasks came from. A group of exactly one task renders with no fold at all, the
+  // fold only exists to earn its place when there is something to actually combine.
   const groups = useMemo(() => {
     const map = new Map();
     for (const r of rows) {
-      const key = `${r.client}|||${r.role || ""}|||${r.task_type || ""}|||${r.tracked_by || ""}`;
+      const key = `${r.client}|||${r.role || ""}|||${r.task_type || ""}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(r);
     }
@@ -3673,124 +3716,6 @@ function HelpReportView() {
   );
 }
 
-function InactivityAuditView({ members }) {
-  const localDate = (d) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
-  };
-  const today = new Date();
-  const weekAgo = new Date();
-  weekAgo.setDate(today.getDate() - 6);
-  const [dateFrom, setDateFrom] = useState(localDate(weekAgo));
-  const [dateTo, setDateTo] = useState(localDate(today));
-  const [enabled, setEnabled] = useState(null);
-  const [events, setEvents] = useState(null);
-  const [personId, setPersonId] = useState("");
-  const [error, setError] = useState(false);
-
-  const load = useCallback(async () => {
-    setError(false);
-    try {
-      const status = await api.getInactivityAuditStatus();
-      setEnabled(!!status.enabled);
-      if (!status.enabled) {
-        setEvents([]);
-        return;
-      }
-      setEvents(await api.getInactivityEvents(dateFrom, dateTo));
-    } catch (err) {
-      setError(true);
-    }
-  }, [dateFrom, dateTo]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const filteredEvents = useMemo(() => {
-    const rows = events || [];
-    return personId ? rows.filter((e) => e.member_id === personId) : rows;
-  }, [events, personId]);
-
-  const summary = useMemo(() => {
-    const byMember = new Map();
-    for (const e of filteredEvents) {
-      if (!byMember.has(e.member_id)) byMember.set(e.member_id, { member_id: e.member_id, member_name: e.member_name, seconds: 0, count: 0, longest: 0 });
-      const row = byMember.get(e.member_id);
-      row.seconds += e.seconds;
-      row.count += 1;
-      row.longest = Math.max(row.longest, e.seconds);
-    }
-    return Array.from(byMember.values()).sort((a, b) => b.seconds - a.seconds);
-  }, [filteredEvents]);
-
-  const kindLabel = (kind) => kind === "screen_locked" ? "Screen locked" : kind === "sleep_gap" ? "Sleep / suspended browser" : "Browser closed / offline gap";
-
-  return (
-    <div>
-      <div className="cb-page-head">
-        <div>
-          <div className="cb-page-title cb-serif">Inactivity audit</div>
-          <div className="cb-page-sub">Super-admin audit of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
-          <div>
-            <div className="cb-label">Person</div>
-            <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ minWidth: 170 }}>
-              <option value="">All people</option>
-              {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-            </select>
-          </div>
-          <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
-          <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
-          <button className="cb-btn" onClick={load}>Refresh</button>
-        </div>
-      </div>
-      {enabled === false && <div className="cb-notice">Inactivity audit recording is currently off. A super admin can turn it on from Settings.</div>}
-      {error && <div className="cb-empty">Could not load the inactivity audit.</div>}
-      {enabled && events === null && <TableSkeleton rows={4} />}
-      {enabled && events !== null && (
-        <>
-          <div className="cb-group-head" style={{ marginTop: 18 }}><div className="cb-group-title">Summary</div><div className="cb-group-count">{summary.length}</div></div>
-          {summary.length === 0 ? <div className="cb-empty">No inactivity events were recorded in this period.</div> : (
-            <div className="cb-table-wrap">
-              <table className="cb-table"><thead><tr><th>Person</th><th className="num">Total detected</th><th className="num">Periods</th><th className="num">Longest</th></tr></thead>
-              <tbody>{summary.map((r) => <tr key={r.member_id}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.seconds)}</td><td className="num cb-mono">{r.count}</td><td className="num cb-mono">{formatHM(r.longest)}</td></tr>)}</tbody></table>
-            </div>
-          )}
-          <div className="cb-group-head" style={{ marginTop: 28 }}><div className="cb-group-title">Individual periods</div><div className="cb-group-count">{filteredEvents.length}</div></div>
-          {filteredEvents.length > 0 && (
-            <div className="cb-table-wrap">
-              <table className="cb-table"><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Detected</th><th className="num">Help explained</th><th className="num">Unexplained</th></tr></thead>
-              <tbody>{filteredEvents.map((e) => <tr key={e.id}>
-                <td>{e.member_name}</td><td>{kindLabel(e.kind)}</td>
-                <td>{formatDate(e.started_at)}, {new Date(e.started_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
-                <td>{formatDate(e.ended_at)}, {new Date(e.ended_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
-                <td className="num cb-mono">{formatHM(e.original_seconds ?? e.seconds)}</td>
-                <td className="num cb-mono">{formatHM(e.help_seconds || 0)}</td>
-                <td className="num cb-mono">{formatHM(e.seconds)}</td>
-              </tr>)}</tbody></table>
-            </div>
-          )}
-        </>
-      )}
-    </div>
-  );
-}
-
-function SuperAdminReportsView({ members }) {
-  const [mode, setMode] = useState("help");
-  return (
-    <div>
-      <div className="cb-tabs cb-tabs-plain" style={{ marginBottom: 16, width: "fit-content" }}>
-        <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
-        <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Inactivity audit</button>
-      </div>
-      {mode === "help" ? <HelpReportView /> : <InactivityAuditView members={members} />}
-    </div>
-  );
-}
-
 function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
@@ -3847,136 +3772,6 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
             </button>
           )}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function QuickMeetingModal({ members, currentUser, clients, calendarConnected, onClose, onCreate, onReconnectCalendar }) {
-  const [summary, setSummary] = useState("");
-  const [selectedIds, setSelectedIds] = useState([]);
-  const [externalGuests, setExternalGuests] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [duration, setDuration] = useState("30");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [result, setResult] = useState(null);
-  const options = members.filter((m) => m.id !== currentUser.id);
-
-  function toggleMember(id) {
-    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-  }
-
-  async function createMeeting() {
-    if (!summary.trim() || busy || !calendarConnected) return;
-    setBusy(true);
-    setError("");
-    try {
-      const external_emails = externalGuests.split(/[;,\n]/).map((x) => x.trim()).filter(Boolean);
-      const created = await onCreate({
-        summary: summary.trim(),
-        attendee_member_ids: selectedIds,
-        external_emails,
-        client_id: clientId || null,
-        duration_minutes: parseInt(duration, 10),
-      });
-      setResult(created);
-    } catch (err) {
-      setError(err.message || "Could not create the meeting");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  if (result) {
-    return (
-      <div className="cb-overlay">
-        <div className="cb-modal" style={{ maxWidth: 520 }}>
-          <div className="cb-modal-head">
-            <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><Video size={17} />Meeting created</div>
-            <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
-          </div>
-          <div className="cb-modal-body">
-            <div style={{ fontWeight: 650, marginBottom: 8 }}>{result.summary}</div>
-            <div className="cb-hint">Google Calendar invitations were sent and Clockbook has started tracking this as an ad hoc meeting.</div>
-          </div>
-          <div className="cb-modal-foot">
-            <button className="cb-btn cb-btn-ghost" onClick={onClose}>Done</button>
-            {result.meet_url && <a className="cb-btn cb-btn-primary" href={result.meet_url} target="_blank" rel="noreferrer"><Video size={14} />Join Google Meet</a>}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div className="cb-modal" style={{ maxWidth: 560 }}>
-        <div className="cb-modal-head">
-          <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><Video size={17} />Quick Meeting</div>
-          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
-        </div>
-        <div className="cb-modal-body">
-          {!calendarConnected ? (
-            <div className="cb-empty">
-              Connect Google Calendar first so Clockbook can create the real event and send invitations.
-              <div style={{ marginTop: 12 }}><button className="cb-btn cb-btn-primary" onClick={onReconnectCalendar}>Connect Google Calendar</button></div>
-            </div>
-          ) : (
-            <>
-              <div className="cb-field">
-                <label className="cb-label">Meeting name</label>
-                <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Year-end query discussion" autoFocus />
-              </div>
-              <div className="cb-field">
-                <label className="cb-label">Client (optional)</label>
-                <select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
-                  <option value="">Internal / no client</option>
-                  {clients.filter((c) => c.name !== "Internal Support").map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-              </div>
-              <div className="cb-field">
-                <label className="cb-label">Invite Clockbook users</label>
-                <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, maxHeight: 180, overflowY: "auto" }}>
-                  {options.length === 0 && <div className="cb-hint">No other Clockbook users yet.</div>}
-                  {options.map((m) => (
-                    <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", cursor: m.email ? "pointer" : "not-allowed", opacity: m.email ? 1 : 0.55 }}>
-                      <input type="checkbox" checked={selectedIds.includes(m.id)} disabled={!m.email} onChange={() => toggleMember(m.id)} />
-                      <span>{m.name}</span>
-                      <span className="cb-hint" style={{ marginLeft: "auto" }}>{m.email || "No email"}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="cb-field">
-                <label className="cb-label">External guests (optional)</label>
-                <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
-                <div className="cb-hint">Separate multiple email addresses with commas.</div>
-              </div>
-              <div className="cb-field">
-                <label className="cb-label">Planned duration</label>
-                <select className="cb-select" value={duration} onChange={(e) => setDuration(e.target.value)}>
-                  <option value="15">15 minutes</option>
-                  <option value="30">30 minutes</option>
-                  <option value="45">45 minutes</option>
-                  <option value="60">60 minutes</option>
-                </select>
-              </div>
-              {error && <div className="cb-error">{error}</div>}
-              {error && error.toLowerCase().includes("reconnect") && (
-                <div style={{ marginTop: 10 }}><button className="cb-btn cb-btn-ghost" onClick={onReconnectCalendar}>Reconnect Google Calendar</button></div>
-              )}
-            </>
-          )}
-        </div>
-        {calendarConnected && (
-          <div className="cb-modal-foot">
-            <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
-            <button className="cb-btn cb-btn-primary" disabled={!summary.trim() || busy} onClick={createMeeting}>
-              <Video size={14} />{busy ? "Creating..." : "Create & Start Meeting"}
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -4039,8 +3834,7 @@ function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfir
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const options = members.filter((m) => m.id !== currentUser.id);
-  const isCalendarQuickMeeting = !!task.source_calendar_event_id;
-  const valid = context.trim().length >= 3 && (interaction === "general" ? (isCalendarQuickMeeting || !!colleagueId) : !!colleagueId);
+  const valid = !!colleagueId && context.trim().length >= 3;
 
   async function finish() {
     if (!valid || busy) return;
@@ -4065,7 +3859,7 @@ function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfir
           <div className="cb-field">
             <label className="cb-label">Who was the meeting with?</label>
             <select className="cb-select" value={colleagueId} onChange={(e) => setColleagueId(e.target.value)} autoFocus>
-              <option value="">{isCalendarQuickMeeting ? "No single colleague / multiple or external guests" : "Select a colleague..."}</option>
+              <option value="">Select a colleague...</option>
               {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
@@ -4376,15 +4170,14 @@ function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm 
             />
           </div>
           <div className="cb-hint">
-            Client is optional when the meeting starts. If you leave it blank, Clockbook will ask you to choose a client when you complete the meeting.
-            Role and task type can also be filled in later.
+            Role and task type can be filled in later, when you submit this. This starts tracking right away, with your other timer paused.
           </div>
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={busy}
-            onClick={async () => { setBusy(true); await onConfirm(clientId || null); }}
+            className="cb-btn cb-btn-primary" disabled={!clientId || busy}
+            onClick={async () => { setBusy(true); await onConfirm(clientId); }}
           >
             Start tracking
           </button>
@@ -4460,19 +4253,10 @@ export default function App() {
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState("dashboard");
-  const [superAdminViewMode, setSuperAdminViewMode] = useState(() => {
-    try {
-      const saved = localStorage.getItem("clockbook_super_admin_view_mode");
-      return ["member", "admin", "super_admin"].includes(saved) ? saved : "super_admin";
-    } catch (err) {
-      return "super_admin";
-    }
-  });
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
-  const [showQuickMeeting, setShowQuickMeeting] = useState(false);
   const [showManualHelp, setShowManualHelp] = useState(false);
   const [completingTask, setCompletingTask] = useState(null);
   const [startCountPrompt, setStartCountPrompt] = useState(null);
@@ -4508,22 +4292,6 @@ export default function App() {
     const iv = setInterval(() => setNow(Date.now() + clockOffsetRef.current), 1000);
     return () => clearInterval(iv);
   }, []);
-
-  // Ctrl+Shift+M opens the same Quick Meeting creator that is available in the top bar
-  // and Calendar page. It is ignored while typing, just like the existing Ctrl+M shortcut.
-  useEffect(() => {
-    if (authState !== "ready" || !currentUser) return;
-    function handleQuickMeetingShortcut(e) {
-      if (e.repeat || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== "m") return;
-      const target = e.target;
-      const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
-      if (tag === "input" || tag === "textarea" || tag === "select" || (target && target.isContentEditable)) return;
-      e.preventDefault();
-      setShowQuickMeeting(true);
-    }
-    window.addEventListener("keydown", handleQuickMeetingShortcut);
-    return () => window.removeEventListener("keydown", handleQuickMeetingShortcut);
-  }, [authState, currentUser]);
 
   // Ctrl+M is intentionally scoped to the Clockbook page. It is only handled while this
   // app has focus, never globally at the OS level, and never while the person is typing in
@@ -4678,18 +4446,7 @@ export default function App() {
   // The header pins whichever task the person was last active on, running or paused, so
   // pausing does not make it disappear, it only gets replaced once another task starts.
   const myPinnedTask = myRunningTask || myMostRecentPaused;
-  const realIsSuperAdmin = currentUser?.role === "super_admin";
-  const effectiveRole = realIsSuperAdmin ? superAdminViewMode : currentUser?.role;
-  const effectiveCurrentUser = currentUser ? { ...currentUser, role: effectiveRole } : null;
-  const isAdmin = effectiveCurrentUser ? isAdminRole(effectiveCurrentUser.role) : false;
-  const effectiveIsSuperAdmin = effectiveCurrentUser?.role === "super_admin";
-
-  function changeSuperAdminViewMode(mode) {
-    if (!realIsSuperAdmin || !["member", "admin", "super_admin"].includes(mode)) return;
-    setSuperAdminViewMode(mode);
-    try { localStorage.setItem("clockbook_super_admin_view_mode", mode); } catch (err) {}
-    if (mode !== "super_admin" && view === "reports") setView("dashboard");
-  }
+  const isAdmin = currentUser ? isAdminRole(currentUser.role) : false;
 
   // Watches for this computer actually going to sleep or having its screen locked, and
   // pauses any running timer the moment it is detected rather than waiting to ask, since by
@@ -4722,26 +4479,11 @@ export default function App() {
     }
   }
 
-  async function recordInactivity(kind, startedMs, endedMs, task) {
-    try {
-      const result = await api.createInactivityEvent(
-        kind,
-        new Date(startedMs + clockOffsetRef.current).toISOString(),
-        new Date(endedMs + clockOffsetRef.current).toISOString(),
-        task ? task.id : null,
-      );
-      return result && result.recorded ? result.id : null;
-    } catch (err) {
-      // Audit recording must never interfere with the user's timer or away-time recovery flow.
-      return null;
-    }
-  }
-
   // Shows the same "you were away" popup and notification as before, kept separate from
   // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
   // person with this once they are actually back to see it
-  function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise = null) {
-    setSleepAlert({ task: task || null, gapMs, sleepStartMs, inactivityEventPromise });
+  function showAwayAlert(task, gapMs, sleepStartMs) {
+    setSleepAlert({ task: task || null, gapMs, sleepStartMs });
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
     // delivers it straight to the notification center with no visible toast. Waiting a
     // couple of seconds is an attempt to land just outside that window instead, this is an
@@ -4769,11 +4511,10 @@ export default function App() {
     if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
     lastAlertRef.current = Date.now();
     const task = runningTaskRef.current;
-    const inactivityEventPromise = recordInactivity("sleep_gap", sleepStartMs, sleepStartMs + gapMs, task);
     // If a task was running, cut it off exactly when the machine went away. If no task was
     // running, still preserve the same away period so it can be classified as help or ignored.
     if (task) await pauseTaskAt(task, sleepStartMs);
-    showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise);
+    showAwayAlert(task, gapMs, sleepStartMs);
   }
 
   const wasHiddenSinceLastCheckRef = useRef(false);
@@ -4868,9 +4609,7 @@ export default function App() {
           const task = lockedTask;
           lockedSince = null;
           lockedTask = null;
-          lastAlertRef.current = Date.now();
-          const inactivityEventPromise = recordInactivity("screen_locked", sleepStart, sleepStart + gap, task);
-          showAwayAlert(task, gap, sleepStart, inactivityEventPromise);
+          showAwayAlert(task, gap, sleepStart);
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
@@ -5005,9 +4744,9 @@ export default function App() {
     return () => clearInterval(iv);
   }, []);
 
-  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false, context = "", inactivityEventId = null) {
+  async function logHelpEvent(direction, colleagueId, seconds, source, adjusted = false, context = "") {
     try {
-      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted, context, inactivityEventId);
+      await api.createHelpEvent(colleagueId, direction, seconds, source, adjusted, context);
       showToast(direction === "helped" ? "Logged, thanks for helping out" : "Logged, glad you got help");
     } catch (err) {
       showToast("Could not log that, please try again", true);
@@ -5036,6 +4775,28 @@ export default function App() {
     return () => clearInterval(iv);
   }, [myRunningTask && myRunningTask.id]);
 
+  // Best-effort pause fired the instant this page starts to unload: a tab closing, the
+  // browser quitting, or the OS shutting down. This is not guaranteed to always land, a hard
+  // power loss gives no such warning at all, which is exactly why the heartbeat-based stale
+  // check above still exists underneath this as the real safety net. Reads the running task
+  // fresh from the ref at the moment of unload, so this only needs registering once.
+  useEffect(() => {
+    function firePauseBeacon() {
+      const task = runningTaskRef.current;
+      const token = getToken();
+      if (!task || !token) return;
+      const payload = JSON.stringify({ token, end_at: new Date(Date.now() + clockOffsetRef.current).toISOString() });
+      const blob = new Blob([payload], { type: "application/json" });
+      navigator.sendBeacon(`/api/tasks/${task.id}/pause-beacon`, blob);
+    }
+    window.addEventListener("pagehide", firePauseBeacon);
+    window.addEventListener("beforeunload", firePauseBeacon);
+    return () => {
+      window.removeEventListener("pagehide", firePauseBeacon);
+      window.removeEventListener("beforeunload", firePauseBeacon);
+    };
+  }, []);
+
   useEffect(() => {
     if (dataLoading || staleCheckedRef.current || !currentUser) return;
     staleCheckedRef.current = true;
@@ -5048,8 +4809,7 @@ export default function App() {
       try {
         const updated = await api.pauseTask(task.id, new Date(lastSeen).toISOString());
         mergeTask(updated);
-        const inactivityEventPromise = recordInactivity("stale_gap", lastSeen - clockOffsetRef.current, Date.now(), task);
-        setSleepAlert({ task, gapMs, sleepStartMs: lastSeen, causePhrase: "was closed, shut down, or lost connection", inactivityEventPromise });
+        setSleepAlert({ task, gapMs, sleepStartMs: lastSeen, causePhrase: "was closed, shut down, or lost connection" });
       } catch (err) {
         // If this fails, the task is still visibly running on the dashboard and the person
         // can pause or adjust it themselves, nothing is silently lost
@@ -5316,9 +5076,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId) {
+  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType) {
     try {
-      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId);
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
@@ -5419,23 +5179,6 @@ export default function App() {
     setTrackedMetrics((prev) => prev.filter((m) => m.id !== id));
   }
 
-  async function createQuickMeeting(payload) {
-    try {
-      const result = await api.createQuickMeeting(payload);
-      if (result.event_id) {
-        promptedMeetingIdsRef.current.add(result.event_id);
-        savePromptedMeetingIds(promptedMeetingIdsRef.current);
-      }
-      const refreshed = await api.getTasks();
-      setTasks(refreshed);
-      showToast(`Meeting created and tracking started: ${result.summary}`);
-      return result;
-    } catch (err) {
-      showToast(err.message || "Could not create the meeting", true);
-      throw err;
-    }
-  }
-
   async function startAdHocMeeting(colleagueId = null) {
     const colleague = colleagueId ? members.find((m) => m.id === colleagueId) : null;
     try {
@@ -5500,11 +5243,11 @@ export default function App() {
 
   async function trackMeetingAsTask(clientId) {
     const { task: existingTask, summary, meetingId } = meetingTrackPrompt;
-    const client = clientId ? clients.find((c) => c.id === clientId) : null;
+    const client = clients.find((c) => c.id === clientId);
     try {
       await pauseTask(existingTask.id);
       const created = await api.createTask({
-        client_id: client ? client.id : "", client_name: client ? client.name : "", name: summary,
+        client_id: clientId, client_name: client.name, name: summary,
         source_calendar_event_id: meetingId || null,
       });
       setTasks((prev) => [created, ...prev]);
@@ -5546,17 +5289,6 @@ export default function App() {
     await api.deleteTemplateTask(templateId, taskId);
     await refreshTemplates();
   }
-  async function moveTemplateTask(templateId, taskId, direction) {
-    const template = templates.find((t) => t.id === templateId);
-    if (!template) return;
-    const ids = template.tasks.map((t) => t.id);
-    const from = ids.indexOf(taskId);
-    const to = from + direction;
-    if (from < 0 || to < 0 || to >= ids.length) return;
-    [ids[from], ids[to]] = [ids[to], ids[from]];
-    await api.reorderTemplateTasks(templateId, ids);
-    await refreshTemplates();
-  }
 
   if (authState === "loading") {
     return <div className="cb-root"><LoadingScreen /></div>;
@@ -5587,17 +5319,16 @@ export default function App() {
   return (
     <div className="cb-root">
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={currentUser.role === "super_admin"} />
         <div className="cb-main">
           <TopBar
-            currentUser={effectiveCurrentUser}
+            currentUser={currentUser}
             onLogout={handleLogout}
             pinnedTask={myPinnedTask}
             now={now}
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
             onResume={() => myPinnedTask && requestStart(myPinnedTask)}
             onComplete={() => myPinnedTask && setCompletingTask(myPinnedTask)}
-            onQuickMeeting={() => setShowQuickMeeting(true)}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -5605,8 +5336,7 @@ export default function App() {
           <div className="cb-content">
             {view === "dashboard" && (
               <Dashboard
-                tasks={tasks} now={now} currentUser={effectiveCurrentUser} members={members} isAdmin={isAdmin}
-                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
+                tasks={tasks} now={now} currentUser={currentUser} members={members} isAdmin={isAdmin}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
                 onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)}
@@ -5617,7 +5347,7 @@ export default function App() {
             {view === "templates" && (
               <Templates
                 templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-                onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask} onMoveTask={moveTemplateTask}
+                onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
                 onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate} onRenameTemplate={renameTemplate}
               />
             )}
@@ -5629,7 +5359,7 @@ export default function App() {
               />
             )}
             {view === "calendar" && (
-              <CalendarPage onConnectCalendar={connectGoogleCalendar} onQuickMeeting={() => setShowQuickMeeting(true)} />
+              <CalendarPage onConnectCalendar={connectGoogleCalendar} />
             )}
             {view === "export" && (
               <ExportView
@@ -5639,7 +5369,7 @@ export default function App() {
             )}
             {view === "staff" && (
               <StaffView
-                members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
+                members={members} currentUser={currentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
@@ -5648,45 +5378,35 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && effectiveIsSuperAdmin && <SuperAdminReportsView members={members} />}
-            {view === "settings" && (isAdmin || realIsSuperAdmin) && (
+            {view === "reports" && currentUser.role === "super_admin" && <HelpReportView />}
+            {view === "settings" && isAdmin && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
-                pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
-                realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
-                effectiveIsAdmin={isAdmin}
+                pods={pods} isSuperAdmin={currentUser.role === "super_admin"} onAddPod={addPod} onDeletePod={deletePodHandler}
               />
             )}
           </div>
         </div>
       </div>
 
-      {showQuickMeeting && (
-        <QuickMeetingModal
-          members={members} currentUser={currentUser} clients={clients}
-          calendarConnected={!!currentUser.google_calendar_connected}
-          onClose={() => setShowQuickMeeting(false)} onCreate={createQuickMeeting}
-          onReconnectCalendar={connectGoogleCalendar}
-        />
-      )}
       {showAdHocMeeting && (
         <AdHocMeetingModal
-          members={members} currentUser={effectiveCurrentUser}
+          members={members} currentUser={currentUser}
           onClose={() => setShowAdHocMeeting(false)} onStart={startAdHocMeeting}
         />
       )}
       {showManualHelp && (
         <ManualHelpModal
-          members={members} currentUser={effectiveCurrentUser}
+          members={members} currentUser={currentUser}
           onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
         />
       )}
       {showNewTask && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
-          roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
+          roles={roles} taskTypes={taskTypes} currentUser={currentUser}
           onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
         />
       )}
@@ -5706,7 +5426,7 @@ export default function App() {
           onClose={() => setCompletingTask(null)} onConfirm={finishAdHocMeeting}
         />
       ) : completingTask ? (
-        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} clients={clients} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
+        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
       ) : null}
       {showAddMember && (
         <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={addTeammate} />
@@ -5722,10 +5442,7 @@ export default function App() {
             setSleepAlert(null);
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
-            const inactivityEventId = sleepAlert.inactivityEventPromise
-              ? await sleepAlert.inactivityEventPromise
-              : null;
-            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted, context, inactivityEventId);
+            await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted, context);
             setSleepAlert(null);
           }}
         />
