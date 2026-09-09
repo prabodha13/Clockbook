@@ -99,6 +99,8 @@ export const api = {
     request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify(task) }),
   updateTemplateTask: (templateId, taskId, task) =>
     request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify(task) }),
+  reorderTemplateTasks: (templateId, taskIds) =>
+    request(`/templates/${templateId}/tasks/reorder`, { method: "PUT", body: JSON.stringify({ task_ids: taskIds }) }),
   deleteTemplateTask: (templateId, taskId) =>
     request(`/templates/${templateId}/tasks/${taskId}`, { method: "DELETE" }),
 

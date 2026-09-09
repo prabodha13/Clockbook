@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, Fra
 import { createPortal } from "react-dom";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
-  ChevronDown, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
+  ChevronDown, ChevronUp, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
   Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake,
 } from "lucide-react";
@@ -1729,7 +1729,7 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
-function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask }) {
+function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask, onMoveTask, canMoveUp, canMoveDown }) {
   const [name, setName] = useState(task.name);
   const [role, setRole] = useState(task.role);
   const [taskType, setTaskType] = useState(task.task_type);
@@ -1785,7 +1785,11 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
             <option value={taskType}>{taskType}</option>
           )}
         </select>
-        <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button className="cb-icon-btn" type="button" title="Move up" disabled={!canMoveUp} onClick={() => onMoveTask(template.id, task.id, -1)}><ChevronUp size={13} /></button>
+          <button className="cb-icon-btn" type="button" title="Move down" disabled={!canMoveDown} onClick={() => onMoveTask(template.id, task.id, 1)}><ChevronDown size={13} /></button>
+          <button className="cb-icon-btn cb-btn-danger" type="button" onClick={() => onDeleteTask(template.id, task.id)}><Trash2 size={13} /></button>
+        </div>
       </div>
       <div className="cb-tmpl-task-options">
         <label className="cb-tmpl-task-option-checkbox">
@@ -1823,7 +1827,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   );
 }
 
-function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onRenameTemplate }) {
+function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onMoveTask, onDeleteTemplate, onRenameTemplate }) {
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [editedField, setEditedField] = useState(template.field);
   const [editedName, setEditedName] = useState(template.name);
@@ -1910,11 +1914,12 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
               <button className="cb-icon-btn cb-btn-danger" title="Delete template" onClick={() => onDeleteTemplate(template.id)}><Trash2 size={14} /></button>
             </div>
           )}
-          {template.tasks.map((t) =>
+          {template.tasks.map((t, taskIndex) =>
             isAdmin ? (
               <TemplateTaskEditor
                 key={t.id} template={template} task={t} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-                onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask}
+                onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onMoveTask={onMoveTask}
+                canMoveUp={taskIndex > 0} canMoveDown={taskIndex < template.tasks.length - 1}
               />
             ) : (
               <div className="cb-row" key={t.id}>
@@ -3688,11 +3693,13 @@ function InactivityAuditView({ members }) {
           <div className="cb-group-head" style={{ marginTop: 28 }}><div className="cb-group-title">Individual periods</div><div className="cb-group-count">{filteredEvents.length}</div></div>
           {filteredEvents.length > 0 && (
             <div className="cb-table-wrap">
-              <table className="cb-table"><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Duration</th></tr></thead>
+              <table className="cb-table"><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Detected</th><th className="num">Help explained</th><th className="num">Unexplained</th></tr></thead>
               <tbody>{filteredEvents.map((e) => <tr key={e.id}>
                 <td>{e.member_name}</td><td>{kindLabel(e.kind)}</td>
                 <td>{formatDate(e.started_at)}, {new Date(e.started_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
                 <td>{formatDate(e.ended_at)}, {new Date(e.ended_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
+                <td className="num cb-mono">{formatHM(e.original_seconds ?? e.seconds)}</td>
+                <td className="num cb-mono">{formatHM(e.help_seconds || 0)}</td>
                 <td className="num cb-mono">{formatHM(e.seconds)}</td>
               </tr>)}</tbody></table>
             </div>
@@ -5308,6 +5315,17 @@ export default function App() {
     await api.deleteTemplateTask(templateId, taskId);
     await refreshTemplates();
   }
+  async function moveTemplateTask(templateId, taskId, direction) {
+    const template = templates.find((t) => t.id === templateId);
+    if (!template) return;
+    const ids = template.tasks.map((t) => t.id);
+    const from = ids.indexOf(taskId);
+    const to = from + direction;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    [ids[from], ids[to]] = [ids[to], ids[from]];
+    await api.reorderTemplateTasks(templateId, ids);
+    await refreshTemplates();
+  }
 
   if (authState === "loading") {
     return <div className="cb-root"><LoadingScreen /></div>;
@@ -5366,7 +5384,7 @@ export default function App() {
             {view === "templates" && (
               <Templates
                 templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-                onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask}
+                onAddTask={addTemplateTask} onUpdateTask={updateTemplateTask} onDeleteTask={deleteTemplateTask} onMoveTask={moveTemplateTask}
                 onDeleteTemplate={deleteTemplate} onAddTemplate={addTemplate} onRenameTemplate={renameTemplate}
               />
             )}
