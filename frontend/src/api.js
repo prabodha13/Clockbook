@@ -52,6 +52,7 @@ export const api = {
   relayNotification: (text) => request("/notifications/relay", { method: "POST", body: JSON.stringify({ text }) }),
   getMeetingNow: () => request("/calendar/meeting-now"),
   getCalendarEvents: () => request("/calendar/events"),
+  createQuickMeeting: (payload) => request("/calendar/quick-meeting", { method: "POST", body: JSON.stringify(payload) }),
   getSuggestedTasks: () => request("/calendar/suggested-tasks"),
   dismissSuggestedTask: (eventId) => request(`/calendar/suggested-tasks/${eventId}/dismiss`, { method: "POST" }),
   claimAccount: (payload) => request("/auth/claim", { method: "POST", body: JSON.stringify(payload) }),
@@ -136,11 +137,11 @@ export const api = {
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
   getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>
     request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`),
-  submitTask: (id, note, endCount, adjustedSeconds, role, taskType) =>
+  submitTask: (id, note, endCount, adjustedSeconds, role, taskType, clientId) =>
     request(`/tasks/${id}/submit`, {
       method: "POST",
       body: JSON.stringify({
-        note, end_count: endCount != null ? endCount : null,
+        note, client_id: clientId || null, end_count: endCount != null ? endCount : null,
         adjusted_seconds: adjustedSeconds != null ? adjustedSeconds : null,
         role: role != null ? role : null, task_type: taskType != null ? taskType : null,
       }),

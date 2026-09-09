@@ -347,7 +347,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting }) {
   const isAdmin = isAdminRole(currentUser.role);
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
@@ -374,6 +374,9 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
       <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button className="cb-btn cb-btn-sm" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
+          <Video size={13} />Meeting
+        </button>
         <div className="cb-user-btn" style={{ cursor: "default" }}>
           <Avatar member={currentUser} />
           {currentUser.name}
@@ -2636,7 +2639,7 @@ function formatDayHeader(iso) {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-function CalendarPage({ onConnectCalendar }) {
+function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
   const [state, setState] = useState({ loading: true, connected: false, events: [], error: "" });
 
   const load = useCallback(async () => {
@@ -2667,9 +2670,14 @@ function CalendarPage({ onConnectCalendar }) {
           <div className="cb-page-sub">Your own upcoming events from Google Calendar, next 7 days.</div>
         </div>
         {state.connected && (
-          <button className="cb-btn cb-btn-ghost" onClick={load} title="Re-check your calendar">
-            <RotateCcw size={14} />Refresh
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="cb-btn cb-btn-primary" onClick={onQuickMeeting}>
+              <Video size={14} />Quick Meeting
+            </button>
+            <button className="cb-btn cb-btn-ghost" onClick={load} title="Re-check your calendar">
+              <RotateCcw size={14} />Refresh
+            </button>
+          </div>
         )}
       </div>
 
@@ -3844,6 +3852,136 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
   );
 }
 
+function QuickMeetingModal({ members, currentUser, clients, calendarConnected, onClose, onCreate, onReconnectCalendar }) {
+  const [summary, setSummary] = useState("");
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [externalGuests, setExternalGuests] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [duration, setDuration] = useState("30");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null);
+  const options = members.filter((m) => m.id !== currentUser.id);
+
+  function toggleMember(id) {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
+
+  async function createMeeting() {
+    if (!summary.trim() || busy || !calendarConnected) return;
+    setBusy(true);
+    setError("");
+    try {
+      const external_emails = externalGuests.split(/[;,\n]/).map((x) => x.trim()).filter(Boolean);
+      const created = await onCreate({
+        summary: summary.trim(),
+        attendee_member_ids: selectedIds,
+        external_emails,
+        client_id: clientId || null,
+        duration_minutes: parseInt(duration, 10),
+      });
+      setResult(created);
+    } catch (err) {
+      setError(err.message || "Could not create the meeting");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (result) {
+    return (
+      <div className="cb-overlay">
+        <div className="cb-modal" style={{ maxWidth: 520 }}>
+          <div className="cb-modal-head">
+            <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><Video size={17} />Meeting created</div>
+            <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+          </div>
+          <div className="cb-modal-body">
+            <div style={{ fontWeight: 650, marginBottom: 8 }}>{result.summary}</div>
+            <div className="cb-hint">Google Calendar invitations were sent and Clockbook has started tracking this as an ad hoc meeting.</div>
+          </div>
+          <div className="cb-modal-foot">
+            <button className="cb-btn cb-btn-ghost" onClick={onClose}>Done</button>
+            {result.meet_url && <a className="cb-btn cb-btn-primary" href={result.meet_url} target="_blank" rel="noreferrer"><Video size={14} />Join Google Meet</a>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 560 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><Video size={17} />Quick Meeting</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          {!calendarConnected ? (
+            <div className="cb-empty">
+              Connect Google Calendar first so Clockbook can create the real event and send invitations.
+              <div style={{ marginTop: 12 }}><button className="cb-btn cb-btn-primary" onClick={onReconnectCalendar}>Connect Google Calendar</button></div>
+            </div>
+          ) : (
+            <>
+              <div className="cb-field">
+                <label className="cb-label">Meeting name</label>
+                <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Year-end query discussion" autoFocus />
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Client (optional)</label>
+                <select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
+                  <option value="">Internal / no client</option>
+                  {clients.filter((c) => c.name !== "Internal Support").map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Invite Clockbook users</label>
+                <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, maxHeight: 180, overflowY: "auto" }}>
+                  {options.length === 0 && <div className="cb-hint">No other Clockbook users yet.</div>}
+                  {options.map((m) => (
+                    <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", cursor: m.email ? "pointer" : "not-allowed", opacity: m.email ? 1 : 0.55 }}>
+                      <input type="checkbox" checked={selectedIds.includes(m.id)} disabled={!m.email} onChange={() => toggleMember(m.id)} />
+                      <span>{m.name}</span>
+                      <span className="cb-hint" style={{ marginLeft: "auto" }}>{m.email || "No email"}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">External guests (optional)</label>
+                <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
+                <div className="cb-hint">Separate multiple email addresses with commas.</div>
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Planned duration</label>
+                <select className="cb-select" value={duration} onChange={(e) => setDuration(e.target.value)}>
+                  <option value="15">15 minutes</option>
+                  <option value="30">30 minutes</option>
+                  <option value="45">45 minutes</option>
+                  <option value="60">60 minutes</option>
+                </select>
+              </div>
+              {error && <div className="cb-error">{error}</div>}
+              {error && error.toLowerCase().includes("reconnect") && (
+                <div style={{ marginTop: 10 }}><button className="cb-btn cb-btn-ghost" onClick={onReconnectCalendar}>Reconnect Google Calendar</button></div>
+              )}
+            </>
+          )}
+        </div>
+        {calendarConnected && (
+          <div className="cb-modal-foot">
+            <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            <button className="cb-btn cb-btn-primary" disabled={!summary.trim() || busy} onClick={createMeeting}>
+              <Video size={14} />{busy ? "Creating..." : "Create & Start Meeting"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function AdHocMeetingModal({ members, currentUser, onClose, onStart }) {
   const [colleagueId, setColleagueId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -3901,7 +4039,8 @@ function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfir
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const options = members.filter((m) => m.id !== currentUser.id);
-  const valid = !!colleagueId && context.trim().length >= 3;
+  const isCalendarQuickMeeting = !!task.source_calendar_event_id;
+  const valid = context.trim().length >= 3 && (interaction === "general" ? (isCalendarQuickMeeting || !!colleagueId) : !!colleagueId);
 
   async function finish() {
     if (!valid || busy) return;
@@ -3926,7 +4065,7 @@ function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfir
           <div className="cb-field">
             <label className="cb-label">Who was the meeting with?</label>
             <select className="cb-select" value={colleagueId} onChange={(e) => setColleagueId(e.target.value)} autoFocus>
-              <option value="">Select a colleague...</option>
+              <option value="">{isCalendarQuickMeeting ? "No single colleague / multiple or external guests" : "Select a colleague..."}</option>
               {options.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
@@ -4333,6 +4472,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
+  const [showQuickMeeting, setShowQuickMeeting] = useState(false);
   const [showManualHelp, setShowManualHelp] = useState(false);
   const [completingTask, setCompletingTask] = useState(null);
   const [startCountPrompt, setStartCountPrompt] = useState(null);
@@ -4368,6 +4508,22 @@ export default function App() {
     const iv = setInterval(() => setNow(Date.now() + clockOffsetRef.current), 1000);
     return () => clearInterval(iv);
   }, []);
+
+  // Ctrl+Shift+M opens the same Quick Meeting creator that is available in the top bar
+  // and Calendar page. It is ignored while typing, just like the existing Ctrl+M shortcut.
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser) return;
+    function handleQuickMeetingShortcut(e) {
+      if (e.repeat || !e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey || e.key.toLowerCase() !== "m") return;
+      const target = e.target;
+      const tag = target && target.tagName ? target.tagName.toLowerCase() : "";
+      if (tag === "input" || tag === "textarea" || tag === "select" || (target && target.isContentEditable)) return;
+      e.preventDefault();
+      setShowQuickMeeting(true);
+    }
+    window.addEventListener("keydown", handleQuickMeetingShortcut);
+    return () => window.removeEventListener("keydown", handleQuickMeetingShortcut);
+  }, [authState, currentUser]);
 
   // Ctrl+M is intentionally scoped to the Clockbook page. It is only handled while this
   // app has focus, never globally at the OS level, and never while the person is typing in
@@ -5263,6 +5419,23 @@ export default function App() {
     setTrackedMetrics((prev) => prev.filter((m) => m.id !== id));
   }
 
+  async function createQuickMeeting(payload) {
+    try {
+      const result = await api.createQuickMeeting(payload);
+      if (result.event_id) {
+        promptedMeetingIdsRef.current.add(result.event_id);
+        savePromptedMeetingIds(promptedMeetingIdsRef.current);
+      }
+      const refreshed = await api.getTasks();
+      setTasks(refreshed);
+      showToast(`Meeting created and tracking started: ${result.summary}`);
+      return result;
+    } catch (err) {
+      showToast(err.message || "Could not create the meeting", true);
+      throw err;
+    }
+  }
+
   async function startAdHocMeeting(colleagueId = null) {
     const colleague = colleagueId ? members.find((m) => m.id === colleagueId) : null;
     try {
@@ -5424,6 +5597,7 @@ export default function App() {
             onPause={() => myRunningTask && pauseTask(myRunningTask.id)}
             onResume={() => myPinnedTask && requestStart(myPinnedTask)}
             onComplete={() => myPinnedTask && setCompletingTask(myPinnedTask)}
+            onQuickMeeting={() => setShowQuickMeeting(true)}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -5455,7 +5629,7 @@ export default function App() {
               />
             )}
             {view === "calendar" && (
-              <CalendarPage onConnectCalendar={connectGoogleCalendar} />
+              <CalendarPage onConnectCalendar={connectGoogleCalendar} onQuickMeeting={() => setShowQuickMeeting(true)} />
             )}
             {view === "export" && (
               <ExportView
@@ -5489,6 +5663,14 @@ export default function App() {
         </div>
       </div>
 
+      {showQuickMeeting && (
+        <QuickMeetingModal
+          members={members} currentUser={currentUser} clients={clients}
+          calendarConnected={!!currentUser.google_calendar_connected}
+          onClose={() => setShowQuickMeeting(false)} onCreate={createQuickMeeting}
+          onReconnectCalendar={connectGoogleCalendar}
+        />
+      )}
       {showAdHocMeeting && (
         <AdHocMeetingModal
           members={members} currentUser={effectiveCurrentUser}
