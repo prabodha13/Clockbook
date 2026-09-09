@@ -2256,7 +2256,7 @@ function SettingsView({
   );
 }
 
-function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onDeleteTemplate, onAddTemplate, onRenameTemplate }) {
+function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAddTask, onUpdateTask, onDeleteTask, onMoveTask, onDeleteTemplate, onAddTemplate, onRenameTemplate }) {
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
@@ -2305,7 +2305,7 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
         templates.map((t) => (
           <TemplateEditor
             key={t.id} template={t} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-            onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onDeleteTemplate={onDeleteTemplate}
+            onAddTask={onAddTask} onUpdateTask={onUpdateTask} onDeleteTask={onDeleteTask} onMoveTask={onMoveTask} onDeleteTemplate={onDeleteTemplate}
             onRenameTemplate={onRenameTemplate}
           />
         ))
