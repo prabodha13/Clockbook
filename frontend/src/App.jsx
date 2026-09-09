@@ -2654,23 +2654,80 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const groups = [];
-  for (const ev of state.events) {
-    const dayKey = ev.start.slice(0, 10);
-    let group = groups.find((g) => g.dayKey === dayKey);
-    if (!group) { group = { dayKey, events: [] }; groups.push(group); }
-    group.events.push(ev);
+  const weekDays = useMemo(() => {
+    const today = new Date();
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(today);
+      d.setHours(0, 0, 0, 0);
+      d.setDate(d.getDate() + i);
+      return d;
+    });
+  }, []);
+
+  const dayKey = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  const eventsByDay = useMemo(() => {
+    const map = new Map();
+    for (const d of weekDays) map.set(dayKey(d), []);
+    for (const ev of state.events) {
+      const key = ev.start ? ev.start.slice(0, 10) : "";
+      if (map.has(key)) map.get(key).push(ev);
+    }
+    return map;
+  }, [state.events, weekDays]);
+
+  const timedEventsByDay = useMemo(() => {
+    const map = new Map();
+    for (const d of weekDays) {
+      const key = dayKey(d);
+      map.set(key, (eventsByDay.get(key) || []).filter((ev) => !ev.all_day));
+    }
+    return map;
+  }, [eventsByDay, weekDays]);
+
+  const allDayEvents = useMemo(
+    () => state.events.filter((ev) => ev.all_day && weekDays.some((d) => dayKey(d) === ev.start?.slice(0, 10))),
+    [state.events, weekDays]
+  );
+
+  const hourStart = 8;
+  const hourEnd = 18;
+  const hourHeight = 66;
+  const totalHours = hourEnd - hourStart;
+  const gridHeight = totalHours * hourHeight;
+  const hours = Array.from({ length: totalHours + 1 }, (_, i) => hourStart + i);
+
+  function eventPosition(ev) {
+    const start = new Date(ev.start);
+    const end = ev.end ? new Date(ev.end) : new Date(start.getTime() + 60 * 60 * 1000);
+    const startMinutes = start.getHours() * 60 + start.getMinutes();
+    const endMinutes = end.getHours() * 60 + end.getMinutes();
+    const rangeStart = hourStart * 60;
+    const rangeEnd = hourEnd * 60;
+    const clippedStart = Math.max(rangeStart, Math.min(rangeEnd, startMinutes));
+    const clippedEnd = Math.max(clippedStart + 20, Math.min(rangeEnd, Math.max(endMinutes, clippedStart + 20)));
+    return {
+      top: ((clippedStart - rangeStart) / 60) * hourHeight,
+      height: Math.max(34, ((clippedEnd - clippedStart) / 60) * hourHeight),
+    };
   }
+
+  const rangeLabel = `${weekDays[0].toLocaleDateString(undefined, { day: "numeric", month: "short" })} - ${weekDays[6].toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
 
   return (
     <div>
-      <div className="cb-page-head">
+      <div className="cb-page-head" style={{ alignItems: "flex-start", marginBottom: 14 }}>
         <div>
           <div className="cb-page-title cb-serif">Calendar</div>
-          <div className="cb-page-sub">Your own upcoming events from Google Calendar, next 7 days.</div>
+          <div className="cb-page-sub">View your events and meetings</div>
         </div>
         {state.connected && (
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
             <button className="cb-btn cb-btn-primary" onClick={onQuickMeeting}>
               <Video size={14} />Quick Meeting
             </button>
@@ -2697,30 +2754,117 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
         <div className="cb-error" style={{ marginBottom: 10 }}>{state.error}</div>
       )}
 
-      {!state.loading && state.connected && !state.error && groups.length === 0 && (
-        <div className="cb-empty">Nothing on your calendar for the next 7 days.</div>
-      )}
+      {!state.loading && state.connected && !state.error && (
+        <div style={{
+          background: "var(--paper)",
+          border: "1px solid var(--line)",
+          borderRadius: 18,
+          overflow: "hidden",
+          boxShadow: "0 12px 34px rgba(20, 37, 29, 0.06)",
+        }}>
+          <div style={{
+            display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
+            padding: "15px 18px", borderBottom: "1px solid var(--line)", flexWrap: "wrap",
+          }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <button className="cb-btn cb-btn-sm" disabled style={{ opacity: 1 }}>Today</button>
+              <div className="cb-serif" style={{ fontSize: 19, fontWeight: 700 }}>{rangeLabel}</div>
+            </div>
+            <div className="cb-page-sub">
+              {state.events.length} event{state.events.length === 1 ? "" : "s"} in the next 7 days
+            </div>
+          </div>
 
-      {!state.loading && state.connected && groups.map((g) => (
-        <div className="cb-group" key={g.dayKey}>
-          <div className="cb-group-head">
-            <div className="cb-group-title">{formatDayHeader(g.events[0].start)}</div>
-          </div>
-          <div className="cb-card-list">
-            {g.events.map((ev) => (
-              <div className="cb-row" key={ev.id}>
-                <div className="cb-row-main">
-                  <div className="cb-row-task">{ev.summary}</div>
-                  <div className="cb-row-meta">
-                    <span>{formatEventTime(ev.start, ev.all_day)}</span>
-                    {ev.has_meet_link && <span><Video size={11} style={{ verticalAlign: -2, marginRight: 3 }} />Google Meet</span>}
-                  </div>
-                </div>
+          <div style={{ overflowX: "auto" }}>
+            <div style={{ minWidth: 980 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "72px repeat(7, minmax(124px, 1fr))", borderBottom: "1px solid var(--line)" }}>
+                <div style={{ background: "#FBFCFA", borderRight: "1px solid var(--line)" }} />
+                {weekDays.map((d, idx) => {
+                  const today = idx === 0;
+                  const events = eventsByDay.get(dayKey(d)) || [];
+                  return (
+                    <div key={dayKey(d)} style={{
+                      padding: "12px 10px", textAlign: "center", borderRight: idx === 6 ? "none" : "1px solid var(--line)",
+                      background: today ? "#F4F8F5" : "#FBFCFA",
+                    }}>
+                      <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em" }}>
+                        {d.toLocaleDateString(undefined, { weekday: "short" })}
+                      </div>
+                      <div className="cb-serif" style={{ fontSize: 24, lineHeight: 1.1, marginTop: 3 }}>{d.getDate()}</div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>{events.length ? `${events.length} event${events.length === 1 ? "" : "s"}` : "Free"}</div>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+
+              {allDayEvents.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "72px repeat(7, minmax(124px, 1fr))", borderBottom: "1px solid var(--line)", background: "#FCFCFA" }}>
+                  <div style={{ padding: "10px 8px", fontSize: 11, color: "var(--muted)", borderRight: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "center" }}>All day</div>
+                  {weekDays.map((d, idx) => {
+                    const items = (eventsByDay.get(dayKey(d)) || []).filter((ev) => ev.all_day);
+                    return (
+                      <div key={dayKey(d)} style={{ minHeight: 48, padding: 6, borderRight: idx === 6 ? "none" : "1px solid var(--line)" }}>
+                        {items.map((ev) => (
+                          <div key={ev.id} title={ev.summary} style={{
+                            background: "#F2F5F2", border: "1px solid #DDE4DE", borderRadius: 8, padding: "6px 8px", marginBottom: 4,
+                            fontSize: 11, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                          }}>{ev.summary}</div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "72px repeat(7, minmax(124px, 1fr))" }}>
+                <div style={{ position: "relative", height: gridHeight, borderRight: "1px solid var(--line)", background: "#FBFCFA" }}>
+                  {hours.map((h, i) => (
+                    <div key={h} style={{
+                      position: "absolute", top: i * hourHeight - 8, left: 0, right: 0, textAlign: "center",
+                      color: "var(--muted)", fontSize: 11,
+                    }}>{String(h).padStart(2, "0")}:00</div>
+                  ))}
+                </div>
+
+                {weekDays.map((d, idx) => {
+                  const items = timedEventsByDay.get(dayKey(d)) || [];
+                  return (
+                    <div key={dayKey(d)} style={{
+                      position: "relative", height: gridHeight,
+                      borderRight: idx === 6 ? "none" : "1px solid var(--line)",
+                      backgroundColor: idx === 0 ? "#FCFEFC" : "#FFFFFF",
+                      backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, var(--line) ${hourHeight - 1}px, var(--line) ${hourHeight}px)`,
+                    }}>
+                      {items.map((ev, evIdx) => {
+                        const pos = eventPosition(ev);
+                        const meet = ev.has_meet_link;
+                        return (
+                          <div key={ev.id} title={`${ev.summary} - ${formatEventTime(ev.start, false)}`} style={{
+                            position: "absolute", top: pos.top + 4, left: 6, right: 6, height: Math.max(30, pos.height - 8),
+                            borderRadius: 10, padding: "7px 8px", overflow: "hidden",
+                            background: meet ? "#EEF7F1" : (evIdx % 2 ? "#F6F2FC" : "#EEF4FB"),
+                            border: meet ? "1px solid #CFE5D5" : "1px solid #DCE4EE",
+                            borderLeft: meet ? "4px solid var(--green)" : "4px solid #55769C",
+                            boxShadow: "0 3px 10px rgba(19, 36, 28, 0.05)",
+                          }}>
+                            <div style={{ fontSize: 11, fontWeight: 800, lineHeight: 1.2, marginBottom: 3 }}>{formatEventTime(ev.start, false)}</div>
+                            <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{ev.summary}</div>
+                            {meet && <div style={{ marginTop: 4, fontSize: 10, color: "var(--green)", fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}><Video size={10} />Google Meet</div>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
+
+          {state.events.length === 0 && (
+            <div className="cb-empty" style={{ borderTop: "1px solid var(--line)", margin: 0 }}>Nothing on your calendar for the next 7 days.</div>
+          )}
         </div>
-      ))}
+      )}
     </div>
   );
 }
