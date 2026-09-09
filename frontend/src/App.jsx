@@ -2750,14 +2750,13 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
 
   const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
 
-  // Groups by Client + Role + Task Type, since that combination is what actually becomes
-  // one line on a Karbon timesheet, regardless of which template, or no template at all, the
-  // underlying tasks came from. A group of exactly one task renders with no fold at all, the
-  // fold only exists to earn its place when there is something to actually combine.
+  // Groups by Client + Role + Task Type + User. Entries from different users must never
+  // be combined into one line, even when the client, role and task type are the same.
+  // A group of exactly one task renders with no fold at all.
   const groups = useMemo(() => {
     const map = new Map();
     for (const r of rows) {
-      const key = `${r.client}|||${r.role || ""}|||${r.task_type || ""}`;
+      const key = `${r.client}|||${r.role || ""}|||${r.task_type || ""}|||${r.tracked_by || ""}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(r);
     }
