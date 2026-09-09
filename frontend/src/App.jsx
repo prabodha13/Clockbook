@@ -831,7 +831,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const isSuperAdmin = currentUser.role === "super_admin";
@@ -839,6 +839,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
 
   const visibleTasks = (() => {
+    if (forceSelfOnly) return tasks.filter((t) => t.owner_id === currentUser.id);
     if (!isAdmin || viewFilter === "everyone" || viewFilter === "team") return tasks;
     if (viewFilter === "mine") return tasks.filter((t) => t.owner_id === currentUser.id);
     return tasks.filter((t) => t.owner_id === viewFilter);
@@ -2208,7 +2209,7 @@ function SettingsView({
       </div>
       )}
 
-      {isSuperAdmin && (
+      {effectiveIsAdmin && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
             <div>
@@ -2219,18 +2220,23 @@ function SettingsView({
           <div style={{ padding: 16 }}>
             <div className="cb-hint" style={{ marginBottom: 10 }}>
               Assign an admin to a pod on the Staff page and they will only see time and task data for people in that same pod. An admin with no pod keeps seeing everyone, and super admins always see everyone regardless of pod.
+              {!isSuperAdmin && " Pod creation, deletion, and assignment are managed by a Super Admin."}
             </div>
             {pods.map((p) => (
               <div key={p.id} className="cb-client-account-row">
                 <div style={{ fontSize: 13.5 }}>{p.name}</div>
-                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeletePod(p.id)}><Trash2 size={13} /></button>
+                {isSuperAdmin && (
+                  <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeletePod(p.id)}><Trash2 size={13} /></button>
+                )}
               </div>
             ))}
             {pods.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No pods created yet.</div>}
-            <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 360 }}>
-              <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
-              <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
-            </form>
+            {isSuperAdmin && (
+              <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 360 }}>
+                <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
+                <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
+              </form>
+            )}
           </div>
         </div>
       )}
@@ -5427,6 +5433,7 @@ export default function App() {
             {view === "dashboard" && (
               <Dashboard
                 tasks={tasks} now={now} currentUser={effectiveCurrentUser} members={members} isAdmin={isAdmin}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
                 onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)}
