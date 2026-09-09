@@ -9,6 +9,7 @@ import {
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
 const MEMBER_TINTS = ["#245C43", "#B5590F", "#5B6660", "#5C4A8C", "#8C2F3A", "#2E5C7A"];
+const UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__";
 
 function isAdminRole(role) {
   return role === "admin" || role === "super_admin";
@@ -1566,12 +1567,14 @@ function StartCountModal({ task, onClose, onSubmit }) {
   );
 }
 
-function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
+function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit }) {
   const [note, setNote] = useState(task.note || "");
   const [endCount, setEndCount] = useState(task.end_count != null ? String(task.end_count) : "");
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState(task.role || "");
   const [taskType, setTaskType] = useState(task.task_type || "");
+  const needsClient = task.client_id === UNASSIGNED_CLIENT_ID;
+  const [clientId, setClientId] = useState(needsClient ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
   // Snapshot the tracked time once, when the modal first opens. This used to be recalculated
   // from the live clock on every render, so if the task kept running while this dialog was
@@ -1605,6 +1608,16 @@ function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
               {task.role || "no role set yet"}, {task.task_type || "no task type set yet"}
             </div>
           </div>
+          {needsClient && (
+            <div className="cb-field">
+              <label className="cb-label">Client</label>
+              <SearchableSelect
+                options={clients} value={clientId} onChange={setClientId}
+                placeholder="Select the client before completing..." getLabel={(c) => c.name}
+              />
+              <div className="cb-hint">A client is required to complete this meeting.</div>
+            </div>
+          )}
           {(needsRole || needsTaskType) && (
             <div className="cb-field-row">
               {needsRole && (
@@ -1665,12 +1678,12 @@ function CompleteModal({ task, now, roles, taskTypes, onClose, onSubmit }) {
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={busy || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)}
+            className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)}
             onClick={async () => {
               setBusy(true);
               await onSubmit(
                 task.id, note, needsCount ? parseInt(endCount, 10) : null, isAdjusted ? editedSeconds : null,
-                needsRole ? role : null, needsTaskType ? taskType : null
+                needsRole ? role : null, needsTaskType ? taskType : null, needsClient ? clientId : null
               );
             }}
           >
@@ -4184,14 +4197,15 @@ function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm 
             />
           </div>
           <div className="cb-hint">
-            Role and task type can be filled in later, when you submit this. This starts tracking right away, with your other timer paused.
+            Client is optional when the meeting starts. If you leave it blank, Clockbook will ask you to choose a client when you complete the meeting.
+            Role and task type can also be filled in later.
           </div>
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={!clientId || busy}
-            onClick={async () => { setBusy(true); await onConfirm(clientId); }}
+            className="cb-btn cb-btn-primary" disabled={busy}
+            onClick={async () => { setBusy(true); await onConfirm(clientId || null); }}
           >
             Start tracking
           </button>
@@ -4807,28 +4821,6 @@ export default function App() {
     return () => clearInterval(iv);
   }, [myRunningTask && myRunningTask.id]);
 
-  // Best-effort pause fired the instant this page starts to unload: a tab closing, the
-  // browser quitting, or the OS shutting down. This is not guaranteed to always land, a hard
-  // power loss gives no such warning at all, which is exactly why the heartbeat-based stale
-  // check above still exists underneath this as the real safety net. Reads the running task
-  // fresh from the ref at the moment of unload, so this only needs registering once.
-  useEffect(() => {
-    function firePauseBeacon() {
-      const task = runningTaskRef.current;
-      const token = getToken();
-      if (!task || !token) return;
-      const payload = JSON.stringify({ token, end_at: new Date(Date.now() + clockOffsetRef.current).toISOString() });
-      const blob = new Blob([payload], { type: "application/json" });
-      navigator.sendBeacon(`/api/tasks/${task.id}/pause-beacon`, blob);
-    }
-    window.addEventListener("pagehide", firePauseBeacon);
-    window.addEventListener("beforeunload", firePauseBeacon);
-    return () => {
-      window.removeEventListener("pagehide", firePauseBeacon);
-      window.removeEventListener("beforeunload", firePauseBeacon);
-    };
-  }, []);
-
   useEffect(() => {
     if (dataLoading || staleCheckedRef.current || !currentUser) return;
     staleCheckedRef.current = true;
@@ -5109,9 +5101,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType) {
+  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId) {
     try {
-      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType);
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
@@ -5276,11 +5268,11 @@ export default function App() {
 
   async function trackMeetingAsTask(clientId) {
     const { task: existingTask, summary, meetingId } = meetingTrackPrompt;
-    const client = clients.find((c) => c.id === clientId);
+    const client = clientId ? clients.find((c) => c.id === clientId) : null;
     try {
       await pauseTask(existingTask.id);
       const created = await api.createTask({
-        client_id: clientId, client_name: client.name, name: summary,
+        client_id: client ? client.id : "", client_name: client ? client.name : "", name: summary,
         source_calendar_event_id: meetingId || null,
       });
       setTasks((prev) => [created, ...prev]);
@@ -5470,7 +5462,7 @@ export default function App() {
           onClose={() => setCompletingTask(null)} onConfirm={finishAdHocMeeting}
         />
       ) : completingTask ? (
-        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
+        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} clients={clients} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
       ) : null}
       {showAddMember && (
         <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={addTeammate} />
