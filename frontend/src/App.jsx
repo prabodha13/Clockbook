@@ -357,7 +357,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
           <div className="cb-tracking-dot" />
           <div className="cb-tracking-text">
             <div className="cb-tracking-label">{isPaused ? "Paused" : "Now tracking"}</div>
-            <div className="cb-tracking-name">{pinnedTask.client_name}: {pinnedTask.name}</div>
+            <div className="cb-tracking-name">{pinnedTask.client_name}: {taskDisplayHeading(pinnedTask)}</div>
           </div>
           <div className="cb-tracking-time cb-mono">{formatHMS(elapsed)}</div>
           <div className="cb-tracking-actions">
@@ -401,7 +401,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
     <div className="cb-row">
       <div className="cb-row-main">
         {!hideClient && <div className="cb-row-client"><Building2 size={11} />{task.client_name}</div>}
-        <div className="cb-row-task">{taskHeading(task.name, task.bank_account_name, task.pay_period_type, task.pay_period_number)}</div>
+        <div className="cb-row-task">{taskDisplayHeading(task)}</div>
         <div className="cb-row-meta">
           {task.role && <span>{task.role}</span>}
           {task.task_type && <span>{task.task_type}</span>}
@@ -1022,10 +1022,10 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, onStart, onPause
                       {runningTask ? (
                         <span style={{ color: "var(--green)", fontWeight: 600 }}>
                           <span className="cb-live-dot" style={{ display: "inline-block", marginRight: 6 }} />
-                          Tracking: {runningTask.name}
+                          Tracking: {taskDisplayHeading(runningTask)}
                         </span>
                       ) : pausedTask ? (
-                        <span>Paused: {pausedTask.name}</span>
+                        <span>Paused: {taskDisplayHeading(pausedTask)}</span>
                       ) : (
                         <span style={{ color: "var(--ink-soft)" }}>No timer running</span>
                       )}
@@ -1123,6 +1123,13 @@ function taskHeading(name, bankAccountName, payPeriodType, payPeriodNumber) {
   const periodLabel = payPeriodLabel(payPeriodType, payPeriodNumber);
   if (periodLabel) parts.push(periodLabel);
   return parts.join(" \u2014 ");
+}
+
+function taskDisplayHeading(task) {
+  const taskName = task.source_template_name
+    ? `${task.source_template_name} - ${task.name}`
+    : task.name;
+  return taskHeading(taskName, task.bank_account_name, task.pay_period_type, task.pay_period_number);
 }
 
 function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSecondary }) {
