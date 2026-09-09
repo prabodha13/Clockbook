@@ -492,7 +492,7 @@ def get_meeting_now(current_member: models.Member = Depends(get_current_member),
 
 
 @app.get("/api/calendar/events")
-def get_calendar_events(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+def get_calendar_events(start: str = None, end: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     # A plain, real view of what is actually on the connected calendar, useful both as a
     # genuinely handy view and as the clearest possible proof the connection is working,
     # since seeing real events is far easier to verify than waiting for the exact right
@@ -504,8 +504,20 @@ def get_calendar_events(current_member: models.Member = Depends(get_current_memb
         return {"connected": True, "events": [], "error": "Could not refresh access, try reconnecting"}
 
     now = datetime.utcnow()
-    time_min = now.isoformat() + "Z"
-    time_max = (now + timedelta(days=7)).isoformat() + "Z"
+    def parse_bound(value, fallback):
+        if not value:
+            return fallback
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            raise HTTPException(400, "Invalid calendar date range")
+
+    range_start = parse_bound(start, now)
+    range_end = parse_bound(end, range_start + timedelta(days=7))
+    if range_end <= range_start or range_end - range_start > timedelta(days=62):
+        raise HTTPException(400, "Calendar date range must be positive and no longer than 62 days")
+    time_min = range_start.isoformat() + "Z"
+    time_max = range_end.isoformat() + "Z"
     try:
         resp = httpx.get(
             "https://www.googleapis.com/calendar/v3/calendars/primary/events",
@@ -526,14 +538,166 @@ def get_calendar_events(current_member: models.Member = Depends(get_current_memb
             ep.get("entryPointType") == "video"
             for ep in (event.get("conferenceData") or {}).get("entryPoints", [])
         )
+        meet_url = event.get("hangoutLink")
+        if not meet_url:
+            for ep in (event.get("conferenceData") or {}).get("entryPoints", []):
+                if ep.get("entryPointType") == "video" and ep.get("uri"):
+                    meet_url = ep.get("uri")
+                    break
         events.append({
             "id": event.get("id"),
             "summary": event.get("summary") or "(no title)",
             "start": start.get("dateTime") or start.get("date"),
+            "end": end.get("dateTime") or end.get("date"),
             "all_day": "dateTime" not in start,
             "has_meet_link": has_meet_link,
+            "meet_url": meet_url,
+            "html_link": event.get("htmlLink"),
+            "attendees": [a.get("email") for a in event.get("attendees", []) if a.get("email")],
         })
     return {"connected": True, "events": events}
+
+
+def _calendar_attendee_emails(payload, current_member, db):
+    attendee_emails = []
+    seen_emails = set()
+    for member_id in getattr(payload, "attendee_member_ids", []) or []:
+        member = db.get(models.Member, member_id)
+        if not member:
+            raise HTTPException(404, "One of the selected Clockbook users was not found")
+        if member.id == current_member.id:
+            continue
+        email = (member.email or "").strip().lower()
+        if not email:
+            raise HTTPException(400, f"{member.name} does not have an email address in Clockbook")
+        if email not in seen_emails:
+            seen_emails.add(email)
+            attendee_emails.append(email)
+    for raw_email in getattr(payload, "external_emails", []) or []:
+        email = raw_email.strip().lower()
+        if not email:
+            continue
+        if "@" not in email or email.startswith("@") or email.endswith("@"):
+            raise HTTPException(400, f"Invalid guest email: {raw_email}")
+        if email not in seen_emails and email != (current_member.email or "").strip().lower():
+            seen_emails.add(email)
+            attendee_emails.append(email)
+    return attendee_emails
+
+
+def _google_event_time(value, all_day):
+    if all_day:
+        try:
+            d = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return {"date": d.date().isoformat()}
+        except Exception:
+            return {"date": value[:10]}
+    try:
+        d = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        raise HTTPException(400, "Invalid event date/time")
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    return {"dateTime": d.isoformat()}
+
+
+@app.post("/api/calendar/events", status_code=201)
+def create_calendar_event(payload: schemas.CalendarEventCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not current_member.google_refresh_token:
+        raise HTTPException(400, "Connect Google Calendar before creating an event")
+    summary = payload.summary.strip()
+    if not summary:
+        raise HTTPException(400, "Event name is required")
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
+    attendees = _calendar_attendee_emails(payload, current_member, db)
+    body = {
+        "summary": summary,
+        "start": _google_event_time(payload.start, payload.all_day),
+        "end": _google_event_time(payload.end, payload.all_day),
+        "attendees": [{"email": e} for e in attendees],
+    }
+    params = {"sendUpdates": "all"}
+    if payload.create_meet:
+        body["conferenceData"] = {"createRequest": {"requestId": secrets.token_urlsafe(18), "conferenceSolutionKey": {"type": "hangoutsMeet"}}}
+        params["conferenceDataVersion"] = 1
+    try:
+        resp = httpx.post(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            params=params, json=body, timeout=15,
+        )
+        if resp.status_code in (401, 403):
+            raise HTTPException(403, "Google Calendar needs event-edit permission. Reconnect Google Calendar once, then try again")
+        resp.raise_for_status()
+        event = resp.json()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "Could not create the Google Calendar event")
+    return {"id": event.get("id"), "summary": event.get("summary") or summary}
+
+
+@app.patch("/api/calendar/events/{event_id}")
+def update_calendar_event(event_id: str, payload: schemas.CalendarEventUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not current_member.google_refresh_token:
+        raise HTTPException(400, "Connect Google Calendar before editing an event")
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
+    body = {}
+    if payload.summary is not None:
+        summary = payload.summary.strip()
+        if not summary:
+            raise HTTPException(400, "Event name is required")
+        body["summary"] = summary
+    all_day = bool(payload.all_day) if payload.all_day is not None else False
+    if payload.start is not None:
+        body["start"] = _google_event_time(payload.start, all_day)
+    if payload.end is not None:
+        body["end"] = _google_event_time(payload.end, all_day)
+    try:
+        resp = httpx.patch(
+            f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            params={"sendUpdates": "all"}, json=body, timeout=15,
+        )
+        if resp.status_code == 404:
+            raise HTTPException(404, "Calendar event no longer exists")
+        if resp.status_code in (401, 403):
+            raise HTTPException(403, "Google Calendar needs event-edit permission. Reconnect Google Calendar once, then try again")
+        resp.raise_for_status()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "Could not update the Google Calendar event")
+
+
+@app.delete("/api/calendar/events/{event_id}")
+def delete_calendar_event(event_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not current_member.google_refresh_token:
+        raise HTTPException(400, "Connect Google Calendar before deleting an event")
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
+    try:
+        resp = httpx.delete(
+            f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+            headers={"Authorization": f"Bearer {access_token}"},
+            params={"sendUpdates": "all"}, timeout=15,
+        )
+        if resp.status_code == 404:
+            return {"ok": True}
+        if resp.status_code in (401, 403):
+            raise HTTPException(403, "Google Calendar needs event-edit permission. Reconnect Google Calendar once, then try again")
+        resp.raise_for_status()
+        return {"ok": True}
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "Could not delete the Google Calendar event")
 
 
 @app.post("/api/calendar/quick-meeting", status_code=201)

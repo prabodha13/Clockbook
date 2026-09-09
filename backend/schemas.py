@@ -261,6 +261,23 @@ class QuickMeetingCreate(BaseModel):
     duration_minutes: int = 30
 
 
+class CalendarEventCreate(BaseModel):
+    summary: str
+    start: str
+    end: str
+    all_day: bool = False
+    attendee_member_ids: List[str] = []
+    external_emails: List[str] = []
+    create_meet: bool = False
+
+
+class CalendarEventUpdate(BaseModel):
+    summary: Optional[str] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    all_day: Optional[bool] = None
+
+
 class HelpEventCreate(BaseModel):
     colleague_id: str
     direction: str  # "helped" or "received"
