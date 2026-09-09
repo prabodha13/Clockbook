@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, useCallback, useRef, Fra
 import { createPortal } from "react-dom";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
-  ChevronDown, ChevronUp, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
+  ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
   Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake,
 } from "lucide-react";
