@@ -2639,232 +2639,428 @@ function formatDayHeader(iso) {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-function CalendarPage({ onConnectCalendar, onQuickMeeting }) {
-  const [state, setState] = useState({ loading: true, connected: false, events: [], error: "" });
-
-  const load = useCallback(async () => {
-    setState((s) => ({ ...s, loading: true }));
-    try {
-      const data = await api.getCalendarEvents();
-      setState({ loading: false, connected: data.connected, events: data.events || [], error: data.error || "" });
-    } catch (err) {
-      setState({ loading: false, connected: false, events: [], error: err.message || "Could not load your calendar" });
+function CalendarEventModal({ event, initialStart, initialAllDay = false, members, currentUser, onClose, onSaved, onDeleted }) {
+  const editing = !!event;
+  const initialStartDate = event?.start ? new Date(event.start) : (initialStart || new Date());
+  const initialEndDate = event?.end ? new Date(event.end) : new Date(initialStartDate.getTime() + 30 * 60 * 1000);
+  const [summary, setSummary] = useState(event?.summary || "");
+  const [allDay, setAllDay] = useState(event ? !!event.all_day : initialAllDay);
+  const [startValue, setStartValue] = useState(() => {
+    if (event?.all_day || (!event && initialAllDay)) {
+      const d = initialStartDate;
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     }
-  }, []);
+    const d = initialStartDate;
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
+  const [endValue, setEndValue] = useState(() => {
+    if (event?.all_day || (!event && initialAllDay)) {
+      const d = initialStartDate;
+      const pad = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+    const d = initialEndDate;
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  });
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [externalGuests, setExternalGuests] = useState("");
+  const [createMeet, setCreateMeet] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
 
-  useEffect(() => { load(); }, [load]);
+  const inviteOptions = (members || []).filter((m) => m.id !== currentUser?.id);
 
-  const weekDays = useMemo(() => {
-    const today = new Date();
-    return Array.from({ length: 7 }, (_, i) => {
-      const d = new Date(today);
-      d.setHours(0, 0, 0, 0);
-      d.setDate(d.getDate() + i);
-      return d;
-    });
-  }, []);
+  function toggleMember(id) {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
 
-  const dayKey = (d) => {
+  async function save() {
+    if (!summary.trim()) { setError("Event name is required"); return; }
+    setBusy(true);
+    setError("");
+    try {
+      if (editing) {
+        let start;
+        let end;
+        if (allDay) {
+          start = `${startValue}T00:00:00Z`;
+          const endDate = new Date(`${startValue}T00:00:00`);
+          endDate.setDate(endDate.getDate() + 1);
+          end = endDate.toISOString();
+        } else {
+          start = new Date(startValue).toISOString();
+          end = new Date(endValue).toISOString();
+          if (new Date(end).getTime() <= new Date(start).getTime()) throw new Error("End time must be after start time");
+        }
+        await api.updateCalendarEvent(event.id, { summary: summary.trim(), start, end, all_day: allDay });
+      } else {
+        let start;
+        let end;
+        if (allDay) {
+          start = `${startValue}T00:00:00Z`;
+          const endDate = new Date(`${startValue}T00:00:00`);
+          endDate.setDate(endDate.getDate() + 1);
+          end = endDate.toISOString();
+        } else {
+          start = new Date(startValue).toISOString();
+          end = new Date(endValue).toISOString();
+          if (new Date(end).getTime() <= new Date(start).getTime()) throw new Error("End time must be after start time");
+        }
+        const external_emails = externalGuests.split(",").map((x) => x.trim()).filter(Boolean);
+        await api.createCalendarEvent({
+          summary: summary.trim(), start, end, all_day: allDay,
+          attendee_member_ids: selectedIds, external_emails, create_meet: createMeet,
+        });
+      }
+      await onSaved();
+      onClose();
+    } catch (err) {
+      setError(err.message || "Could not save the calendar event");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    if (!event || !window.confirm(`Delete “${event.summary}” from Google Calendar?`)) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.deleteCalendarEvent(event.id);
+      await onDeleted();
+      onClose();
+    } catch (err) {
+      setError(err.message || "Could not delete the calendar event");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleAllDay(next) {
+    setAllDay(next);
+    if (next) {
+      const d = new Date(startValue);
+      const pad = (n) => String(n).padStart(2, "0");
+      setStartValue(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+      setEndValue(`${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`);
+    } else {
+      const d = new Date(`${startValue}T09:00:00`);
+      const e = new Date(d.getTime() + 30 * 60 * 1000);
+      const pad = (n) => String(n).padStart(2, "0");
+      const fmt = (x) => `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}T${pad(x.getHours())}:${pad(x.getMinutes())}`;
+      setStartValue(fmt(d)); setEndValue(fmt(e));
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 620 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title"><CalendarIcon size={17} /> {editing ? "Edit event" : "New event"}</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-field">
+            <label className="cb-label">Event name</label>
+            <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} autoFocus placeholder="Add title" />
+          </div>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer" }}>
+            <input type="checkbox" checked={allDay} onChange={(e) => toggleAllDay(e.target.checked)} />
+            <span>All day</span>
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: allDay ? "1fr" : "1fr 1fr", gap: 12 }}>
+            <div className="cb-field">
+              <label className="cb-label">{allDay ? "Date" : "Starts"}</label>
+              <input className="cb-input" type={allDay ? "date" : "datetime-local"} value={startValue} onChange={(e) => setStartValue(e.target.value)} />
+            </div>
+            {!allDay && <div className="cb-field">
+              <label className="cb-label">Ends</label>
+              <input className="cb-input" type="datetime-local" value={endValue} onChange={(e) => setEndValue(e.target.value)} />
+            </div>}
+          </div>
+
+          {!editing && <>
+            <div className="cb-field">
+              <label className="cb-label">Invite Clockbook users</label>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 9, padding: 8, maxHeight: 150, overflowY: "auto" }}>
+                {inviteOptions.length === 0 && <div className="cb-hint">No other Clockbook users yet.</div>}
+                {inviteOptions.map((m) => (
+                  <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", opacity: m.email ? 1 : 0.5 }}>
+                    <input type="checkbox" disabled={!m.email} checked={selectedIds.includes(m.id)} onChange={() => toggleMember(m.id)} />
+                    <span>{m.name}</span><span className="cb-hint" style={{ marginLeft: "auto" }}>{m.email || "No email"}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+            <div className="cb-field">
+              <label className="cb-label">External guests</label>
+              <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
+            </div>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
+              <input type="checkbox" checked={createMeet} onChange={(e) => setCreateMeet(e.target.checked)} />
+              <span>Create Google Meet link</span>
+            </label>
+          </>}
+
+          {editing && event?.attendees?.length > 0 && (
+            <div className="cb-field" style={{ marginTop: 14 }}>
+              <label className="cb-label">Guests</label>
+              <div className="cb-hint">{event.attendees.join(", ")}</div>
+            </div>
+          )}
+          {editing && event?.meet_url && (
+            <div style={{ marginTop: 12 }}><a className="cb-btn cb-btn-ghost" href={event.meet_url} target="_blank" rel="noreferrer"><Video size={14} />Join Google Meet</a></div>
+          )}
+          {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="cb-modal-foot" style={{ justifyContent: editing ? "space-between" : "flex-end" }}>
+          {editing && <button className="cb-btn" disabled={busy} onClick={remove} style={{ color: "var(--danger)" }}><Trash2 size={14} />Delete</button>}
+          <div style={{ display: "flex", gap: 8 }}>
+            {editing && event?.html_link && <a className="cb-btn cb-btn-ghost" href={event.html_link} target="_blank" rel="noreferrer">Open in Google</a>}
+            <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            <button className="cb-btn cb-btn-primary" disabled={busy} onClick={save}>{busy ? "Saving..." : "Save"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser }) {
+  const [state, setState] = useState({ loading: true, connected: false, events: [], error: "" });
+  const [weekStart, setWeekStart] = useState(() => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    const day = d.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diff);
+    return d;
+  });
+  const [editor, setEditor] = useState(null);
+  const [draggingId, setDraggingId] = useState(null);
+  const [resizePreview, setResizePreview] = useState(null);
+  const scrollRef = useRef(null);
+
+  const dayKey = useCallback((d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
-  };
+  }, []);
+
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(weekStart); d.setDate(weekStart.getDate() + i); return d;
+  }), [weekStart]);
+
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true }));
+    try {
+      const rangeEnd = new Date(weekStart); rangeEnd.setDate(rangeEnd.getDate() + 7);
+      const data = await api.getCalendarEvents(weekStart.toISOString(), rangeEnd.toISOString());
+      setState({ loading: false, connected: data.connected, events: data.events || [], error: data.error || "" });
+    } catch (err) {
+      setState({ loading: false, connected: false, events: [], error: err.message || "Could not load your calendar" });
+    }
+  }, [weekStart]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 7 * 54;
+  }, [weekStart, state.loading]);
 
   const eventsByDay = useMemo(() => {
-    const map = new Map();
-    for (const d of weekDays) map.set(dayKey(d), []);
+    const map = new Map(weekDays.map((d) => [dayKey(d), []]));
     for (const ev of state.events) {
       const key = ev.start ? ev.start.slice(0, 10) : "";
       if (map.has(key)) map.get(key).push(ev);
     }
     return map;
-  }, [state.events, weekDays]);
+  }, [state.events, weekDays, dayKey]);
 
-  const timedEventsByDay = useMemo(() => {
-    const map = new Map();
-    for (const d of weekDays) {
-      const key = dayKey(d);
-      map.set(key, (eventsByDay.get(key) || []).filter((ev) => !ev.all_day));
-    }
-    return map;
-  }, [eventsByDay, weekDays]);
-
-  const allDayEvents = useMemo(
-    () => state.events.filter((ev) => ev.all_day && weekDays.some((d) => dayKey(d) === ev.start?.slice(0, 10))),
-    [state.events, weekDays]
-  );
-
-  const hourStart = 8;
-  const hourEnd = 18;
-  const hourHeight = 66;
-  const totalHours = hourEnd - hourStart;
-  const gridHeight = totalHours * hourHeight;
-  const hours = Array.from({ length: totalHours + 1 }, (_, i) => hourStart + i);
+  const hourStart = 0;
+  const hourEnd = 24;
+  const hourHeight = 54;
+  const gridHeight = (hourEnd - hourStart) * hourHeight;
+  const hours = Array.from({ length: 25 }, (_, i) => i);
 
   function eventPosition(ev) {
     const start = new Date(ev.start);
-    const end = ev.end ? new Date(ev.end) : new Date(start.getTime() + 60 * 60 * 1000);
+    let end = ev.end ? new Date(ev.end) : new Date(start.getTime() + 30 * 60 * 1000);
+    if (resizePreview?.id === ev.id) end = resizePreview.end;
     const startMinutes = start.getHours() * 60 + start.getMinutes();
     const endMinutes = end.getHours() * 60 + end.getMinutes();
-    const rangeStart = hourStart * 60;
-    const rangeEnd = hourEnd * 60;
-    const clippedStart = Math.max(rangeStart, Math.min(rangeEnd, startMinutes));
-    const clippedEnd = Math.max(clippedStart + 20, Math.min(rangeEnd, Math.max(endMinutes, clippedStart + 20)));
     return {
-      top: ((clippedStart - rangeStart) / 60) * hourHeight,
-      height: Math.max(34, ((clippedEnd - clippedStart) / 60) * hourHeight),
+      top: (startMinutes / 60) * hourHeight,
+      height: Math.max(24, ((Math.max(endMinutes, startMinutes + 15) - startMinutes) / 60) * hourHeight),
     };
   }
 
-  const rangeLabel = `${weekDays[0].toLocaleDateString(undefined, { day: "numeric", month: "short" })} - ${weekDays[6].toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}`;
+  function startOfTodayWeek() {
+    const d = new Date(); d.setHours(0,0,0,0);
+    const day = d.getDay(); d.setDate(d.getDate() + (day === 0 ? -6 : 1 - day));
+    return d;
+  }
+
+  function moveWeek(delta) {
+    setWeekStart((prev) => { const d = new Date(prev); d.setDate(d.getDate() + delta * 7); return d; });
+  }
+
+  function openCreateForSlot(date, clientY, rect) {
+    const rawMinutes = Math.max(0, Math.min(24 * 60 - 15, ((clientY - rect.top) / hourHeight) * 60));
+    const rounded = Math.round(rawMinutes / 15) * 15;
+    const start = new Date(date); start.setHours(Math.floor(rounded / 60), rounded % 60, 0, 0);
+    setEditor({ mode: "create", initialStart: start });
+  }
+
+  async function handleDrop(date, e) {
+    e.preventDefault();
+    const eventId = draggingId || e.dataTransfer.getData("text/calendar-event-id");
+    const ev = state.events.find((x) => x.id === eventId);
+    setDraggingId(null);
+    if (!ev || ev.all_day) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rawMinutes = Math.max(0, Math.min(24 * 60 - 15, ((e.clientY - rect.top) / hourHeight) * 60));
+    const rounded = Math.round(rawMinutes / 15) * 15;
+    const oldStart = new Date(ev.start);
+    const oldEnd = ev.end ? new Date(ev.end) : new Date(oldStart.getTime() + 30 * 60 * 1000);
+    const duration = Math.max(15 * 60 * 1000, oldEnd - oldStart);
+    const newStart = new Date(date); newStart.setHours(Math.floor(rounded / 60), rounded % 60, 0, 0);
+    const newEnd = new Date(newStart.getTime() + duration);
+    try {
+      await api.updateCalendarEvent(ev.id, { start: newStart.toISOString(), end: newEnd.toISOString(), all_day: false });
+      await load();
+    } catch (err) {
+      setState((s) => ({ ...s, error: err.message || "Could not move the event" }));
+    }
+  }
+
+  function beginResize(ev, e) {
+    e.preventDefault(); e.stopPropagation();
+    const originalStart = new Date(ev.start);
+    const originalEnd = ev.end ? new Date(ev.end) : new Date(originalStart.getTime() + 30 * 60 * 1000);
+    const pointerStartY = e.clientY;
+    let latestEnd = originalEnd;
+    const onMove = (moveEvent) => {
+      const deltaMinutes = Math.round(((moveEvent.clientY - pointerStartY) / hourHeight) * 60 / 15) * 15;
+      latestEnd = new Date(Math.max(originalStart.getTime() + 15 * 60 * 1000, originalEnd.getTime() + deltaMinutes * 60 * 1000));
+      setResizePreview({ id: ev.id, end: latestEnd });
+    };
+    const onUp = async () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      setResizePreview(null);
+      if (latestEnd.getTime() === originalEnd.getTime()) return;
+      try {
+        await api.updateCalendarEvent(ev.id, { start: originalStart.toISOString(), end: latestEnd.toISOString(), all_day: false });
+        await load();
+      } catch (err) {
+        setState((s) => ({ ...s, error: err.message || "Could not resize the event" }));
+      }
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener("pointerup", onUp);
+  }
+
+  const rangeLabel = `${weekDays[0].toLocaleDateString(undefined, { month: "short", day: "numeric" })} – ${weekDays[6].toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}`;
+  const now = new Date();
+  const todayKey = dayKey(now);
+  const nowTop = ((now.getHours() * 60 + now.getMinutes()) / 60) * hourHeight;
 
   return (
     <div>
       <div className="cb-page-head" style={{ alignItems: "flex-start", marginBottom: 14 }}>
         <div>
           <div className="cb-page-title cb-serif">Calendar</div>
-          <div className="cb-page-sub">View your events and meetings</div>
+          <div className="cb-page-sub">Your Google Calendar, with create, edit, drag and resize controls inside Clockbook.</div>
         </div>
-        {state.connected && (
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button className="cb-btn cb-btn-primary" onClick={onQuickMeeting}>
-              <Video size={14} />Quick Meeting
-            </button>
-            <button className="cb-btn cb-btn-ghost" onClick={load} title="Re-check your calendar">
-              <RotateCcw size={14} />Refresh
-            </button>
-          </div>
-        )}
+        {state.connected && <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button className="cb-btn cb-btn-primary" onClick={onQuickMeeting}><Video size={14} />Quick Meeting</button>
+          <button className="cb-btn cb-btn-ghost" onClick={load}><RotateCcw size={14} />Refresh</button>
+        </div>}
       </div>
 
       {state.loading && <TableSkeleton rows={3} />}
+      {!state.loading && !state.connected && <div className="cb-empty"><span className="cb-empty-title">Not connected yet</span><br />Connect your Google Calendar to use the interactive calendar.<div style={{ marginTop: 14 }}><button className="cb-btn cb-btn-primary" onClick={onConnectCalendar}><CalendarIcon size={14} />Connect Google Calendar</button></div></div>}
+      {!state.loading && state.connected && state.error && <div className="cb-error" style={{ marginBottom: 10 }}>{state.error}</div>}
 
-      {!state.loading && !state.connected && (
-        <div className="cb-empty">
-          <span className="cb-empty-title">Not connected yet</span><br />
-          Connect your Google Calendar to see your upcoming events here, and to get a prompt to pause your timer automatically when a meeting starts.
-          <div style={{ marginTop: 14 }}>
-            <button className="cb-btn cb-btn-primary" onClick={onConnectCalendar}><CalendarIcon size={14} />Connect Google Calendar</button>
+      {!state.loading && state.connected && <div style={{ background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 18, overflow: "hidden", boxShadow: "0 12px 34px rgba(20,37,29,.06)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button className="cb-btn cb-btn-sm" onClick={() => setWeekStart(startOfTodayWeek())}>Today</button>
+            <button className="cb-icon-btn" onClick={() => moveWeek(-1)} title="Previous week"><ChevronLeft size={17} /></button>
+            <button className="cb-icon-btn" onClick={() => moveWeek(1)} title="Next week"><ChevronRight size={17} /></button>
+            <div className="cb-serif" style={{ fontSize: 20, fontWeight: 700, marginLeft: 4 }}>{rangeLabel}</div>
           </div>
+          <div className="cb-hint">Click a time to create • drag to move • pull the bottom edge to resize</div>
         </div>
-      )}
 
-      {!state.loading && state.connected && state.error && (
-        <div className="cb-error" style={{ marginBottom: 10 }}>{state.error}</div>
-      )}
-
-      {!state.loading && state.connected && !state.error && (
-        <div style={{
-          background: "var(--paper)",
-          border: "1px solid var(--line)",
-          borderRadius: 18,
-          overflow: "hidden",
-          boxShadow: "0 12px 34px rgba(20, 37, 29, 0.06)",
-        }}>
-          <div style={{
-            display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12,
-            padding: "15px 18px", borderBottom: "1px solid var(--line)", flexWrap: "wrap",
-          }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <button className="cb-btn cb-btn-sm" disabled style={{ opacity: 1 }}>Today</button>
-              <div className="cb-serif" style={{ fontSize: 19, fontWeight: 700 }}>{rangeLabel}</div>
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: 1040 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", background: "#FBFCFA" }}>
+              <div style={{ borderRight: "1px solid var(--line)" }} />
+              {weekDays.map((d, idx) => {
+                const isToday = dayKey(d) === todayKey;
+                return <div key={dayKey(d)} style={{ padding: "10px 8px", textAlign: "center", borderRight: idx === 6 ? "none" : "1px solid var(--line)", background: isToday ? "#F3F8F5" : "#FBFCFA" }}>
+                  <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em" }}>{d.toLocaleDateString(undefined, { weekday: "short" })}</div>
+                  <div style={{ width: 34, height: 34, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 4, fontWeight: 750, background: isToday ? "var(--green)" : "transparent", color: isToday ? "white" : "inherit" }}>{d.getDate()}</div>
+                </div>;
+              })}
             </div>
-            <div className="cb-page-sub">
-              {state.events.length} event{state.events.length === 1 ? "" : "s"} in the next 7 days
+
+            <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", minHeight: 46 }}>
+              <div style={{ padding: "9px 6px", borderRight: "1px solid var(--line)", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>All day</div>
+              {weekDays.map((d, idx) => {
+                const items = (eventsByDay.get(dayKey(d)) || []).filter((ev) => ev.all_day);
+                return <div key={dayKey(d)} onDoubleClick={() => setEditor({ mode: "create", initialStart: new Date(d), initialAllDay: true })} style={{ padding: 5, borderRight: idx === 6 ? "none" : "1px solid var(--line)", minHeight: 46 }}>
+                  {items.map((ev) => <button key={ev.id} onClick={() => setEditor({ mode: "edit", event: ev })} style={{ width: "100%", border: "none", borderRadius: 7, background: "#EEF7F1", color: "#245C43", padding: "5px 7px", marginBottom: 3, textAlign: "left", fontSize: 11, fontWeight: 700, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.summary}</button>)}
+                </div>;
+              })}
             </div>
-          </div>
 
-          <div style={{ overflowX: "auto" }}>
-            <div style={{ minWidth: 980 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "72px repeat(7, minmax(124px, 1fr))", borderBottom: "1px solid var(--line)" }}>
-                <div style={{ background: "#FBFCFA", borderRight: "1px solid var(--line)" }} />
-                {weekDays.map((d, idx) => {
-                  const today = idx === 0;
-                  const events = eventsByDay.get(dayKey(d)) || [];
-                  return (
-                    <div key={dayKey(d)} style={{
-                      padding: "12px 10px", textAlign: "center", borderRight: idx === 6 ? "none" : "1px solid var(--line)",
-                      background: today ? "#F4F8F5" : "#FBFCFA",
-                    }}>
-                      <div style={{ fontSize: 12, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".04em" }}>
-                        {d.toLocaleDateString(undefined, { weekday: "short" })}
-                      </div>
-                      <div className="cb-serif" style={{ fontSize: 24, lineHeight: 1.1, marginTop: 3 }}>{d.getDate()}</div>
-                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>{events.length ? `${events.length} event${events.length === 1 ? "" : "s"}` : "Free"}</div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {allDayEvents.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "72px repeat(7, minmax(124px, 1fr))", borderBottom: "1px solid var(--line)", background: "#FCFCFA" }}>
-                  <div style={{ padding: "10px 8px", fontSize: 11, color: "var(--muted)", borderRight: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "center" }}>All day</div>
-                  {weekDays.map((d, idx) => {
-                    const items = (eventsByDay.get(dayKey(d)) || []).filter((ev) => ev.all_day);
-                    return (
-                      <div key={dayKey(d)} style={{ minHeight: 48, padding: 6, borderRight: idx === 6 ? "none" : "1px solid var(--line)" }}>
-                        {items.map((ev) => (
-                          <div key={ev.id} title={ev.summary} style={{
-                            background: "#F2F5F2", border: "1px solid #DDE4DE", borderRadius: 8, padding: "6px 8px", marginBottom: 4,
-                            fontSize: 11, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                          }}>{ev.summary}</div>
-                        ))}
-                      </div>
-                    );
-                  })}
+            <div ref={scrollRef} style={{ maxHeight: 720, overflowY: "auto", position: "relative" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, minmax(132px, 1fr))" }}>
+                <div style={{ height: gridHeight, position: "relative", borderRight: "1px solid var(--line)", background: "#FBFCFA" }}>
+                  {hours.map((h) => <div key={h} style={{ position: "absolute", top: h * hourHeight - 7, width: "100%", textAlign: "center", fontSize: 10, color: "var(--muted)" }}>{h === 24 ? "" : `${String(h).padStart(2,"0")}:00`}</div>)}
                 </div>
-              )}
-
-              <div style={{ display: "grid", gridTemplateColumns: "72px repeat(7, minmax(124px, 1fr))" }}>
-                <div style={{ position: "relative", height: gridHeight, borderRight: "1px solid var(--line)", background: "#FBFCFA" }}>
-                  {hours.map((h, i) => (
-                    <div key={h} style={{
-                      position: "absolute", top: i * hourHeight - 8, left: 0, right: 0, textAlign: "center",
-                      color: "var(--muted)", fontSize: 11,
-                    }}>{String(h).padStart(2, "0")}:00</div>
-                  ))}
-                </div>
-
                 {weekDays.map((d, idx) => {
-                  const items = timedEventsByDay.get(dayKey(d)) || [];
-                  return (
-                    <div key={dayKey(d)} style={{
-                      position: "relative", height: gridHeight,
-                      borderRight: idx === 6 ? "none" : "1px solid var(--line)",
-                      backgroundColor: idx === 0 ? "#FCFEFC" : "#FFFFFF",
-                      backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, var(--line) ${hourHeight - 1}px, var(--line) ${hourHeight}px)`,
-                    }}>
-                      {items.map((ev, evIdx) => {
-                        const pos = eventPosition(ev);
-                        const meet = ev.has_meet_link;
-                        return (
-                          <div key={ev.id} title={`${ev.summary} - ${formatEventTime(ev.start, false)}`} style={{
-                            position: "absolute", top: pos.top + 4, left: 6, right: 6, height: Math.max(30, pos.height - 8),
-                            borderRadius: 10, padding: "7px 8px", overflow: "hidden",
-                            background: meet ? "#EEF7F1" : (evIdx % 2 ? "#F6F2FC" : "#EEF4FB"),
-                            border: meet ? "1px solid #CFE5D5" : "1px solid #DCE4EE",
-                            borderLeft: meet ? "4px solid var(--green)" : "4px solid #55769C",
-                            boxShadow: "0 3px 10px rgba(19, 36, 28, 0.05)",
-                          }}>
-                            <div style={{ fontSize: 11, fontWeight: 800, lineHeight: 1.2, marginBottom: 3 }}>{formatEventTime(ev.start, false)}</div>
-                            <div style={{ fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>{ev.summary}</div>
-                            {meet && <div style={{ marginTop: 4, fontSize: 10, color: "var(--green)", fontWeight: 800, display: "flex", alignItems: "center", gap: 4 }}><Video size={10} />Google Meet</div>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
+                  const key = dayKey(d);
+                  const items = (eventsByDay.get(key) || []).filter((ev) => !ev.all_day);
+                  return <div key={key}
+                    onClick={(e) => { if (e.target === e.currentTarget) openCreateForSlot(d, e.clientY, e.currentTarget.getBoundingClientRect()); }}
+                    onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleDrop(d, e)}
+                    style={{ height: gridHeight, position: "relative", borderRight: idx === 6 ? "none" : "1px solid var(--line)", backgroundColor: key === todayKey ? "#FCFEFC" : "white", backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, var(--line) ${hourHeight - 1}px, var(--line) ${hourHeight}px), repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2}px)` }}>
+                    {key === todayKey && nowTop >= 0 && nowTop <= gridHeight && <div style={{ position: "absolute", top: nowTop, left: 0, right: 0, height: 1, background: "#D94A4A", zIndex: 5, pointerEvents: "none" }}><span style={{ position: "absolute", left: -4, top: -3, width: 7, height: 7, borderRadius: 99, background: "#D94A4A" }} /></div>}
+                    {items.map((ev, evIdx) => {
+                      const pos = eventPosition(ev);
+                      const meet = ev.has_meet_link;
+                      return <div key={ev.id} draggable
+                        onDragStart={(e) => { setDraggingId(ev.id); e.dataTransfer.setData("text/calendar-event-id", ev.id); e.dataTransfer.effectAllowed = "move"; }}
+                        onDragEnd={() => setDraggingId(null)}
+                        onClick={(e) => { e.stopPropagation(); setEditor({ mode: "edit", event: ev }); }}
+                        style={{ position: "absolute", top: pos.top + 2, left: 4, right: 4, height: Math.max(22, pos.height - 4), zIndex: draggingId === ev.id ? 10 : 3, borderRadius: 7, padding: "5px 7px 9px", overflow: "hidden", cursor: "grab", background: meet ? "#EAF4ED" : ["#EEF3FB", "#F5F0FA", "#F9F3E9"][evIdx % 3], borderLeft: `3px solid ${meet ? "#3B7A57" : "#5D7FA3"}`, boxShadow: "0 2px 5px rgba(20,37,29,.08)", opacity: draggingId === ev.id ? .6 : 1 }}>
+                        <div style={{ fontSize: 11, fontWeight: 750, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.summary}</div>
+                        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>{formatEventTime(ev.start, false)}{meet && <><Video size={10} />Meet</>}</div>
+                        <div onPointerDown={(e) => beginResize(ev, e)} title="Drag to resize" style={{ position: "absolute", left: 10, right: 10, bottom: 1, height: 6, cursor: "ns-resize", borderBottom: "2px solid rgba(36,92,67,.35)" }} />
+                      </div>;
+                    })}
+                  </div>;
                 })}
               </div>
             </div>
           </div>
-
-          {state.events.length === 0 && (
-            <div className="cb-empty" style={{ borderTop: "1px solid var(--line)", margin: 0 }}>Nothing on your calendar for the next 7 days.</div>
-          )}
         </div>
-      )}
+      </div>}
+
+      {editor && <CalendarEventModal
+        event={editor.mode === "edit" ? editor.event : null}
+        initialStart={editor.initialStart}
+        initialAllDay={!!editor.initialAllDay}
+        members={members} currentUser={currentUser}
+        onClose={() => setEditor(null)} onSaved={load} onDeleted={load}
+      />}
     </div>
   );
 }
@@ -5773,7 +5969,7 @@ export default function App() {
               />
             )}
             {view === "calendar" && (
-              <CalendarPage onConnectCalendar={connectGoogleCalendar} onQuickMeeting={() => setShowQuickMeeting(true)} />
+              <CalendarPage onConnectCalendar={connectGoogleCalendar} onQuickMeeting={() => setShowQuickMeeting(true)} members={members} currentUser={effectiveCurrentUser} />
             )}
             {view === "export" && (
               <ExportView

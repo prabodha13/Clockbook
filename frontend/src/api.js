@@ -51,7 +51,15 @@ export const api = {
   repairTaskSegments: (taskId) => request(`/tasks/${taskId}/repair-segments`, { method: "POST" }),
   relayNotification: (text) => request("/notifications/relay", { method: "POST", body: JSON.stringify({ text }) }),
   getMeetingNow: () => request("/calendar/meeting-now"),
-  getCalendarEvents: () => request("/calendar/events"),
+  getCalendarEvents: (start = null, end = null) => {
+    const q = new URLSearchParams();
+    if (start) q.set("start", start);
+    if (end) q.set("end", end);
+    return request(`/calendar/events${q.toString() ? `?${q.toString()}` : ""}`);
+  },
+  createCalendarEvent: (payload) => request("/calendar/events", { method: "POST", body: JSON.stringify(payload) }),
+  updateCalendarEvent: (eventId, payload) => request(`/calendar/events/${eventId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteCalendarEvent: (eventId) => request(`/calendar/events/${eventId}`, { method: "DELETE" }),
   createQuickMeeting: (payload) => request("/calendar/quick-meeting", { method: "POST", body: JSON.stringify(payload) }),
   getSuggestedTasks: () => request("/calendar/suggested-tasks"),
   dismissSuggestedTask: (eventId) => request(`/calendar/suggested-tasks/${eventId}/dismiss`, { method: "POST" }),
