@@ -98,6 +98,16 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN tracks_number_label VARCHAR DEFAULT ''"))
             if "needs_pay_period" not in existing_tt_columns:
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN needs_pay_period BOOLEAN DEFAULT FALSE"))
+            if "position" not in existing_tt_columns:
+                conn.execute(text("ALTER TABLE template_tasks ADD COLUMN position INTEGER DEFAULT 0"))
+                # Preserve the existing created order when introducing explicit positions.
+                rows = conn.execute(text("SELECT id, template_id FROM template_tasks ORDER BY template_id, created_at, id")).fetchall()
+                next_pos = {}
+                for row in rows:
+                    template_id = row[1]
+                    pos = next_pos.get(template_id, 0)
+                    conn.execute(text("UPDATE template_tasks SET position = :position WHERE id = :id"), {"position": pos, "id": row[0]})
+                    next_pos[template_id] = pos + 1
 
     if "tasks" in inspector.get_table_names():
         existing_task_columns = {c["name"] for c in inspector.get_columns("tasks")}
@@ -1042,31 +1052,37 @@ def get_inactivity_events(date_from: str = None, date_to: str = None, current_me
         query = query.filter(models.InactivityEvent.started_at < end)
     events = query.all()
 
-    # Help classifications made from a sleep/lock prompt carry the exact inactivity-event
-    # ID that produced that prompt. Exclude only those explicitly linked rows. This avoids
-    # any time-window guessing and cannot accidentally hide a different away period.
-    excluded_event_ids = {
-        row[0]
-        for row in (
-            db.query(models.HelpEvent.inactivity_event_id)
-            .filter(
-                models.HelpEvent.source == "sleep_alert",
-                models.HelpEvent.inactivity_event_id.isnot(None),
-            )
-            .all()
+    # Help classifications from a sleep/lock prompt carry the exact inactivity-event ID
+    # that produced that prompt. Deduct only the linked help duration from that exact
+    # inactivity period. If the help duration covers the whole period, the row disappears;
+    # if it covers only part, the unexplained remainder stays visible.
+    linked_help_seconds = {}
+    for inactivity_event_id, help_seconds in (
+        db.query(models.HelpEvent.inactivity_event_id, models.HelpEvent.seconds)
+        .filter(
+            models.HelpEvent.source == "sleep_alert",
+            models.HelpEvent.inactivity_event_id.isnot(None),
         )
-        if row[0]
-    }
+        .all()
+    ):
+        if inactivity_event_id:
+            linked_help_seconds[inactivity_event_id] = linked_help_seconds.get(inactivity_event_id, 0.0) + max(float(help_seconds or 0), 0.0)
 
-    visible_events = [e for e in events if e.id not in excluded_event_ids]
     member_names = {m.id: m.name for m in db.query(models.Member).all()}
-    return [
-        schemas.InactivityEventDetail(
-            id=e.id, member_id=e.member_id, member_name=member_names.get(e.member_id, "Unknown"),
-            kind=e.kind, started_at=e.started_at, ended_at=e.ended_at, seconds=e.seconds, task_id=e.task_id
+    result = []
+    for e in events:
+        explained = min(float(e.seconds or 0), linked_help_seconds.get(e.id, 0.0))
+        remaining = max(float(e.seconds or 0) - explained, 0.0)
+        if remaining <= 0:
+            continue
+        result.append(
+            schemas.InactivityEventDetail(
+                id=e.id, member_id=e.member_id, member_name=member_names.get(e.member_id, "Unknown"),
+                kind=e.kind, started_at=e.started_at, ended_at=e.ended_at, seconds=remaining,
+                original_seconds=float(e.seconds or 0), help_seconds=explained, task_id=e.task_id
+            )
         )
-        for e in visible_events
-    ]
+    return result
 
 
 @app.get("/api/help-events/summary", response_model=list[schemas.HelpSummaryRow])
@@ -1438,6 +1454,7 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
     tpl = db.get(models.Template, template_id)
     if not tpl:
         raise HTTPException(404, "Template not found")
+    last_position = db.query(func.max(models.TemplateTask.position)).filter(models.TemplateTask.template_id == template_id).scalar()
     task = models.TemplateTask(
         template_id=template_id,
         name=payload.name.strip(),
@@ -1446,6 +1463,7 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
         requires_bank_account=payload.requires_bank_account,
         tracks_number_label=payload.tracks_number_label.strip(),
         needs_pay_period=payload.needs_pay_period,
+        position=(last_position + 1) if last_position is not None else 0,
     )
     db.add(task)
     db.commit()
@@ -1468,6 +1486,25 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     db.commit()
     db.refresh(task)
     return task
+
+
+@app.put("/api/templates/{template_id}/tasks/reorder", response_model=schemas.TemplateOut)
+def reorder_template_tasks(template_id: str, payload: schemas.TemplateTaskReorder, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    tpl = db.get(models.Template, template_id)
+    if not tpl:
+        raise HTTPException(404, "Template not found")
+    existing = db.query(models.TemplateTask).filter(models.TemplateTask.template_id == template_id).all()
+    existing_ids = {t.id for t in existing}
+    if len(payload.task_ids) != len(existing_ids) or set(payload.task_ids) != existing_ids:
+        raise HTTPException(400, "task_ids must contain every task in this template exactly once")
+    by_id = {t.id: t for t in existing}
+    for position, task_id in enumerate(payload.task_ids):
+        by_id[task_id].position = position
+    db.commit()
+    db.expire(tpl, ["tasks"])
+    db.refresh(tpl)
+    return tpl
 
 
 @app.delete("/api/templates/{template_id}/tasks/{task_id}", status_code=204)

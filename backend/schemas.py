@@ -134,6 +134,7 @@ class TemplateTaskOut(BaseModel):
     requires_bank_account: bool
     tracks_number_label: str
     needs_pay_period: bool = False
+    position: int = 0
 
 
 class TemplateTaskCreate(BaseModel):
@@ -143,6 +144,10 @@ class TemplateTaskCreate(BaseModel):
     requires_bank_account: bool = False
     tracks_number_label: str = ""
     needs_pay_period: bool = False
+
+
+class TemplateTaskReorder(BaseModel):
+    task_ids: List[str]
 
 
 class TemplateOut(BaseModel):
@@ -311,7 +316,9 @@ class InactivityEventDetail(BaseModel):
     kind: str
     started_at: datetime
     ended_at: datetime
-    seconds: float
+    seconds: float  # unexplained inactivity after any linked help is deducted
+    original_seconds: float = 0
+    help_seconds: float = 0
     task_id: Optional[str] = None
 
     @field_serializer("started_at", "ended_at")

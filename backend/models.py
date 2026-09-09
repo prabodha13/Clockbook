@@ -126,7 +126,7 @@ class Template(Base):
         "TemplateTask",
         backref="template",
         cascade="all, delete-orphan",
-        order_by="TemplateTask.created_at",
+        order_by="TemplateTask.position, TemplateTask.created_at",
     )
 
 
@@ -140,6 +140,7 @@ class TemplateTask(Base):
     requires_bank_account = Column(Boolean, default=False)
     tracks_number_label = Column(String, default="")  # e.g. "Unreconciled transactions", blank means not tracked
     needs_pay_period = Column(Boolean, default=False)  # asks which weekly/fortnightly/monthly period this covers
+    position = Column(Integer, nullable=False, default=0)  # explicit display/workflow order within the template
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
