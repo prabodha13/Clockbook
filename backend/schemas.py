@@ -227,6 +227,7 @@ class TaskPauseBeacon(BaseModel):
 
 class TaskSubmit(BaseModel):
     note: str = ""
+    client_id: Optional[str] = None
     end_count: Optional[int] = None
     adjusted_seconds: Optional[float] = None
     role: Optional[str] = None
@@ -247,9 +248,17 @@ class AdHocMeetingCreate(BaseModel):
 
 
 class AdHocMeetingFinish(BaseModel):
-    colleague_id: str
+    colleague_id: Optional[str] = None
     interaction: str  # "general", "helped", or "received"
     context: str
+
+
+class QuickMeetingCreate(BaseModel):
+    summary: str
+    attendee_member_ids: List[str] = []
+    external_emails: List[str] = []
+    client_id: Optional[str] = None
+    duration_minutes: int = 30
 
 
 class HelpEventCreate(BaseModel):

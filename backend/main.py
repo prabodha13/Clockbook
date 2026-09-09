@@ -34,7 +34,8 @@ DEFAULT_TEMPLATE = {
 DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
 DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query"]
 DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
-
+UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__"
+UNASSIGNED_CLIENT_NAME = "No client assigned"
 
 
 
@@ -153,6 +154,9 @@ async def lifespan(app: FastAPI):
     run_startup_migrations()
     db = next(get_db())
     try:
+        if db.get(models.Client, UNASSIGNED_CLIENT_ID) is None:
+            db.add(models.Client(id=UNASSIGNED_CLIENT_ID, name=UNASSIGNED_CLIENT_NAME, code=None))
+            db.commit()
         if db.query(models.Template).count() == 0:
             tpl = models.Template(field=DEFAULT_TEMPLATE["field"], name=DEFAULT_TEMPLATE["name"])
             db.add(tpl)
@@ -334,9 +338,10 @@ def get_server_time():
 # ---------------------------------------------------------------
 # Google Calendar integration (optional, per person)
 #
-# Each person connects their own calendar if they want to, nobody is required to. Only a
-# read-only scope is ever requested, nothing here can create, change, or delete anything in
-# anyone's calendar. The refresh token this produces is the one long-lived secret involved,
+# Each person connects their own calendar if they want to, nobody is required to. The
+# calendar-events scope lets Clockbook read that person's events and, when they explicitly
+# choose Quick Meeting, create a real event in their own primary calendar. The refresh token
+# this produces is the one long-lived secret involved,
 # and it is never returned by any API response, MemberOut only ever exposes a computed
 # connected boolean. A short-lived access token is fetched fresh from that refresh token each
 # time a check actually happens, rather than cached, keeping the logic simple and avoiding any
@@ -346,7 +351,7 @@ def get_server_time():
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
 GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI", "https://clockbook.up.railway.app/api/auth/google/callback")
-GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly"
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 
 
 @app.get("/api/auth/google/connect-url")
@@ -475,6 +480,12 @@ def get_meeting_now(current_member: models.Member = Depends(get_current_member),
         start_dt = parse_utc_naive(start)
         end_dt = parse_utc_naive(end)
         if start_dt and end_dt and start_dt <= now <= end_dt:
+            already_tracked = db.query(models.TaskInstance.id).filter(
+                models.TaskInstance.owner_id == current_member.id,
+                models.TaskInstance.source_calendar_event_id == event.get("id"),
+            ).first()
+            if already_tracked:
+                continue
             return {"connected": True, "meeting": {"id": event.get("id"), "summary": event.get("summary") or "Meeting"}}
 
     return {"connected": True, "meeting": None}
@@ -523,6 +534,123 @@ def get_calendar_events(current_member: models.Member = Depends(get_current_memb
             "has_meet_link": has_meet_link,
         })
     return {"connected": True, "events": events}
+
+
+@app.post("/api/calendar/quick-meeting", status_code=201)
+def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not current_member.google_refresh_token:
+        raise HTTPException(400, "Connect Google Calendar before creating a meeting")
+
+    summary = payload.summary.strip()
+    if not summary:
+        raise HTTPException(400, "Meeting name is required")
+    if payload.duration_minutes < 5 or payload.duration_minutes > 240:
+        raise HTTPException(400, "Meeting duration must be between 5 and 240 minutes")
+
+    access_token = get_google_access_token(current_member)
+    if not access_token:
+        raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
+
+    attendee_emails = []
+    seen_emails = set()
+    for member_id in payload.attendee_member_ids:
+        member = db.get(models.Member, member_id)
+        if not member:
+            raise HTTPException(404, "One of the selected Clockbook users was not found")
+        if member.id == current_member.id:
+            continue
+        email = (member.email or "").strip().lower()
+        if not email:
+            raise HTTPException(400, f"{member.name} does not have an email address in Clockbook")
+        if email not in seen_emails:
+            seen_emails.add(email)
+            attendee_emails.append(email)
+
+    for raw_email in payload.external_emails:
+        email = raw_email.strip().lower()
+        if not email:
+            continue
+        if "@" not in email or email.startswith("@") or email.endswith("@"):
+            raise HTTPException(400, f"Invalid guest email: {raw_email}")
+        if email not in seen_emails and email != (current_member.email or "").strip().lower():
+            seen_emails.add(email)
+            attendee_emails.append(email)
+
+    now = datetime.utcnow().replace(microsecond=0)
+    end = now + timedelta(minutes=payload.duration_minutes)
+    event_body = {
+        "summary": summary,
+        "start": {"dateTime": now.isoformat() + "Z"},
+        "end": {"dateTime": end.isoformat() + "Z"},
+        "attendees": [{"email": email} for email in attendee_emails],
+        "conferenceData": {
+            "createRequest": {
+                "requestId": secrets.token_urlsafe(18),
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
+    }
+
+    try:
+        resp = httpx.post(
+            "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+            params={"conferenceDataVersion": 1, "sendUpdates": "all"},
+            json=event_body,
+            timeout=15,
+        )
+        if resp.status_code in (401, 403):
+            raise HTTPException(403, "Google Calendar needs meeting-creation permission. Reconnect Google Calendar once, then try again")
+        resp.raise_for_status()
+        event = resp.json()
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(502, "Could not create the Google Calendar meeting")
+
+    event_id = event.get("id")
+    if not event_id:
+        raise HTTPException(502, "Google Calendar created the event without returning an event id")
+
+    client = None
+    if payload.client_id:
+        client = db.get(models.Client, payload.client_id)
+        if not client:
+            raise HTTPException(404, "Client not found")
+    if not client:
+        client = get_or_create_internal_support_client(db)
+
+    task = models.TaskInstance(
+        client_id=client.id,
+        client_name=client.name,
+        name=summary,
+        task_type="Non-billable: Colleague Meeting",
+        owner_id=current_member.id,
+        status="todo",
+        segments=[],
+        note="",
+        source_calendar_event_id=event_id,
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+    started = start_task(task.id, schemas.TaskStart(), current_member, db)
+
+    meet_url = event.get("hangoutLink")
+    if not meet_url:
+        for entry in (event.get("conferenceData") or {}).get("entryPoints", []):
+            if entry.get("entryPointType") == "video" and entry.get("uri"):
+                meet_url = entry.get("uri")
+                break
+
+    return {
+        "event_id": event_id,
+        "summary": summary,
+        "meet_url": meet_url,
+        "calendar_url": event.get("htmlLink"),
+        "attendees": attendee_emails,
+        "task": schemas.TaskOut.model_validate(started).model_dump(mode="json"),
+    }
 
 
 @app.get("/api/calendar/suggested-tasks")
@@ -882,13 +1010,19 @@ def finish_ad_hoc_meeting(task_id: str, payload: schemas.AdHocMeetingFinish, cur
     if task.status not in ("running", "paused"):
         raise HTTPException(400, "This meeting is already completed")
 
-    colleague = db.get(models.Member, payload.colleague_id)
-    if not colleague:
-        raise HTTPException(404, "Colleague not found")
-    if colleague.id == current_member.id:
-        raise HTTPException(400, "Select another colleague")
+    colleague = None
+    if payload.colleague_id:
+        colleague = db.get(models.Member, payload.colleague_id)
+        if not colleague:
+            raise HTTPException(404, "Colleague not found")
+        if colleague.id == current_member.id:
+            raise HTTPException(400, "Select another colleague")
     if payload.interaction not in ("general", "helped", "received"):
         raise HTTPException(400, "interaction must be general, helped, or received")
+    if payload.interaction in ("helped", "received") and not colleague:
+        raise HTTPException(400, "Select a colleague for help interactions")
+    if not colleague and not task.source_calendar_event_id:
+        raise HTTPException(400, "Select a colleague")
     context = payload.context.strip()
     if not context:
         raise HTTPException(400, "Meeting context is required")
@@ -907,8 +1041,9 @@ def finish_ad_hoc_meeting(task_id: str, payload: schemas.AdHocMeetingFinish, cur
     elif payload.interaction == "received":
         task.name = f"Received help from {colleague.name}"
         task.task_type = "Non-billable: Colleague Support"
-    else:
+    elif colleague and not task.source_calendar_event_id:
         task.name = f"Ad hoc meeting with {colleague.name}"
+    # For a Quick Meeting keep the real calendar meeting title as the task name.
 
     db.flush()
 
@@ -1136,7 +1271,7 @@ def help_events_detail(current_member: models.Member = Depends(get_current_membe
 
 @app.get("/api/clients", response_model=list[schemas.ClientOut])
 def list_clients(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return db.query(models.Client).all()
+    return db.query(models.Client).filter(models.Client.id != UNASSIGNED_CLIENT_ID).all()
 
 
 def check_client_code_available(db, code, exclude_client_id=None):
@@ -1553,9 +1688,11 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
     owner_id = payload.owner_id or current_member.id
     if owner_id != current_member.id and not is_admin_or_above(current_member.role):
         raise HTTPException(403, "Only an admin can assign a task to someone else")
+    client_id = payload.client_id or UNASSIGNED_CLIENT_ID
+    client_name = payload.client_name or (UNASSIGNED_CLIENT_NAME if client_id == UNASSIGNED_CLIENT_ID else "")
     task = models.TaskInstance(
-        client_id=payload.client_id,
-        client_name=payload.client_name,
+        client_id=client_id,
+        client_name=client_name,
         name=payload.name.strip(),
         role=payload.role.strip(),
         task_type=payload.task_type.strip(),
@@ -1732,6 +1869,14 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         raise HTTPException(403, "This task belongs to someone else")
     if task.tracks_number_label and payload.end_count is None:
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
+    if task.client_id == UNASSIGNED_CLIENT_ID:
+        if not payload.client_id or payload.client_id == UNASSIGNED_CLIENT_ID:
+            raise HTTPException(400, "Select a client before completing this meeting")
+        client = db.get(models.Client, payload.client_id)
+        if not client:
+            raise HTTPException(400, "Selected client was not found")
+        task.client_id = client.id
+        task.client_name = client.name
     if payload.adjusted_seconds is not None and payload.adjusted_seconds < 0:
         raise HTTPException(400, "Adjusted time cannot be negative")
     task.segments = close_open_segment(task.segments)
