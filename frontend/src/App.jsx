@@ -5481,16 +5481,38 @@ export default function App() {
   const isScreenLockedRef = useRef(false);
   const idleDetectorActiveRef = useRef(false);
 
-  async function enableIdleDetection() {
-    // Do not permanently mark the detector as started until detector.start() has actually
-    // succeeded. Chrome can reject the permission/start request (for example when it is not
-    // considered user-initiated). In that case a later Start Timer click must be allowed to
-    // retry instead of silently leaving lock detection disabled for the rest of the session.
+  async function enableIdleDetection({ allowPermissionPrompt = false } = {}) {
+    // Chrome only allows IdleDetector.requestPermission() from a genuine user gesture.
+    // Automatic restore after refresh must therefore check the existing permission without
+    // trying to prompt. Start Timer / Enable Alerts may prompt because those calls come from
+    // a user click.
     if (idleDetectorStartedRef.current || idleDetectorStartingRef.current) return;
     if (!("IdleDetector" in window)) return; // Not supported outside Chrome and Edge
     idleDetectorStartingRef.current = true;
     try {
-      const permission = await window.IdleDetector.requestPermission();
+      let permission;
+      if (allowPermissionPrompt) {
+        // Keep this request on the user-action path. Do not call it from effects/page restore.
+        permission = await window.IdleDetector.requestPermission();
+      } else {
+        // A restored running timer may start lock detection automatically only when permission
+        // was already granted. Never trigger a permission prompt from this background path.
+        let permissionState = "prompt";
+        try {
+          const status = await navigator.permissions.query({ name: "idle-detection" });
+          permissionState = status.state;
+        } catch (permissionErr) {
+          console.warn("[idle-detection] Could not read existing permission state.", permissionErr);
+          idleDetectorActiveRef.current = false;
+          return;
+        }
+        if (permissionState !== "granted") {
+          idleDetectorActiveRef.current = false;
+          return;
+        }
+        permission = "granted";
+      }
+
       if (permission !== "granted") {
         idleDetectorActiveRef.current = false;
         return;
@@ -5552,7 +5574,7 @@ export default function App() {
     if ("Notification" in window && Notification.permission === "default") {
       Notification.requestPermission();
     }
-    enableIdleDetection();
+    enableIdleDetection({ allowPermissionPrompt: true });
     setAlertsBannerDismissed(true);
   }
 
@@ -5917,7 +5939,7 @@ export default function App() {
       // Tied to this click so the browser treats it as a genuine user request, not spam
       Notification.requestPermission();
     }
-    enableIdleDetection();
+    enableIdleDetection({ allowPermissionPrompt: true });
     try {
       const updated = await api.startTask(taskId, startCount != null ? startCount : null);
       console.log("[timer-diagnostic] start response", {
