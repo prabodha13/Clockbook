@@ -3396,7 +3396,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
   );
 }
 
-function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask }) {
+function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
   const [staffFilter, setStaffFilter] = useState("all");
@@ -3405,6 +3405,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
   const [customTo, setCustomTo] = useState("");
   const [copiedId, setCopiedId] = useState(null);
   const [rows, setRows] = useState([]);
+  const effectiveStaffFilter = forceSelfOnly && currentUser?.id ? String(currentUser.id) : staffFilter;
   const [loadError, setLoadError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
@@ -3417,13 +3418,13 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
     try {
       const fromIso = dateRange ? dateRange.fromIso : null;
       const toIso = dateRange ? dateRange.toIso : null;
-      const data = await api.getExportRows(clientFilter, pushFilter, fromIso, toIso, staffFilter);
+      const data = await api.getExportRows(clientFilter, pushFilter, fromIso, toIso, effectiveStaffFilter);
       setRows(data);
       setLoadError("");
     } catch (err) {
       setLoadError(err.message || "Could not load the export");
     }
-  }, [clientFilter, pushFilter, staffFilter, dateRange]);
+  }, [clientFilter, pushFilter, effectiveStaffFilter, dateRange]);
 
   useEffect(() => { loadRows(); }, [loadRows]);
 
@@ -3505,12 +3506,12 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
   async function downloadCSV() {
     const fromIso = dateRange ? dateRange.fromIso : null;
     const toIso = dateRange ? dateRange.toIso : null;
-    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`, staffFilter);
+    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`, effectiveStaffFilter);
   }
   async function copyCSV() {
     const fromIso = dateRange ? dateRange.fromIso : null;
     const toIso = dateRange ? dateRange.toIso : null;
-    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso, staffFilter);
+    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso, effectiveStaffFilter);
     copyToClipboard(text);
   }
 
@@ -3582,7 +3583,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
           <option value="all">All clients</option>
           {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
-        {isAdmin && (
+        {isAdmin && !forceSelfOnly && (
           <select className="cb-select" style={{ width: 200 }} value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)}>
             <option value="all">All staff</option>
             {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -6381,6 +6382,8 @@ export default function App() {
             {view === "export" && (
               <ExportView
                 members={members} clients={clients} isAdmin={isAdmin}
+                currentUser={effectiveCurrentUser}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
                 onTogglePushed={togglePushed} onDeleteTask={deleteTask}
               />
             )}
