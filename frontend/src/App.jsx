@@ -1130,7 +1130,7 @@ const PERIOD_TYPE_OPTIONS = [
   { value: "year", label: "Year" },
   { value: "custom", label: "Custom range" },
 ];
-const GENERIC_PERIOD_TYPE_OPTIONS = PERIOD_TYPE_OPTIONS.filter((o) => o.value !== "fortnightly");
+const GENERIC_PERIOD_TYPE_OPTIONS = PERIOD_TYPE_OPTIONS;
 
 function payPeriodLabel(type, number) {
   if (!type || !number) return "";
@@ -1338,8 +1338,9 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             bank_account_id: account ? account.id : null,
             bank_account_name: account ? account.name : "",
             tracks_number_label: t.tracks_number_label || "",
-            needs_pay_period: !!t.needs_pay_period,
+            needs_pay_period: false,
             period_types: t.period_types || [],
+            period_required: !!t.period_required,
             period_type: periodByTaskId[t.id]?.type || null,
             period_year: periodByTaskId[t.id]?.year ? parseInt(periodByTaskId[t.id].year, 10) : null,
             period_number: periodByTaskId[t.id]?.number ? parseInt(periodByTaskId[t.id].number, 10) : null,
@@ -1627,6 +1628,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
     (task.period_types || []).length > 0 ? [...(task.period_types || [])] : (task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : [])
   ), [task.period_types, task.needs_pay_period]);
   const needsPeriod = configuredPeriodTypes.length > 0;
+  const periodRequired = !!task.period_required || (!!task.needs_pay_period && !(task.period_types || []).length);
   const [periodType, setPeriodType] = useState(task.period_type || task.pay_period_type || (configuredPeriodTypes.length === 1 ? configuredPeriodTypes[0] : ""));
   const [periodYear, setPeriodYear] = useState(task.period_year != null ? String(task.period_year) : String(new Date().getFullYear()));
   const [periodNumber, setPeriodNumber] = useState(task.period_number != null ? String(task.period_number) : (task.pay_period_number != null ? String(task.pay_period_number) : ""));
@@ -1701,7 +1703,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
           )}
           {needsPeriod && (
             <div className="cb-field">
-              <label className="cb-label">Period</label>
+              <label className="cb-label">Period{periodRequired ? " *" : ""}</label>
               <div className="cb-field-row">
                 <select
                   className="cb-select" value={periodType}
@@ -1738,7 +1740,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
                   <input type="date" className="cb-input" value={periodEnd} min={periodStart || undefined} onChange={(e) => setPeriodEnd(e.target.value)} />
                 </div>
               )}
-              <div className="cb-hint">What period this work relates to. This does not change the date the time was actually worked.</div>
+              <div className="cb-hint">What period this work relates to. This does not change the date the time was actually worked.{periodRequired ? " Required to complete this task." : ""}</div>
             </div>
           )}
           <div className="cb-field">
@@ -1780,7 +1782,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
-              || (needsPeriod && (!periodType
+              || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
                 || (periodType === "year" && !periodYear)
@@ -1938,8 +1940,8 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   const [role, setRole] = useState(task.role);
   const [taskType, setTaskType] = useState(task.task_type);
   const [requiresBank, setRequiresBank] = useState(!!task.requires_bank_account);
-  const [needsPayPeriod, setNeedsPayPeriod] = useState(!!task.needs_pay_period && !(task.period_types || []).length);
-  const [periodTypes, setPeriodTypes] = useState(task.period_types || []);
+  const [periodTypes, setPeriodTypes] = useState((task.period_types || []).length ? task.period_types : (task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : []));
+  const [periodRequired, setPeriodRequired] = useState(!!task.period_required || !!task.needs_pay_period || (task.period_types || []).length > 0);
   const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
   const [saving, setSaving] = useState(false);
   const [periodPickerOpen, setPeriodPickerOpen] = useState(false);
@@ -1953,21 +1955,22 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
     setRole(task.role);
     setTaskType(task.task_type);
     setRequiresBank(!!task.requires_bank_account);
-    setNeedsPayPeriod(!!task.needs_pay_period && !(task.period_types || []).length);
-    setPeriodTypes(task.period_types || []);
+    setPeriodTypes((task.period_types || []).length ? task.period_types : (task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : []));
+    setPeriodRequired(!!task.period_required || !!task.needs_pay_period || (task.period_types || []).length > 0);
     setTracksLabel(task.tracks_number_label);
-  }, [task.id, task.name, task.role, task.task_type, task.requires_bank_account, task.needs_pay_period, task.period_types, task.tracks_number_label]);
+  }, [task.id, task.name, task.role, task.task_type, task.requires_bank_account, task.needs_pay_period, task.period_types, task.period_required, task.tracks_number_label]);
 
   const isDirty = name !== task.name || role !== task.role || taskType !== task.task_type
-    || requiresBank !== !!task.requires_bank_account || needsPayPeriod !== !!task.needs_pay_period
-    || JSON.stringify(periodTypes) !== JSON.stringify(task.period_types || []) || tracksLabel !== task.tracks_number_label;
+    || requiresBank !== !!task.requires_bank_account
+    || periodRequired !== (!!task.period_required || !!task.needs_pay_period || (task.period_types || []).length > 0)
+    || JSON.stringify(periodTypes) !== JSON.stringify((task.period_types || []).length ? task.period_types : (task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : [])) || tracksLabel !== task.tracks_number_label;
 
   async function handleSave() {
     setSaving(true);
     try {
       await onUpdateTask(template.id, task.id, {
         name, role, task_type: taskType, requires_bank_account: requiresBank,
-        needs_pay_period: needsPayPeriod, period_types: periodTypes, tracks_number_label: tracksLabel,
+        needs_pay_period: false, period_types: periodTypes, period_required: periodRequired, tracks_number_label: tracksLabel,
       });
       setPeriodPickerOpen(false);
     } finally {
@@ -2007,25 +2010,19 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
           />
           Requires a bank account
         </label>
-        <label className="cb-tmpl-task-option-checkbox">
+        <label className="cb-tmpl-task-option-checkbox" title={periodTypes.length === 0 ? "Choose at least one Work period type first" : ""}>
           <input
-            type="checkbox" className="cb-checkbox" checked={needsPayPeriod}
-            onChange={(e) => {
-              const checked = e.target.checked;
-              setNeedsPayPeriod(checked);
-              if (checked) setPeriodTypes([]);
-            }}
+            type="checkbox" className="cb-checkbox" checked={periodRequired}
+            disabled={periodTypes.length === 0}
+            onChange={(e) => setPeriodRequired(e.target.checked)}
           />
-          Needs a pay period
+          Require period on completion
         </label>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
           <WorkPeriodTypePicker
             value={periodTypes}
-            onChange={(next) => {
-              setPeriodTypes(next);
-              if (next.length > 0) setNeedsPayPeriod(false);
-            }}
+            onChange={(next) => { setPeriodTypes(next); if (next.length === 0) setPeriodRequired(false); }}
             open={periodPickerOpen}
             onOpenChange={setPeriodPickerOpen}
           />
@@ -2089,8 +2086,8 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
   const [tRole, setTRole] = useState("");
   const [tType, setTType] = useState("");
   const [tRequiresBank, setTRequiresBank] = useState(false);
-  const [tNeedsPayPeriod, setTNeedsPayPeriod] = useState(false);
   const [tPeriodTypes, setTPeriodTypes] = useState([]);
+  const [tPeriodRequired, setTPeriodRequired] = useState(false);
   const [tPeriodPickerOpen, setTPeriodPickerOpen] = useState(false);
   const [tTracksLabel, setTTracksLabel] = useState("");
 
@@ -2099,9 +2096,9 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     if (!tName.trim()) return;
     await onAddTask(template.id, {
       name: tName.trim(), role: tRole.trim(), task_type: tType.trim(),
-      requires_bank_account: tRequiresBank, needs_pay_period: tNeedsPayPeriod, period_types: tPeriodTypes, tracks_number_label: tTracksLabel.trim(),
+      requires_bank_account: tRequiresBank, needs_pay_period: false, period_types: tPeriodTypes, period_required: tPeriodRequired, tracks_number_label: tTracksLabel.trim(),
     });
-    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTNeedsPayPeriod(false); setTPeriodTypes([]); setTPeriodPickerOpen(false); setTTracksLabel(""); setAddingTask(false);
+    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTPeriodTypes([]); setTPeriodRequired(false); setTPeriodPickerOpen(false); setTTracksLabel(""); setAddingTask(false);
   }
 
   return (
@@ -2159,8 +2156,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                     {t.role && <span>{t.role}</span>}
                     {t.task_type && <span>{t.task_type}</span>}
                     {t.requires_bank_account && <span>Needs a bank account</span>}
-                    {t.needs_pay_period && !(t.period_types || []).length && <span>Payroll period at completion</span>}
-                    {(t.period_types || []).length > 0 && <span>Period at completion</span>}
+                    {(t.period_types || []).length > 0 && <span>{t.period_required ? "Period required at completion" : "Period available"}</span>}
                     {t.tracks_number_label && <span>Tracks: {t.tracks_number_label}</span>}
                   </div>
                 </div>
@@ -2186,15 +2182,15 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                   <input type="checkbox" className="cb-checkbox" checked={tRequiresBank} onChange={(e) => setTRequiresBank(e.target.checked)} />
                   Requires a bank account
                 </label>
-                <label className="cb-tmpl-task-option-checkbox">
-                  <input type="checkbox" className="cb-checkbox" checked={tNeedsPayPeriod} onChange={(e) => { const checked = e.target.checked; setTNeedsPayPeriod(checked); if (checked) setTPeriodTypes([]); }} />
-                  Needs a pay period
+                <label className="cb-tmpl-task-option-checkbox" title={tPeriodTypes.length === 0 ? "Choose at least one Work period type first" : ""}>
+                  <input type="checkbox" className="cb-checkbox" checked={tPeriodRequired} disabled={tPeriodTypes.length === 0} onChange={(e) => setTPeriodRequired(e.target.checked)} />
+                  Require period on completion
                 </label>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
                   <WorkPeriodTypePicker
                     value={tPeriodTypes}
-                    onChange={(next) => { setTPeriodTypes(next); if (next.length > 0) setTNeedsPayPeriod(false); }}
+                    onChange={(next) => { setTPeriodTypes(next); if (next.length === 0) setTPeriodRequired(false); }}
                     open={tPeriodPickerOpen}
                     onOpenChange={setTPeriodPickerOpen}
                   />
