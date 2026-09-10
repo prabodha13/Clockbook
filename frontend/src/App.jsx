@@ -4364,20 +4364,20 @@ function InactivityAuditView({ members }) {
 
   return (
     <div>
-      <div className="cb-page-head">
-        <div>
-          <div className="cb-page-title cb-serif">Inactivity audit</div>
-          <div className="cb-page-sub">Super-admin audit of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
-        </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <div>
+      <div style={{ marginBottom: 4 }}>
+        <div className="cb-page-title cb-serif">Inactivity audit</div>
+        <div className="cb-page-sub">Super-admin audit of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
+
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 14, flexWrap: "nowrap" }}>
+          <div style={{ flex: "0 0 150px" }}>
             <div className="cb-label">Person</div>
-            <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ minWidth: 170 }}>
+            <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ width: 150, minWidth: 150 }}>
               <option value="">All people</option>
               {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
-          <div>
+
+          <div style={{ flex: "0 0 auto" }}>
             <div className="cb-label">Period</div>
             <div className="cb-tabs">
               <button className={`cb-tab ${dateMode === "today" ? "active" : ""}`} onClick={() => setDateMode("today")}>Today</button>
@@ -4388,14 +4388,14 @@ function InactivityAuditView({ members }) {
               <button className={`cb-tab ${dateMode === "custom" ? "active" : ""}`} onClick={() => setDateMode("custom")}>Custom</button>
             </div>
           </div>
-          {dateMode === "custom" && (
-            <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
-              <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 145 }} /></div>
-              <span style={{ color: "var(--ink-faint)", paddingBottom: 10 }}>to</span>
-              <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
-            </div>
-          )}
-          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", alignSelf: "flex-end" }}><RotateCcw size={13} />Refresh</button>
+
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, flex: "0 0 333px", visibility: dateMode === "custom" ? "visible" : "hidden", pointerEvents: dateMode === "custom" ? "auto" : "none" }}>
+            <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 145 }} /></div>
+            <span style={{ color: "var(--ink-faint)", paddingBottom: 10 }}>to</span>
+            <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
+          </div>
+
+          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", marginTop: 20, flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
         </div>
       </div>
       {enabled === false && <div className="cb-notice">Inactivity audit recording is currently off. A super admin can turn it on from Settings.</div>}
