@@ -2087,7 +2087,6 @@ def reset_task(task_id: str, current_member: models.Member = Depends(get_current
     return task
 
 
-@app.post("/api/tasks/{task_id}/submit", response_model=schemas.TaskOut)
 def is_bookkeeping_task(task):
     text_value = " ".join(filter(None, [
         getattr(task, "name", None),
@@ -2097,6 +2096,7 @@ def is_bookkeeping_task(task):
     return "bookkeep" in text_value or "book keeping" in text_value
 
 
+@app.post("/api/tasks/{task_id}/submit", response_model=schemas.TaskOut)
 def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
