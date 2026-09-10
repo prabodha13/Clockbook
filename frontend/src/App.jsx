@@ -412,7 +412,21 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
     <div className="cb-row">
       <div className="cb-row-main">
         {!hideClient && <div className="cb-row-client"><Building2 size={11} />{task.client_name}</div>}
-        <div className="cb-row-task">{taskDisplayHeading(task)}</div>
+        <div className="cb-row-task" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span>{taskDisplayHeading(task)}</span>
+          {taskPeriodContext(task) && (
+            <span
+              title="Work period"
+              style={{
+                display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999,
+                border: "1px solid var(--line)", color: "var(--ink-soft)", fontSize: 11, fontWeight: 600,
+                lineHeight: 1.4, whiteSpace: "nowrap",
+              }}
+            >
+              {taskPeriodContext(task)}
+            </span>
+          )}
+        </div>
         <div className="cb-row-meta">
           {task.role && <span>{task.role}</span>}
           {task.task_type && <span>{task.task_type}</span>}
@@ -1177,6 +1191,51 @@ function taskDisplayHeading(task) {
     ? `${task.source_template_name} - ${task.name}`
     : task.name;
   return taskHeading(taskName, task.bank_account_name, task.pay_period_type, task.pay_period_number);
+}
+
+function taskPeriodContext(task) {
+  const type = task.period_type || (!task.period_type ? task.pay_period_type : null);
+  const year = task.period_year;
+  const number = task.period_number || (!task.period_number ? task.pay_period_number : null);
+
+  if (!type) {
+    return (task.period_types || []).length > 0 ? "Period: Select later" : "";
+  }
+  if (type === "year") return year ? String(year) : "Period: Select later";
+  if (type === "weekly") return year && number ? `${year} · W${number}` : (number ? `W${number}` : "Period: Select later");
+  if (type === "fortnightly") return year && number ? `${year} · F${number}` : (number ? `F${number}` : "Period: Select later");
+  if (type === "monthly") {
+    const label = number ? new Date(2000, number - 1, 1).toLocaleDateString(undefined, { month: "short" }) : "";
+    return year && label ? `${year} · ${label}` : (label || "Period: Select later");
+  }
+  if (type === "bi_monthly") {
+    if (!number) return "Period: Select later";
+    const start = (number - 1) * 2;
+    const a = new Date(2000, start, 1).toLocaleDateString(undefined, { month: "short" });
+    const b = new Date(2000, start + 1, 1).toLocaleDateString(undefined, { month: "short" });
+    return year ? `${year} · ${a}–${b}` : `${a}–${b}`;
+  }
+  if (type === "quarterly") return year && number ? `${year} · Q${number}` : (number ? `Q${number}` : "Period: Select later");
+  if (type === "daily" && task.period_start) {
+    const d = new Date(`${task.period_start}T00:00:00`);
+    if (!Number.isNaN(d.getTime())) {
+      const y = d.getFullYear();
+      const dayMonth = d.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+      return `${y} · ${dayMonth}`;
+    }
+  }
+  if (type === "custom" && task.period_start && task.period_end) {
+    const start = new Date(`${task.period_start}T00:00:00`);
+    const end = new Date(`${task.period_end}T00:00:00`);
+    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
+      const sy = start.getFullYear();
+      const ey = end.getFullYear();
+      const startLabel = start.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+      const endLabel = end.toLocaleDateString(undefined, { day: "numeric", month: "short" });
+      return sy === ey ? `${sy} · ${startLabel}–${endLabel}` : `${startLabel} ${sy}–${endLabel} ${ey}`;
+    }
+  }
+  return "Period: Select later";
 }
 
 function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSecondary }) {
@@ -4250,8 +4309,10 @@ function InactivityAuditView({ members }) {
   const today = new Date();
   const weekAgo = new Date();
   weekAgo.setDate(today.getDate() - 6);
+  const todayKey = localDate(today);
+  const [dateMode, setDateMode] = useState("today");
   const [dateFrom, setDateFrom] = useState(localDate(weekAgo));
-  const [dateTo, setDateTo] = useState(localDate(today));
+  const [dateTo, setDateTo] = useState(todayKey);
   const [enabled, setEnabled] = useState(null);
   const [events, setEvents] = useState(null);
   const [personId, setPersonId] = useState("");
@@ -4266,11 +4327,13 @@ function InactivityAuditView({ members }) {
         setEvents([]);
         return;
       }
-      setEvents(await api.getInactivityEvents(dateFrom, dateTo));
+      const queryFrom = dateMode === "today" ? todayKey : dateFrom;
+      const queryTo = dateMode === "today" ? todayKey : dateTo;
+      setEvents(await api.getInactivityEvents(queryFrom, queryTo));
     } catch (err) {
       setError(true);
     }
-  }, [dateFrom, dateTo]);
+  }, [dateMode, dateFrom, dateTo, todayKey]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -4308,9 +4371,30 @@ function InactivityAuditView({ members }) {
               {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
             </select>
           </div>
-          <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
-          <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
-          <button className="cb-btn" onClick={load}>Refresh</button>
+          <div>
+            <div className="cb-label">Period</div>
+            <div style={{ display: "flex", gap: 4 }}>
+              <button
+                type="button"
+                className={`cb-btn cb-btn-sm ${dateMode === "today" ? "cb-btn-primary" : "cb-btn-ghost"}`}
+                onClick={() => setDateMode("today")}
+                style={{ minHeight: 36 }}
+              >Today</button>
+              <button
+                type="button"
+                className={`cb-btn cb-btn-sm ${dateMode === "range" ? "cb-btn-primary" : "cb-btn-ghost"}`}
+                onClick={() => setDateMode("range")}
+                style={{ minHeight: 36 }}
+              >Date range</button>
+            </div>
+          </div>
+          {dateMode === "range" && (
+            <>
+              <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
+              <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
+            </>
+          )}
+          <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={load} style={{ minHeight: 36, alignSelf: "flex-end" }}><RotateCcw size={13} />Refresh</button>
         </div>
       </div>
       {enabled === false && <div className="cb-notice">Inactivity audit recording is currently off. A super admin can turn it on from Settings.</div>}
