@@ -4313,6 +4313,14 @@ function InactivityAuditView({ members }) {
   const [dateMode, setDateMode] = useState("today");
   const [dateFrom, setDateFrom] = useState(localDate(weekAgo));
   const [dateTo, setDateTo] = useState(todayKey);
+
+  const auditDateRange = useMemo(() => {
+    if (dateMode === "today") return { from: todayKey, to: todayKey };
+    if (dateMode === "custom") return { from: dateFrom, to: dateTo };
+    const range = dateRangeForPreset(dateMode);
+    if (!range) return { from: todayKey, to: todayKey };
+    return { from: localDate(new Date(range.fromIso)), to: localDate(new Date(range.toIso)) };
+  }, [dateMode, dateFrom, dateTo, todayKey]);
   const [enabled, setEnabled] = useState(null);
   const [events, setEvents] = useState(null);
   const [personId, setPersonId] = useState("");
@@ -4327,13 +4335,11 @@ function InactivityAuditView({ members }) {
         setEvents([]);
         return;
       }
-      const queryFrom = dateMode === "today" ? todayKey : dateFrom;
-      const queryTo = dateMode === "today" ? todayKey : dateTo;
-      setEvents(await api.getInactivityEvents(queryFrom, queryTo));
+      setEvents(await api.getInactivityEvents(auditDateRange.from, auditDateRange.to));
     } catch (err) {
       setError(true);
     }
-  }, [dateMode, dateFrom, dateTo, todayKey]);
+  }, [auditDateRange]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -4363,7 +4369,7 @@ function InactivityAuditView({ members }) {
           <div className="cb-page-title cb-serif">Inactivity audit</div>
           <div className="cb-page-sub">Super-admin audit of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
           <div>
             <div className="cb-label">Person</div>
             <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ minWidth: 170 }}>
@@ -4373,28 +4379,23 @@ function InactivityAuditView({ members }) {
           </div>
           <div>
             <div className="cb-label">Period</div>
-            <div style={{ display: "flex", gap: 4 }}>
-              <button
-                type="button"
-                className={`cb-btn cb-btn-sm ${dateMode === "today" ? "cb-btn-primary" : "cb-btn-ghost"}`}
-                onClick={() => setDateMode("today")}
-                style={{ minHeight: 36 }}
-              >Today</button>
-              <button
-                type="button"
-                className={`cb-btn cb-btn-sm ${dateMode === "range" ? "cb-btn-primary" : "cb-btn-ghost"}`}
-                onClick={() => setDateMode("range")}
-                style={{ minHeight: 36 }}
-              >Date range</button>
+            <div className="cb-tabs">
+              <button className={`cb-tab ${dateMode === "today" ? "active" : ""}`} onClick={() => setDateMode("today")}>Today</button>
+              <button className={`cb-tab ${dateMode === "this_week" ? "active" : ""}`} onClick={() => setDateMode("this_week")}>This week</button>
+              <button className={`cb-tab ${dateMode === "last_week" ? "active" : ""}`} onClick={() => setDateMode("last_week")}>Last week</button>
+              <button className={`cb-tab ${dateMode === "this_month" ? "active" : ""}`} onClick={() => setDateMode("this_month")}>This month</button>
+              <button className={`cb-tab ${dateMode === "last_month" ? "active" : ""}`} onClick={() => setDateMode("last_month")}>Last month</button>
+              <button className={`cb-tab ${dateMode === "custom" ? "active" : ""}`} onClick={() => setDateMode("custom")}>Custom</button>
             </div>
           </div>
-          {dateMode === "range" && (
-            <>
-              <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
-              <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
-            </>
+          {dateMode === "custom" && (
+            <div style={{ display: "flex", alignItems: "flex-end", gap: 6 }}>
+              <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 145 }} /></div>
+              <span style={{ color: "var(--ink-faint)", paddingBottom: 10 }}>to</span>
+              <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
+            </div>
           )}
-          <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={load} style={{ minHeight: 36, alignSelf: "flex-end" }}><RotateCcw size={13} />Refresh</button>
+          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", alignSelf: "flex-end" }}><RotateCcw size={13} />Refresh</button>
         </div>
       </div>
       {enabled === false && <div className="cb-notice">Inactivity audit recording is currently off. A super admin can turn it on from Settings.</div>}
