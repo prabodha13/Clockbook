@@ -1859,6 +1859,80 @@ function AddMemberModal({ onClose, onAdd }) {
   );
 }
 
+
+function WorkPeriodTypePicker({ value, onChange, open, onOpenChange }) {
+  const buttonRef = useRef(null);
+  const menuRef = useRef(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClickOutside(e) {
+      const clickedButton = buttonRef.current && buttonRef.current.contains(e.target);
+      const clickedMenu = menuRef.current && menuRef.current.contains(e.target);
+      if (!clickedButton && !clickedMenu) onOpenChange(false);
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [open, onOpenChange]);
+
+  useLayoutEffect(() => {
+    if (!open || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
+    const menuHeight = menuRef.current ? menuRef.current.getBoundingClientRect().height : 300;
+    const menuWidth = menuRef.current ? menuRef.current.getBoundingClientRect().width : 210;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const openUpward = spaceBelow < menuHeight + 12 && rect.top > menuHeight + 12;
+    setPosition({
+      top: openUpward ? Math.max(8, rect.top - menuHeight - 4) : Math.min(window.innerHeight - menuHeight - 8, rect.bottom + 4),
+      left: Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - menuWidth - 8)),
+    });
+  }, [open]);
+
+  const label = value.length === 0
+    ? "Not required"
+    : value.length === 1
+      ? (GENERIC_PERIOD_TYPE_OPTIONS.find((o) => o.value === value[0])?.label || value[0])
+      : `${value.length} types`;
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="cb-select"
+        style={{ cursor: "pointer", minWidth: 132, paddingTop: 7, paddingBottom: 7, textAlign: "left" }}
+        title="Choose which work periods are valid for this task. The actual period is optional at start and required at completion."
+        onClick={() => onOpenChange(!open)}
+      >
+        {label}
+      </button>
+      {open && createPortal(
+        <div
+          ref={menuRef}
+          style={{
+            position: "fixed", top: position.top, left: position.left, zIndex: 1000,
+            background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8,
+            padding: 10, minWidth: 190, boxShadow: "var(--shadow)",
+          }}
+        >
+          <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 6 }}>For Bookkeeping, Year-End, tax and other non-payroll work.</div>
+          {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
+            <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
+              <input
+                type="checkbox" className="cb-checkbox" checked={value.includes(option.value)}
+                onChange={(e) => onChange(e.target.checked ? [...value, option.value] : value.filter((x) => x !== option.value))}
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>,
+        document.querySelector(".cb-root") || document.body
+      )}
+    </>
+  );
+}
+
 function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, onUpdateTask, onDeleteTask, onMoveTask, canMoveUp, canMoveDown }) {
   const [name, setName] = useState(task.name);
   const [role, setRole] = useState(task.role);
@@ -1868,6 +1942,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   const [periodTypes, setPeriodTypes] = useState(task.period_types || []);
   const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
   const [saving, setSaving] = useState(false);
+  const [periodPickerOpen, setPeriodPickerOpen] = useState(false);
 
   // Resyncs local state whenever the underlying task actually changes, e.g. after a save
   // completes and fresh data comes back, or if this same slot ends up showing a different
@@ -1894,6 +1969,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
         name, role, task_type: taskType, requires_bank_account: requiresBank,
         needs_pay_period: needsPayPeriod, period_types: periodTypes, tracks_number_label: tracksLabel,
       });
+      setPeriodPickerOpen(false);
     } finally {
       setSaving(false);
     }
@@ -1940,31 +2016,12 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
         </label>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
-          <details style={{ position: "relative" }}>
-            <summary
-              className="cb-select"
-              style={{ cursor: "pointer", listStyle: "none", minWidth: 132, paddingTop: 7, paddingBottom: 7 }}
-              title="Choose which work periods are valid for this task. The actual period is optional at start and required at completion."
-            >
-              {periodTypes.length === 0
-                ? "Not required"
-                : periodTypes.length === 1
-                  ? (GENERIC_PERIOD_TYPE_OPTIONS.find((o) => o.value === periodTypes[0])?.label || periodTypes[0])
-                  : `${periodTypes.length} types`}
-            </summary>
-            <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 190, boxShadow: "var(--shadow)", marginTop: 4 }}>
-              <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 6 }}>For Bookkeeping, Year-End, tax and other non-payroll work.</div>
-              {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
-                <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
-                  <input
-                    type="checkbox" className="cb-checkbox" checked={periodTypes.includes(option.value)}
-                    onChange={(e) => setPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))}
-                  />
-                  {option.label}
-                </label>
-              ))}
-            </div>
-          </details>
+          <WorkPeriodTypePicker
+            value={periodTypes}
+            onChange={setPeriodTypes}
+            open={periodPickerOpen}
+            onOpenChange={setPeriodPickerOpen}
+          />
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Tracking</span>
@@ -2027,6 +2084,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
   const [tRequiresBank, setTRequiresBank] = useState(false);
   const [tNeedsPayPeriod, setTNeedsPayPeriod] = useState(false);
   const [tPeriodTypes, setTPeriodTypes] = useState([]);
+  const [tPeriodPickerOpen, setTPeriodPickerOpen] = useState(false);
   const [tTracksLabel, setTTracksLabel] = useState("");
 
   async function addTask(e) {
@@ -2036,7 +2094,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
       name: tName.trim(), role: tRole.trim(), task_type: tType.trim(),
       requires_bank_account: tRequiresBank, needs_pay_period: tNeedsPayPeriod, period_types: tPeriodTypes, tracks_number_label: tTracksLabel.trim(),
     });
-    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTNeedsPayPeriod(false); setTPeriodTypes([]); setTTracksLabel(""); setAddingTask(false);
+    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTNeedsPayPeriod(false); setTPeriodTypes([]); setTPeriodPickerOpen(false); setTTracksLabel(""); setAddingTask(false);
   }
 
   return (
@@ -2127,28 +2185,12 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                 </label>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
-                  <details style={{ position: "relative" }}>
-                    <summary
-                      className="cb-select"
-                      style={{ cursor: "pointer", listStyle: "none", minWidth: 132, paddingTop: 7, paddingBottom: 7 }}
-                      title="Choose which work periods are valid for this task. The actual period is optional at start and required at completion."
-                    >
-                      {tPeriodTypes.length === 0
-                        ? "Not required"
-                        : tPeriodTypes.length === 1
-                          ? (GENERIC_PERIOD_TYPE_OPTIONS.find((o) => o.value === tPeriodTypes[0])?.label || tPeriodTypes[0])
-                          : `${tPeriodTypes.length} types`}
-                    </summary>
-                    <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 190, boxShadow: "var(--shadow)", marginTop: 4 }}>
-                      <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 6 }}>For Bookkeeping, Year-End, tax and other non-payroll work.</div>
-                      {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
-                        <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
-                          <input type="checkbox" className="cb-checkbox" checked={tPeriodTypes.includes(option.value)} onChange={(e) => setTPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))} />
-                          {option.label}
-                        </label>
-                      ))}
-                    </div>
-                  </details>
+                  <WorkPeriodTypePicker
+                    value={tPeriodTypes}
+                    onChange={setTPeriodTypes}
+                    open={tPeriodPickerOpen}
+                    onOpenChange={setTPeriodPickerOpen}
+                  />
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Tracking</span>
