@@ -5556,6 +5556,15 @@ export default function App() {
     setAlertsBannerDismissed(true);
   }
 
+  // A running task can be restored from the server after a refresh/redeploy without going
+  // through startTask(), so explicitly restart OS lock detection for that restored session.
+  // If Chrome refuses an automatic start, enableIdleDetection() leaves itself retryable and
+  // the next user-initiated Start/Enable Alerts action can try again.
+  useEffect(() => {
+    if (!myRunningTask) return;
+    enableIdleDetection();
+  }, [myRunningTask && myRunningTask.id]);
+
   // ---------------------------------------------------------------
   // "Forgot to track" nudge: entirely separate from the sleep and lock detection above, and
   // does not read or write any of its internal state. Runs its own independent gap check, so
