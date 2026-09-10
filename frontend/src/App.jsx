@@ -2882,7 +2882,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
 
   const hourStart = 0;
   const hourEnd = 24;
-  const hourHeight = 54;
+  const hourHeight = 60;
   const gridHeight = (hourEnd - hourStart) * hourHeight;
   const hours = Array.from({ length: 25 }, (_, i) => i);
 
@@ -2994,23 +2994,23 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
             <button className="cb-icon-btn" onClick={() => moveWeek(1)} title="Next week"><ChevronRight size={17} /></button>
             <div className="cb-serif" style={{ fontSize: 20, fontWeight: 700, marginLeft: 4 }}>{rangeLabel}</div>
           </div>
-          <div className="cb-hint">Click a time to create • drag to move • pull the bottom edge to resize</div>
+          <div className="cb-hint" style={{ opacity: .72, fontSize: 11 }}>Click a time to create • drag to move • pull the bottom edge to resize</div>
         </div>
 
         <div style={{ overflowX: "auto" }}>
           <div style={{ minWidth: 1040 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", background: "#FBFCFA" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "82px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", background: "#FBFCFA" }}>
               <div style={{ borderRight: "1px solid var(--line)" }} />
               {weekDays.map((d, idx) => {
                 const isToday = dayKey(d) === todayKey;
-                return <div key={dayKey(d)} style={{ padding: "10px 8px", textAlign: "center", borderRight: idx === 6 ? "none" : "1px solid var(--line)", background: isToday ? "#F3F8F5" : "#FBFCFA" }}>
+                return <div key={dayKey(d)} style={{ padding: "10px 8px", textAlign: "center", borderRight: idx === 6 ? "none" : "1px solid var(--line)", background: isToday ? "#F3F8F5" : (idx >= 5 ? "#FAFBF9" : "#FBFCFA") }}>
                   <div style={{ fontSize: 11, color: "var(--muted)", fontWeight: 700, textTransform: "uppercase", letterSpacing: ".05em" }}>{d.toLocaleDateString(undefined, { weekday: "short" })}</div>
                   <div style={{ width: 34, height: 34, borderRadius: 999, display: "inline-flex", alignItems: "center", justifyContent: "center", marginTop: 4, fontWeight: 750, background: isToday ? "var(--green)" : "transparent", color: isToday ? "white" : "inherit" }}>{d.getDate()}</div>
                 </div>;
               })}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", minHeight: 46 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "82px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", minHeight: 46 }}>
               <div style={{ padding: "9px 6px", borderRight: "1px solid var(--line)", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>All day</div>
               {weekDays.map((d, idx) => {
                 const items = (eventsByDay.get(dayKey(d)) || []).filter((ev) => ev.all_day);
@@ -3021,7 +3021,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
             </div>
 
             <div ref={scrollRef} style={{ maxHeight: 720, overflowY: "auto", position: "relative" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "70px repeat(7, minmax(132px, 1fr))" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "82px repeat(7, minmax(132px, 1fr))" }}>
                 <div style={{ height: gridHeight, position: "relative", borderRight: "1px solid var(--line)", background: "#FBFCFA" }}>
                   {hours.map((h) => <div key={h} style={{ position: "absolute", top: h * hourHeight - 7, width: "100%", textAlign: "center", fontSize: 10, color: "var(--muted)" }}>{h === 24 ? "" : `${String(h).padStart(2,"0")}:00`}</div>)}
                 </div>
@@ -3031,7 +3031,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
                   return <div key={key}
                     onClick={(e) => { if (e.target === e.currentTarget) openCreateForSlot(d, e.clientY, e.currentTarget.getBoundingClientRect()); }}
                     onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleDrop(d, e)}
-                    style={{ height: gridHeight, position: "relative", borderRight: idx === 6 ? "none" : "1px solid var(--line)", backgroundColor: key === todayKey ? "#FCFEFC" : "white", backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, var(--line) ${hourHeight - 1}px, var(--line) ${hourHeight}px), repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2}px)` }}>
+                    style={{ height: gridHeight, position: "relative", borderRight: idx === 6 ? "none" : "1px solid var(--line)", backgroundColor: key === todayKey ? "#FCFEFC" : (idx >= 5 ? "#FCFCFA" : "white"), backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, var(--line) ${hourHeight - 1}px, var(--line) ${hourHeight}px), repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2}px)` }}>
                     {key === todayKey && nowTop >= 0 && nowTop <= gridHeight && <div style={{ position: "absolute", top: nowTop, left: 0, right: 0, height: 1, background: "#D94A4A", zIndex: 5, pointerEvents: "none" }}><span style={{ position: "absolute", left: -4, top: -3, width: 7, height: 7, borderRadius: 99, background: "#D94A4A" }} /></div>}
                     {items.map((ev, evIdx) => {
                       const pos = eventPosition(ev);
@@ -3040,7 +3040,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
                         onDragStart={(e) => { setDraggingId(ev.id); e.dataTransfer.setData("text/calendar-event-id", ev.id); e.dataTransfer.effectAllowed = "move"; }}
                         onDragEnd={() => setDraggingId(null)}
                         onClick={(e) => { e.stopPropagation(); setEditor({ mode: "edit", event: ev }); }}
-                        style={{ position: "absolute", top: pos.top + 2, left: 4, right: 4, height: Math.max(22, pos.height - 4), zIndex: draggingId === ev.id ? 10 : 3, borderRadius: 7, padding: "5px 7px 9px", overflow: "hidden", cursor: "grab", background: meet ? "#EAF4ED" : ["#EEF3FB", "#F5F0FA", "#F9F3E9"][evIdx % 3], borderLeft: `3px solid ${meet ? "#3B7A57" : "#5D7FA3"}`, boxShadow: "0 2px 5px rgba(20,37,29,.08)", opacity: draggingId === ev.id ? .6 : 1 }}>
+                        style={{ position: "absolute", top: pos.top + 2, left: 4, right: 4, height: Math.max(22, pos.height - 4), zIndex: draggingId === ev.id ? 10 : 3, borderRadius: 9, padding: "7px 9px 10px", overflow: "hidden", cursor: "grab", background: meet ? "#EAF4ED" : ["#EEF3FB", "#F5F0FA", "#F9F3E9"][evIdx % 3], borderLeft: `3px solid ${meet ? "#3B7A57" : "#5D7FA3"}`, boxShadow: "0 2px 5px rgba(20,37,29,.08)", opacity: draggingId === ev.id ? .6 : 1 }}>
                         <div style={{ fontSize: 11, fontWeight: 750, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.summary}</div>
                         <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>{formatEventTime(ev.start, false)}{meet && <><Video size={10} />Meet</>}</div>
                         <div onPointerDown={(e) => beginResize(ev, e)} title="Drag to resize" style={{ position: "absolute", left: 10, right: 10, bottom: 1, height: 6, cursor: "ns-resize", borderBottom: "2px solid rgba(36,92,67,.35)" }} />
@@ -3112,7 +3112,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
       const totalSeconds = groupRows.reduce((sum, r) => sum + r.seconds, 0);
       const allPushed = groupRows.every((r) => r.pushed);
       const anyAdjusted = groupRows.some((r) => r.adjusted);
-      const dates = Array.from(new Set(groupRows.map((r) => (r.submitted_at || "").slice(0, 10))));
+      const dates = Array.from(new Set(groupRows.map((r) => (r.work_started_at || r.submitted_at || "").slice(0, 10))));
       const trackedBys = Array.from(new Set(groupRows.map((r) => r.tracked_by || "")));
       const bankAccounts = Array.from(new Set(groupRows.map((r) => r.bank_account || "")));
       const metrics = Array.from(new Set(groupRows.map((r) => r.metric || "")));
@@ -3129,7 +3129,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
         allPushed,
         anyAdjusted,
         noteCount,
-        dateLabel: dates.length === 1 ? formatDate(groupRows[0].submitted_at) : `${dates.length} dates`,
+        dateLabel: dates.length === 1 ? formatDate(groupRows[0].work_started_at || groupRows[0].submitted_at) : `${dates.length} dates`,
         trackedByLabel: label(trackedBys),
         bankAccountLabel: label(bankAccounts),
         metricLabel: label(metrics),
@@ -3278,7 +3278,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
                 const r = g.rows[0];
                 return (
                   <tr key={r.id}>
-                    <td>{formatDate(r.submitted_at)}</td>
+                    <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
                     <td>{r.client}</td>
                     <td>{taskHeading(r.task, r.bank_account, r.pay_period_type, r.pay_period_number)}</td>
                     <td>{r.role || "none"}</td>
@@ -3342,7 +3342,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
                   </tr>
                   {expanded && g.rows.map((r) => (
                     <tr key={r.id} className="cb-export-group-child">
-                      <td>{formatDate(r.submitted_at)}</td>
+                      <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
                       <td></td>
                       <td style={{ paddingLeft: 24, color: "var(--ink-soft)" }}>{taskHeading(r.task, r.bank_account, r.pay_period_type, r.pay_period_number)}</td>
                       <td>{r.role || "none"}</td>
