@@ -99,6 +99,9 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN tracks_number_label VARCHAR DEFAULT ''"))
             if "needs_pay_period" not in existing_tt_columns:
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN needs_pay_period BOOLEAN DEFAULT FALSE"))
+            if "period_types" not in existing_tt_columns:
+                conn.execute(text("ALTER TABLE template_tasks ADD COLUMN period_types JSON"))
+                conn.execute(text("UPDATE template_tasks SET period_types = '[]' WHERE period_types IS NULL"))
             if "position" not in existing_tt_columns:
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN position INTEGER DEFAULT 0"))
                 # Preserve the existing created order when introducing explicit positions.
@@ -129,6 +132,21 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_type VARCHAR"))
             if "pay_period_number" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN pay_period_number INTEGER"))
+            if "needs_pay_period" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN needs_pay_period BOOLEAN DEFAULT FALSE"))
+            if "period_types" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_types JSON"))
+                conn.execute(text("UPDATE tasks SET period_types = '[]' WHERE period_types IS NULL"))
+            if "period_type" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_type VARCHAR"))
+            if "period_year" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_year INTEGER"))
+            if "period_number" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_number INTEGER"))
+            if "period_start" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_start VARCHAR"))
+            if "period_end" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_end VARCHAR"))
             if "source_calendar_event_id" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_calendar_event_id VARCHAR"))
             if "source_template_name" not in existing_task_columns:
@@ -1762,6 +1780,7 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
         requires_bank_account=payload.requires_bank_account,
         tracks_number_label=payload.tracks_number_label.strip(),
         needs_pay_period=payload.needs_pay_period,
+        period_types=payload.period_types,
         position=(last_position + 1) if last_position is not None else 0,
     )
     db.add(task)
@@ -1782,6 +1801,7 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     task.requires_bank_account = payload.requires_bank_account
     task.tracks_number_label = payload.tracks_number_label.strip()
     task.needs_pay_period = payload.needs_pay_period
+    task.period_types = payload.period_types
     db.commit()
     db.refresh(task)
     return task
@@ -1866,8 +1886,15 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         bank_account_id=payload.bank_account_id,
         bank_account_name=payload.bank_account_name.strip(),
         tracks_number_label=payload.tracks_number_label.strip(),
-        pay_period_type=payload.pay_period_type,
-        pay_period_number=payload.pay_period_number,
+        needs_pay_period=payload.needs_pay_period,
+        period_types=payload.period_types,
+        period_type=payload.period_type,
+        period_year=payload.period_year,
+        period_number=payload.period_number,
+        period_start=payload.period_start,
+        period_end=payload.period_end,
+        pay_period_type=payload.period_type if payload.needs_pay_period else payload.pay_period_type,
+        pay_period_number=payload.period_number if payload.needs_pay_period else payload.pay_period_number,
         source_calendar_event_id=payload.source_calendar_event_id,
         source_template_name=payload.source_template_name,
     )
@@ -2058,6 +2085,42 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         task.role = payload.role
     if payload.task_type is not None:
         task.task_type = payload.task_type
+
+    allowed_period_types = ["weekly", "fortnightly", "monthly"] if task.needs_pay_period else list(task.period_types or [])
+    if allowed_period_types:
+        if not payload.period_type or payload.period_type not in allowed_period_types:
+            raise HTTPException(400, "Select a valid period before submitting")
+        if payload.period_type == "daily":
+            if not payload.period_start:
+                raise HTTPException(400, "Select the date this work relates to")
+        elif payload.period_type == "custom":
+            if not payload.period_start or not payload.period_end:
+                raise HTTPException(400, "Select both dates for the custom period")
+            if payload.period_end < payload.period_start:
+                raise HTTPException(400, "Period end cannot be before period start")
+        elif payload.period_type == "year":
+            if not payload.period_year:
+                raise HTTPException(400, "Select the year this work relates to")
+        else:
+            if not payload.period_year or not payload.period_number:
+                raise HTTPException(400, "Select the period and year this work relates to")
+
+        if payload.period_year is not None and not 1900 <= payload.period_year <= 2100:
+            raise HTTPException(400, "Select a valid period year")
+        limits = {"weekly": 52, "fortnightly": 26, "monthly": 12, "bi_monthly": 6, "quarterly": 4}
+        if payload.period_type in limits and not 1 <= payload.period_number <= limits[payload.period_type]:
+            raise HTTPException(400, "Select a valid period")
+
+        task.period_type = payload.period_type
+        task.period_year = payload.period_year
+        task.period_number = payload.period_number
+        task.period_start = payload.period_start
+        task.period_end = payload.period_end
+        # Keep the existing payroll fields populated for backwards compatibility.
+        if task.needs_pay_period:
+            task.pay_period_type = payload.period_type
+            task.pay_period_number = payload.period_number
+
     task.submitted_at = datetime.utcnow()
     task.submitted_by_id = current_member.id
     task.pushed_to_karbon = False
@@ -2182,6 +2245,47 @@ def parse_utc_naive(value):
     return dt
 
 
+def period_label(task):
+    type_ = task.period_type
+    year = task.period_year
+    number = task.period_number
+    if not type_:
+        # Preserve display of historical payroll entries created before the generic period model.
+        type_ = task.pay_period_type
+        number = task.pay_period_number
+    if not type_:
+        return ""
+    if type_ == "daily":
+        return task.period_start or ""
+    if type_ == "weekly":
+        return f"Week {number}, {year}" if year else (f"Week {number}" if number else "")
+    if type_ == "fortnightly":
+        return f"Fortnight {number}, {year}" if year else (f"Fortnight {number}" if number else "")
+    if type_ == "monthly" and number:
+        return datetime(year, number, 1).strftime("%b %Y") if year else f"Month {number}"
+    if type_ == "bi_monthly" and number and year:
+        start_month = ((number - 1) * 2) + 1
+        end_month = min(start_month + 1, 12)
+        return f"{datetime(year, start_month, 1).strftime('%b')}–{datetime(year, end_month, 1).strftime('%b %Y')}"
+    if type_ == "quarterly" and number and year:
+        return f"Q{number} {year}"
+    if type_ == "year" and year:
+        return str(year)
+    if type_ == "custom" and task.period_start and task.period_end:
+        return f"{task.period_start} to {task.period_end}"
+    return ""
+
+
+def period_key(task):
+    return "|".join([
+        task.period_type or task.pay_period_type or "",
+        str(task.period_year or ""),
+        str(task.period_number or task.pay_period_number or ""),
+        task.period_start or "",
+        task.period_end or "",
+    ])
+
+
 def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None, include_owner_ids=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
@@ -2253,6 +2357,13 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             "change": change,
             "pay_period_type": t.pay_period_type,
             "pay_period_number": t.pay_period_number,
+            "period": period_label(t),
+            "period_key": period_key(t),
+            "period_type": t.period_type,
+            "period_year": t.period_year,
+            "period_number": t.period_number,
+            "period_start": t.period_start,
+            "period_end": t.period_end,
         })
     return rows
 
@@ -2284,12 +2395,12 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        "Date", "Client", "Task", "Role", "Task Type", "Hours", "Tracked Hours", "Notes", "Tracked by", "Pushed to Karbon",
+        "Date", "Client", "Task", "Role", "Task Type", "Period", "Hours", "Tracked Hours", "Notes", "Tracked by", "Pushed to Karbon",
         "Bank Account", "Metric", "Start Count", "End Count", "Change",
     ])
     for r in rows:
         writer.writerow([
-            r["date"], r["client"], r["task"], r["role"], r["task_type"],
+            r["date"], r["client"], r["task"], r["role"], r["task_type"], r["period"],
             r["hours"], r["tracked_hours"] if r["tracked_hours"] is not None else "",
             r["note"], r["tracked_by"], "Yes" if r["pushed"] else "No",
             r["bank_account"], r["metric"],

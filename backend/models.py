@@ -139,7 +139,8 @@ class TemplateTask(Base):
     task_type = Column(String, default="")
     requires_bank_account = Column(Boolean, default=False)
     tracks_number_label = Column(String, default="")  # e.g. "Unreconciled transactions", blank means not tracked
-    needs_pay_period = Column(Boolean, default=False)  # asks which weekly/fortnightly/monthly period this covers
+    needs_pay_period = Column(Boolean, default=False)  # payroll-specific period picker, selected when completing
+    period_types = Column(JSON, default=list)  # generic completion-time period options, e.g. daily/weekly/monthly/year
     position = Column(Integer, nullable=False, default=0)  # explicit display/workflow order within the template
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -168,6 +169,13 @@ class TaskInstance(Base):
     adjusted_seconds = Column(Float, nullable=True)  # only set when the person edits the tracked time at submit
     pay_period_type = Column(String, nullable=True)  # "weekly", "fortnightly", or "monthly"
     pay_period_number = Column(Integer, nullable=True)  # 1-52, 1-26, or 1-12 respectively
+    needs_pay_period = Column(Boolean, default=False)  # copied from the template so payroll period is requested only at completion
+    period_types = Column(JSON, default=list)  # generic period choices copied from the template task
+    period_type = Column(String, nullable=True)
+    period_year = Column(Integer, nullable=True)
+    period_number = Column(Integer, nullable=True)
+    period_start = Column(String, nullable=True)  # YYYY-MM-DD for daily/custom periods
+    period_end = Column(String, nullable=True)  # YYYY-MM-DD for custom periods
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
     source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed
     last_heartbeat_at = Column(DateTime, nullable=True)  # updated periodically while running, a stale value means the browser tracking it is gone (closed, crashed, or the machine shut down)

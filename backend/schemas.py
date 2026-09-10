@@ -134,6 +134,7 @@ class TemplateTaskOut(BaseModel):
     requires_bank_account: bool
     tracks_number_label: str
     needs_pay_period: bool = False
+    period_types: List[str] = []
     position: int = 0
 
 
@@ -144,6 +145,7 @@ class TemplateTaskCreate(BaseModel):
     requires_bank_account: bool = False
     tracks_number_label: str = ""
     needs_pay_period: bool = False
+    period_types: List[str] = []
 
 
 class TemplateTaskReorder(BaseModel):
@@ -187,6 +189,13 @@ class TaskOut(BaseModel):
     adjusted_seconds: Optional[float] = None
     pay_period_type: Optional[str] = None
     pay_period_number: Optional[int] = None
+    needs_pay_period: bool = False
+    period_types: List[str] = []
+    period_type: Optional[str] = None
+    period_year: Optional[int] = None
+    period_number: Optional[int] = None
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
     source_calendar_event_id: Optional[str] = None
     source_template_name: Optional[str] = None
     last_heartbeat_at: Optional[datetime] = None
@@ -212,6 +221,13 @@ class TaskCreate(BaseModel):
     tracks_number_label: str = ""
     pay_period_type: Optional[str] = None
     pay_period_number: Optional[int] = None
+    needs_pay_period: bool = False
+    period_types: List[str] = []
+    period_type: Optional[str] = None
+    period_year: Optional[int] = None
+    period_number: Optional[int] = None
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
     source_calendar_event_id: Optional[str] = None
     source_template_name: Optional[str] = None
 
@@ -232,6 +248,11 @@ class TaskSubmit(BaseModel):
     adjusted_seconds: Optional[float] = None
     role: Optional[str] = None
     task_type: Optional[str] = None
+    period_type: Optional[str] = None
+    period_year: Optional[int] = None
+    period_number: Optional[int] = None
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
 
 
 class TaskStart(BaseModel):
