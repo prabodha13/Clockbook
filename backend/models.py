@@ -139,8 +139,9 @@ class TemplateTask(Base):
     task_type = Column(String, default="")
     requires_bank_account = Column(Boolean, default=False)
     tracks_number_label = Column(String, default="")  # e.g. "Unreconciled transactions", blank means not tracked
-    needs_pay_period = Column(Boolean, default=False)  # payroll-specific period picker, selected when completing
-    period_types = Column(JSON, default=list)  # generic completion-time period options, e.g. daily/weekly/monthly/year
+    needs_pay_period = Column(Boolean, default=False)  # legacy payroll-period flag; retained for backwards compatibility only
+    period_types = Column(JSON, default=list)  # valid work-period choices, e.g. daily/weekly/monthly/year
+    period_required = Column(Boolean, default=False)  # if true, completion is blocked until a valid work period is selected
     position = Column(Integer, nullable=False, default=0)  # explicit display/workflow order within the template
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -169,8 +170,9 @@ class TaskInstance(Base):
     adjusted_seconds = Column(Float, nullable=True)  # only set when the person edits the tracked time at submit
     pay_period_type = Column(String, nullable=True)  # "weekly", "fortnightly", or "monthly"
     pay_period_number = Column(Integer, nullable=True)  # 1-52, 1-26, or 1-12 respectively
-    needs_pay_period = Column(Boolean, default=False)  # copied from the template so payroll period is requested only at completion
-    period_types = Column(JSON, default=list)  # generic period choices copied from the template task
+    needs_pay_period = Column(Boolean, default=False)  # legacy copied flag; retained for historical compatibility
+    period_types = Column(JSON, default=list)  # valid work-period choices copied from the template task
+    period_required = Column(Boolean, default=False)  # copied from template; controls whether completion requires a period
     period_type = Column(String, nullable=True)
     period_year = Column(Integer, nullable=True)
     period_number = Column(Integer, nullable=True)

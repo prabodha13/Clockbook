@@ -135,6 +135,7 @@ class TemplateTaskOut(BaseModel):
     tracks_number_label: str
     needs_pay_period: bool = False
     period_types: List[str] = []
+    period_required: bool = False
     position: int = 0
 
 
@@ -146,6 +147,7 @@ class TemplateTaskCreate(BaseModel):
     tracks_number_label: str = ""
     needs_pay_period: bool = False
     period_types: List[str] = []
+    period_required: bool = False
 
 
 class TemplateTaskReorder(BaseModel):
@@ -191,6 +193,7 @@ class TaskOut(BaseModel):
     pay_period_number: Optional[int] = None
     needs_pay_period: bool = False
     period_types: List[str] = []
+    period_required: bool = False
     period_type: Optional[str] = None
     period_year: Optional[int] = None
     period_number: Optional[int] = None
@@ -223,6 +226,7 @@ class TaskCreate(BaseModel):
     pay_period_number: Optional[int] = None
     needs_pay_period: bool = False
     period_types: List[str] = []
+    period_required: bool = False
     period_type: Optional[str] = None
     period_year: Optional[int] = None
     period_number: Optional[int] = None

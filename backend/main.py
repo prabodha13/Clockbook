@@ -102,6 +102,8 @@ def run_startup_migrations():
             if "period_types" not in existing_tt_columns:
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN period_types JSON"))
                 conn.execute(text("UPDATE template_tasks SET period_types = '[]' WHERE period_types IS NULL"))
+            if "period_required" not in existing_tt_columns:
+                conn.execute(text("ALTER TABLE template_tasks ADD COLUMN period_required BOOLEAN DEFAULT FALSE"))
             if "position" not in existing_tt_columns:
                 conn.execute(text("ALTER TABLE template_tasks ADD COLUMN position INTEGER DEFAULT 0"))
                 # Preserve the existing created order when introducing explicit positions.
@@ -137,6 +139,8 @@ def run_startup_migrations():
             if "period_types" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN period_types JSON"))
                 conn.execute(text("UPDATE tasks SET period_types = '[]' WHERE period_types IS NULL"))
+            if "period_required" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN period_required BOOLEAN DEFAULT FALSE"))
             if "period_type" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN period_type VARCHAR"))
             if "period_year" not in existing_task_columns:
@@ -153,6 +157,35 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
             if "last_heartbeat_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
+    # Normalize the old payroll-only requirement into the generic Work period model.
+    # Existing generic period configurations were already mandatory at completion, so preserve
+    # that behavior. The legacy columns remain in place so historical rows/exports still work.
+    with Session(engine) as migration_db:
+        changed = False
+        for template_task in migration_db.query(models.TemplateTask).all():
+            configured = list(template_task.period_types or [])
+            if template_task.needs_pay_period and not configured:
+                template_task.period_types = ["weekly", "fortnightly", "monthly"]
+                configured = list(template_task.period_types)
+                changed = True
+            if configured and not template_task.period_required:
+                template_task.period_required = True
+                changed = True
+            if template_task.needs_pay_period:
+                template_task.needs_pay_period = False
+                changed = True
+        for task_instance in migration_db.query(models.TaskInstance).all():
+            configured = list(task_instance.period_types or [])
+            if task_instance.needs_pay_period and not configured:
+                task_instance.period_types = ["weekly", "fortnightly", "monthly"]
+                configured = list(task_instance.period_types)
+                changed = True
+            if configured and not task_instance.period_required:
+                task_instance.period_required = True
+                changed = True
+        if changed:
+            migration_db.commit()
+
     if "help_events" in inspector.get_table_names():
         existing_help_event_columns = {c["name"] for c in inspector.get_columns("help_events")}
         with engine.begin() as conn:
@@ -1779,8 +1812,9 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
         task_type=payload.task_type.strip(),
         requires_bank_account=payload.requires_bank_account,
         tracks_number_label=payload.tracks_number_label.strip(),
-        needs_pay_period=payload.needs_pay_period,
+        needs_pay_period=False,
         period_types=payload.period_types,
+        period_required=payload.period_required,
         position=(last_position + 1) if last_position is not None else 0,
     )
     db.add(task)
@@ -1800,8 +1834,9 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     task.task_type = payload.task_type.strip()
     task.requires_bank_account = payload.requires_bank_account
     task.tracks_number_label = payload.tracks_number_label.strip()
-    task.needs_pay_period = payload.needs_pay_period
+    task.needs_pay_period = False
     task.period_types = payload.period_types
+    task.period_required = payload.period_required
     db.commit()
     db.refresh(task)
     return task
@@ -1888,6 +1923,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         tracks_number_label=payload.tracks_number_label.strip(),
         needs_pay_period=payload.needs_pay_period,
         period_types=payload.period_types,
+        period_required=payload.period_required,
         period_type=payload.period_type,
         period_year=payload.period_year,
         period_number=payload.period_number,
@@ -2087,9 +2123,12 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         task.task_type = payload.task_type
 
     allowed_period_types = list(task.period_types or []) if list(task.period_types or []) else (["weekly", "fortnightly", "monthly"] if task.needs_pay_period else [])
-    if allowed_period_types:
-        if not payload.period_type or payload.period_type not in allowed_period_types:
-            raise HTTPException(400, "Select a valid period before submitting")
+    period_required = bool(task.period_required or (task.needs_pay_period and not list(task.period_types or [])))
+    if period_required and (not payload.period_type or payload.period_type not in allowed_period_types):
+        raise HTTPException(400, "Select a valid period before submitting")
+    if payload.period_type:
+        if payload.period_type not in allowed_period_types:
+            raise HTTPException(400, "Select a valid period")
         if payload.period_type == "daily":
             if not payload.period_start:
                 raise HTTPException(400, "Select the date this work relates to")
