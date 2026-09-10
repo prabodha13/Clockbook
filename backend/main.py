@@ -1893,8 +1893,8 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         period_number=payload.period_number,
         period_start=payload.period_start,
         period_end=payload.period_end,
-        pay_period_type=payload.period_type if payload.needs_pay_period else payload.pay_period_type,
-        pay_period_number=payload.period_number if payload.needs_pay_period else payload.pay_period_number,
+        pay_period_type=payload.period_type if payload.needs_pay_period and not list(payload.period_types or []) else payload.pay_period_type,
+        pay_period_number=payload.period_number if payload.needs_pay_period and not list(payload.period_types or []) else payload.pay_period_number,
         source_calendar_event_id=payload.source_calendar_event_id,
         source_template_name=payload.source_template_name,
     )
@@ -2086,7 +2086,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     if payload.task_type is not None:
         task.task_type = payload.task_type
 
-    allowed_period_types = ["weekly", "fortnightly", "monthly"] if task.needs_pay_period else list(task.period_types or [])
+    allowed_period_types = list(task.period_types or []) if list(task.period_types or []) else (["weekly", "fortnightly", "monthly"] if task.needs_pay_period else [])
     if allowed_period_types:
         if not payload.period_type or payload.period_type not in allowed_period_types:
             raise HTTPException(400, "Select a valid period before submitting")
@@ -2117,7 +2117,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         task.period_start = payload.period_start
         task.period_end = payload.period_end
         # Keep the existing payroll fields populated for backwards compatibility.
-        if task.needs_pay_period:
+        if task.needs_pay_period and not list(task.period_types or []):
             task.pay_period_type = payload.period_type
             task.pay_period_number = payload.period_number
 
