@@ -76,6 +76,13 @@ function formatDate(iso) {
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
+function localWorkDateKey(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function isToday(iso) {
   if (!iso) return false;
   const d = new Date(iso);
@@ -1113,6 +1120,17 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
 }
 
 const PAY_PERIOD_LIMITS = { weekly: 52, fortnightly: 26, monthly: 12 };
+const PERIOD_TYPE_OPTIONS = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "fortnightly", label: "Fortnightly" },
+  { value: "monthly", label: "Monthly" },
+  { value: "bi_monthly", label: "Bi-monthly" },
+  { value: "quarterly", label: "Quarterly" },
+  { value: "year", label: "Year" },
+  { value: "custom", label: "Custom range" },
+];
+const GENERIC_PERIOD_TYPE_OPTIONS = PERIOD_TYPE_OPTIONS.filter((o) => o.value !== "fortnightly");
 
 function payPeriodLabel(type, number) {
   if (!type || !number) return "";
@@ -1120,6 +1138,30 @@ function payPeriodLabel(type, number) {
   if (type === "fortnightly") return `Fortnight ${number}`;
   if (type === "monthly") return `Month ${number}`;
   return "";
+}
+
+function periodNumberLimit(type) {
+  if (type === "weekly") return 52;
+  if (type === "fortnightly") return 26;
+  if (type === "monthly") return 12;
+  if (type === "bi_monthly") return 6;
+  if (type === "quarterly") return 4;
+  return 0;
+}
+
+function periodNumberLabel(type, number) {
+  if (!number) return "";
+  if (type === "weekly") return `Week ${number}`;
+  if (type === "fortnightly") return `Fortnight ${number}`;
+  if (type === "monthly") return new Date(2000, number - 1, 1).toLocaleDateString(undefined, { month: "long" });
+  if (type === "bi_monthly") {
+    const start = (number - 1) * 2;
+    const a = new Date(2000, start, 1).toLocaleDateString(undefined, { month: "short" });
+    const b = new Date(2000, start + 1, 1).toLocaleDateString(undefined, { month: "short" });
+    return `${a}–${b}`;
+  }
+  if (type === "quarterly") return `Q${number}`;
+  return String(number);
 }
 
 function taskHeading(name, bankAccountName, payPeriodType, payPeriodNumber) {
@@ -1195,8 +1237,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
   const [bankAccountByTaskId, setBankAccountByTaskId] = useState({});
   const [roleByTaskId, setRoleByTaskId] = useState({});
   const [taskTypeByTaskId, setTaskTypeByTaskId] = useState({});
-  const [payPeriodTypeByTaskId, setPayPeriodTypeByTaskId] = useState({});
-  const [payPeriodNumberByTaskId, setPayPeriodNumberByTaskId] = useState({});
+  const [periodByTaskId, setPeriodByTaskId] = useState({});
   const [taskSearchQuery, setTaskSearchQuery] = useState("");
 
   const [customName, setCustomName] = useState("");
@@ -1227,8 +1268,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     setBankAccountByTaskId({});
     setRoleByTaskId({});
     setTaskTypeByTaskId({});
-    setPayPeriodTypeByTaskId({});
-    setPayPeriodNumberByTaskId({});
+    setPeriodByTaskId({});
     setTaskSearchQuery("");
   }
 
@@ -1238,8 +1278,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
         setBankAccountByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         setRoleByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         setTaskTypeByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
-        setPayPeriodTypeByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
-        setPayPeriodNumberByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
+        setPeriodByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         return prev.filter((x) => x !== id);
       }
       // Pre-fill from the template task's own values, still changeable below
@@ -1290,11 +1329,6 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             setBusy(false);
             return;
           }
-          if (t.needs_pay_period && (!payPeriodTypeByTaskId[t.id] || !payPeriodNumberByTaskId[t.id])) {
-            setError(`Select a pay period for "${t.name}"`);
-            setBusy(false);
-            return;
-          }
         }
         payloads = chosenTasks.map((t) => {
           const account = t.requires_bank_account ? bankAccounts.find((a) => a.id === bankAccountByTaskId[t.id]) : null;
@@ -1304,8 +1338,13 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             bank_account_id: account ? account.id : null,
             bank_account_name: account ? account.name : "",
             tracks_number_label: t.tracks_number_label || "",
-            pay_period_type: t.needs_pay_period ? payPeriodTypeByTaskId[t.id] : null,
-            pay_period_number: t.needs_pay_period ? parseInt(payPeriodNumberByTaskId[t.id], 10) : null,
+            needs_pay_period: !!t.needs_pay_period,
+            period_types: t.period_types || [],
+            period_type: periodByTaskId[t.id]?.type || null,
+            period_year: periodByTaskId[t.id]?.year ? parseInt(periodByTaskId[t.id].year, 10) : null,
+            period_number: periodByTaskId[t.id]?.number ? parseInt(periodByTaskId[t.id].number, 10) : null,
+            period_start: periodByTaskId[t.id]?.start || null,
+            period_end: periodByTaskId[t.id]?.end || null,
             source_template_name: selectedTemplate.name,
           };
         });
@@ -1409,7 +1448,8 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                               <div className="cb-checklist-meta">
                                 {t.role || "no role"}{t.task_type ? ` \u00b7 ${t.task_type}` : ""}
                                 {t.requires_bank_account ? " \u00b7 needs a bank account" : ""}
-                                {t.needs_pay_period ? " \u00b7 needs a pay period" : ""}
+                                {t.needs_pay_period ? " \u00b7 pay period at completion" : ""}
+                                {(t.period_types || []).length ? " \u00b7 period at completion" : ""}
                                 {t.tracks_number_label ? ` \u00b7 tracks ${t.tracks_number_label.toLowerCase()}` : ""}
                               </div>
                               {checked && !disabledForNewClient && (
@@ -1443,36 +1483,42 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                                   {clientAccounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                                 </select>
                               )}
-                              {checked && t.needs_pay_period && (
-                                <div className="cb-field-row" style={{ marginTop: 6 }}>
-                                  <select
-                                    className="cb-select"
-                                    value={payPeriodTypeByTaskId[t.id] || ""}
-                                    onChange={(e) => {
-                                      const value = e.target.value;
-                                      setPayPeriodTypeByTaskId((prev) => ({ ...prev, [t.id]: value }));
-                                      setPayPeriodNumberByTaskId((prev) => ({ ...prev, [t.id]: "" }));
-                                    }}
-                                  >
-                                    <option value="">Weekly, fortnightly, or monthly?</option>
-                                    <option value="weekly">Weekly</option>
-                                    <option value="fortnightly">Fortnightly</option>
-                                    <option value="monthly">Monthly</option>
-                                  </select>
-                                  {payPeriodTypeByTaskId[t.id] && (
-                                    <select
-                                      className="cb-select"
-                                      value={payPeriodNumberByTaskId[t.id] || ""}
-                                      onChange={(e) => setPayPeriodNumberByTaskId((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                                    >
-                                      <option value="">Which period?</option>
-                                      {Array.from({ length: PAY_PERIOD_LIMITS[payPeriodTypeByTaskId[t.id]] }, (_, i) => i + 1).map((n) => (
-                                        <option key={n} value={n}>{payPeriodLabel(payPeriodTypeByTaskId[t.id], n)}</option>
-                                      ))}
-                                    </select>
-                                  )}
-                                </div>
-                              )}
+                              {checked && !disabledForNewClient && (t.needs_pay_period || (t.period_types || []).length > 0) && (() => {
+                                const configured = t.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : (t.period_types || []);
+                                const period = periodByTaskId[t.id] || { type: "", year: String(new Date().getFullYear()), number: "", start: "", end: "" };
+                                const updatePeriod = (patch) => setPeriodByTaskId((prev) => ({ ...prev, [t.id]: { ...period, ...patch } }));
+                                return (
+                                  <div style={{ marginTop: 8 }}>
+                                    <div className="cb-hint" style={{ marginBottom: 4 }}>Period (optional now, required when completing)</div>
+                                    <div className="cb-field-row">
+                                      <select className="cb-select" value={period.type} onChange={(e) => updatePeriod({ type: e.target.value, number: "", start: "", end: "" })}>
+                                        <option value="">Select later</option>
+                                        {configured.map((type) => {
+                                          const option = PERIOD_TYPE_OPTIONS.find((o) => o.value === type);
+                                          return <option key={type} value={type}>{option ? option.label : type}</option>;
+                                        })}
+                                      </select>
+                                      {period.type && period.type !== "daily" && period.type !== "custom" && (
+                                        <input type="number" min="2000" max="2100" className="cb-input" style={{ width: 110 }} value={period.year || ""} onChange={(e) => updatePeriod({ year: e.target.value })} placeholder="Year" />
+                                      )}
+                                      {period.type && !["daily", "custom", "year"].includes(period.type) && (
+                                        <select className="cb-select" value={period.number || ""} onChange={(e) => updatePeriod({ number: e.target.value })}>
+                                          <option value="">Select period</option>
+                                          {Array.from({ length: periodNumberLimit(period.type) }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{periodNumberLabel(period.type, n)}</option>)}
+                                        </select>
+                                      )}
+                                    </div>
+                                    {period.type === "daily" && <input type="date" className="cb-input" style={{ width: 180, marginTop: 6 }} value={period.start || ""} onChange={(e) => updatePeriod({ start: e.target.value })} />}
+                                    {period.type === "custom" && (
+                                      <div className="cb-field-row" style={{ marginTop: 6 }}>
+                                        <input type="date" className="cb-input" value={period.start || ""} onChange={(e) => updatePeriod({ start: e.target.value })} />
+                                        <span style={{ color: "var(--ink-faint)", alignSelf: "center" }}>to</span>
+                                        <input type="date" className="cb-input" value={period.end || ""} min={period.start || undefined} onChange={(e) => updatePeriod({ end: e.target.value })} />
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
                               {checked && disabledForNewClient && (
                                 <div className="cb-hint" style={{ marginTop: 4 }}>
                                   Add the client first, then add a bank account, then create this task.
@@ -1577,6 +1623,15 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState(task.role || "");
   const [taskType, setTaskType] = useState(task.task_type || "");
+  const configuredPeriodTypes = useMemo(() => (
+    task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : [...(task.period_types || [])]
+  ), [task.period_types, task.needs_pay_period]);
+  const needsPeriod = configuredPeriodTypes.length > 0;
+  const [periodType, setPeriodType] = useState(task.period_type || task.pay_period_type || (configuredPeriodTypes.length === 1 ? configuredPeriodTypes[0] : ""));
+  const [periodYear, setPeriodYear] = useState(task.period_year != null ? String(task.period_year) : String(new Date().getFullYear()));
+  const [periodNumber, setPeriodNumber] = useState(task.period_number != null ? String(task.period_number) : (task.pay_period_number != null ? String(task.pay_period_number) : ""));
+  const [periodStart, setPeriodStart] = useState(task.period_start || "");
+  const [periodEnd, setPeriodEnd] = useState(task.period_end || "");
   const needsClient = task.client_id === UNASSIGNED_CLIENT_ID;
   const [clientId, setClientId] = useState(needsClient ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
@@ -1644,6 +1699,48 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
               )}
             </div>
           )}
+          {needsPeriod && (
+            <div className="cb-field">
+              <label className="cb-label">Period</label>
+              <div className="cb-field-row">
+                <select
+                  className="cb-select" value={periodType}
+                  onChange={(e) => { setPeriodType(e.target.value); setPeriodNumber(""); setPeriodStart(""); setPeriodEnd(""); }}
+                >
+                  <option value="">Select period type</option>
+                  {configuredPeriodTypes.map((type) => {
+                    const option = PERIOD_TYPE_OPTIONS.find((o) => o.value === type);
+                    return <option key={type} value={type}>{option ? option.label : type}</option>;
+                  })}
+                </select>
+                {periodType && periodType !== "daily" && periodType !== "custom" && (
+                  <input
+                    type="number" min="2000" max="2100" className="cb-input" style={{ width: 110 }}
+                    value={periodYear} onChange={(e) => setPeriodYear(e.target.value)} placeholder="Year"
+                  />
+                )}
+                {periodType && !["daily", "custom", "year"].includes(periodType) && (
+                  <select className="cb-select" value={periodNumber} onChange={(e) => setPeriodNumber(e.target.value)}>
+                    <option value="">Select period</option>
+                    {Array.from({ length: periodNumberLimit(periodType) }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={n}>{periodNumberLabel(periodType, n)}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+              {periodType === "daily" && (
+                <input type="date" className="cb-input" style={{ width: 180, marginTop: 6 }} value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+              )}
+              {periodType === "custom" && (
+                <div className="cb-field-row" style={{ marginTop: 6 }}>
+                  <input type="date" className="cb-input" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)} />
+                  <span style={{ color: "var(--ink-faint)", alignSelf: "center" }}>to</span>
+                  <input type="date" className="cb-input" value={periodEnd} min={periodStart || undefined} onChange={(e) => setPeriodEnd(e.target.value)} />
+                </div>
+              )}
+              <div className="cb-hint">What period this work relates to. This does not change the date the time was actually worked.</div>
+            </div>
+          )}
           <div className="cb-field">
             <label className="cb-label">Time to record</label>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1682,12 +1779,21 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
-            className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)}
+            className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
+              || (needsPeriod && (!periodType
+                || (periodType === "daily" && !periodStart)
+                || (periodType === "custom" && (!periodStart || !periodEnd))
+                || (periodType === "year" && !periodYear)
+                || (!["daily", "custom", "year"].includes(periodType) && (!periodYear || !periodNumber))))}
             onClick={async () => {
               setBusy(true);
               await onSubmit(
                 task.id, note, needsCount ? parseInt(endCount, 10) : null, isAdjusted ? editedSeconds : null,
-                needsRole ? role : null, needsTaskType ? taskType : null, needsClient ? clientId : null
+                needsRole ? role : null, needsTaskType ? taskType : null, needsClient ? clientId : null,
+                needsPeriod ? {
+                  type: periodType, year: periodYear ? parseInt(periodYear, 10) : null,
+                  number: periodNumber ? parseInt(periodNumber, 10) : null, start: periodStart || null, end: periodEnd || null,
+                } : null
               );
             }}
           >
@@ -1759,6 +1865,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   const [taskType, setTaskType] = useState(task.task_type);
   const [requiresBank, setRequiresBank] = useState(!!task.requires_bank_account);
   const [needsPayPeriod, setNeedsPayPeriod] = useState(!!task.needs_pay_period);
+  const [periodTypes, setPeriodTypes] = useState(task.period_types || []);
   const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
   const [saving, setSaving] = useState(false);
 
@@ -1772,19 +1879,20 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
     setTaskType(task.task_type);
     setRequiresBank(!!task.requires_bank_account);
     setNeedsPayPeriod(!!task.needs_pay_period);
+    setPeriodTypes(task.period_types || []);
     setTracksLabel(task.tracks_number_label);
-  }, [task.id, task.name, task.role, task.task_type, task.requires_bank_account, task.needs_pay_period, task.tracks_number_label]);
+  }, [task.id, task.name, task.role, task.task_type, task.requires_bank_account, task.needs_pay_period, task.period_types, task.tracks_number_label]);
 
   const isDirty = name !== task.name || role !== task.role || taskType !== task.task_type
     || requiresBank !== !!task.requires_bank_account || needsPayPeriod !== !!task.needs_pay_period
-    || tracksLabel !== task.tracks_number_label;
+    || JSON.stringify(periodTypes) !== JSON.stringify(task.period_types || []) || tracksLabel !== task.tracks_number_label;
 
   async function handleSave() {
     setSaving(true);
     try {
       await onUpdateTask(template.id, task.id, {
         name, role, task_type: taskType, requires_bank_account: requiresBank,
-        needs_pay_period: needsPayPeriod, tracks_number_label: tracksLabel,
+        needs_pay_period: needsPayPeriod, period_types: periodTypes, tracks_number_label: tracksLabel,
       });
     } finally {
       setSaving(false);
@@ -1830,6 +1938,22 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
           />
           Needs a pay period
         </label>
+        <details style={{ position: "relative" }}>
+          <summary className="cb-tmpl-task-option-checkbox" style={{ cursor: "pointer", listStyle: "none" }}>
+            Period{periodTypes.length ? ` (${periodTypes.length})` : ""}
+          </summary>
+          <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 170, boxShadow: "var(--shadow)" }}>
+            {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
+              <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
+                <input
+                  type="checkbox" className="cb-checkbox" checked={periodTypes.includes(option.value)}
+                  onChange={(e) => setPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))}
+                />
+                {option.label}
+              </label>
+            ))}
+          </div>
+        </details>
         <select
           className="cb-select cb-tmpl-task-tracks-input"
           value={tracksLabel}
@@ -1886,6 +2010,8 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
   const [tRole, setTRole] = useState("");
   const [tType, setTType] = useState("");
   const [tRequiresBank, setTRequiresBank] = useState(false);
+  const [tNeedsPayPeriod, setTNeedsPayPeriod] = useState(false);
+  const [tPeriodTypes, setTPeriodTypes] = useState([]);
   const [tTracksLabel, setTTracksLabel] = useState("");
 
   async function addTask(e) {
@@ -1893,9 +2019,9 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     if (!tName.trim()) return;
     await onAddTask(template.id, {
       name: tName.trim(), role: tRole.trim(), task_type: tType.trim(),
-      requires_bank_account: tRequiresBank, tracks_number_label: tTracksLabel.trim(),
+      requires_bank_account: tRequiresBank, needs_pay_period: tNeedsPayPeriod, period_types: tPeriodTypes, tracks_number_label: tTracksLabel.trim(),
     });
-    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTTracksLabel(""); setAddingTask(false);
+    setTName(""); setTRole(""); setTType(""); setTRequiresBank(false); setTNeedsPayPeriod(false); setTPeriodTypes([]); setTTracksLabel(""); setAddingTask(false);
   }
 
   return (
@@ -1953,6 +2079,8 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                     {t.role && <span>{t.role}</span>}
                     {t.task_type && <span>{t.task_type}</span>}
                     {t.requires_bank_account && <span>Needs a bank account</span>}
+                    {t.needs_pay_period && <span>Payroll period at completion</span>}
+                    {(t.period_types || []).length > 0 && <span>Period at completion</span>}
                     {t.tracks_number_label && <span>Tracks: {t.tracks_number_label}</span>}
                   </div>
                 </div>
@@ -1978,6 +2106,21 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                   <input type="checkbox" className="cb-checkbox" checked={tRequiresBank} onChange={(e) => setTRequiresBank(e.target.checked)} />
                   Requires a bank account
                 </label>
+                <label className="cb-tmpl-task-option-checkbox">
+                  <input type="checkbox" className="cb-checkbox" checked={tNeedsPayPeriod} onChange={(e) => setTNeedsPayPeriod(e.target.checked)} />
+                  Needs a pay period
+                </label>
+                <details style={{ position: "relative" }}>
+                  <summary className="cb-tmpl-task-option-checkbox" style={{ cursor: "pointer", listStyle: "none" }}>Period{tPeriodTypes.length ? ` (${tPeriodTypes.length})` : ""}</summary>
+                  <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 170, boxShadow: "var(--shadow)" }}>
+                    {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
+                      <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
+                        <input type="checkbox" className="cb-checkbox" checked={tPeriodTypes.includes(option.value)} onChange={(e) => setTPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))} />
+                        {option.label}
+                      </label>
+                    ))}
+                  </div>
+                </details>
                 <select
                   className="cb-select cb-tmpl-task-tracks-input"
                   value={tTracksLabel}
@@ -3098,13 +3241,14 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
 
   const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
 
-  // Groups by Client + Role + Task Type + User. Entries from different users must never
-  // be combined into one line, even when the client, role and task type are the same.
+  // Groups by Work Date + Client + Role + Task Type + User + Period. This preserves the
+  // existing grouping dimensions while preventing work from different tracked dates or periods being folded together.
   // A group of exactly one task renders with no fold at all.
   const groups = useMemo(() => {
     const map = new Map();
     for (const r of rows) {
-      const key = `${r.client}|||${r.role || ""}|||${r.task_type || ""}|||${r.tracked_by || ""}`;
+      const workDate = localWorkDateKey(r.work_started_at || r.submitted_at);
+      const key = `${workDate}|||${r.client}|||${r.role || ""}|||${r.task_type || ""}|||${r.tracked_by || ""}|||${r.period_key || ""}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(r);
     }
@@ -3123,6 +3267,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
         client: groupRows[0].client,
         role: groupRows[0].role,
         task_type: groupRows[0].task_type,
+        period: groupRows[0].period || "",
         rows: groupRows,
         count: groupRows.length,
         totalSeconds,
@@ -3151,7 +3296,8 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
     const countPart = r.change != null ? ` | ${r.metric}: ${r.start_count} to ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "";
     const bankPart = r.bank_account ? ` | ${r.bank_account}` : "";
     const adjustedPart = r.adjusted ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
-    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
+    const periodPart = r.period ? ` | Period: ${r.period}` : "";
+    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"}${periodPart} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1600); }
     });
@@ -3161,7 +3307,8 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
     const totalHm = formatHM(g.totalSeconds);
     const totalDec = (g.totalSeconds / 3600).toFixed(2);
     const breakdown = g.rows.map((r) => `${r.task}: ${formatHM(r.seconds)}`).join(", ");
-    const text = `${g.client} | Role: ${g.role || "none"} | Task type: ${g.task_type || "none"} | ${totalHm} (${totalDec}h) total across ${g.count} tasks: ${breakdown}`;
+    const periodPart = g.period ? ` | Period: ${g.period}` : "";
+    const text = `${g.client} | Role: ${g.role || "none"} | Task type: ${g.task_type || "none"}${periodPart} | ${totalHm} (${totalDec}h) total across ${g.count} tasks: ${breakdown}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(g.key); setTimeout(() => setCopiedId(null), 1600); }
     });
@@ -3264,14 +3411,14 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
         <table className="cb-table">
           <thead>
             <tr>
-              <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th>
+              <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
               <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
               <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={isAdmin ? 15 : 14}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
+              <tr><td colSpan={isAdmin ? 16 : 15}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
             {groups.map((g) => {
               if (g.count === 1) {
@@ -3283,6 +3430,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
                     <td>{taskHeading(r.task, r.bank_account, r.pay_period_type, r.pay_period_number)}</td>
                     <td>{r.role || "none"}</td>
                     <td>{r.task_type || "none"}</td>
+                    <td>{r.period || "none"}</td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                     <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
                     <td>{r.bank_account || "none"}</td>
@@ -3320,6 +3468,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
                     </td>
                     <td>{g.role || "none"}</td>
                     <td>{g.task_type || "none"}</td>
+                    <td>{g.period || "none"}</td>
                     <td className="num cb-mono" style={{ fontWeight: 600 }}>
                       {formatHM(g.totalSeconds)}
                       {g.anyAdjusted && <span title="At least one of these was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}
@@ -3347,6 +3496,7 @@ function ExportView({ members, clients, isAdmin, onTogglePushed, onDeleteTask })
                       <td style={{ paddingLeft: 24, color: "var(--ink-soft)" }}>{taskHeading(r.task, r.bank_account, r.pay_period_type, r.pay_period_number)}</td>
                       <td>{r.role || "none"}</td>
                       <td>{r.task_type || "none"}</td>
+                      <td>{r.period || "none"}</td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                       <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
                       <td>{r.bank_account || "none"}</td>
@@ -5656,9 +5806,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId) {
+  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId, period) {
     try {
-      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId);
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId, period);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
