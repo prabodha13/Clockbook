@@ -5477,16 +5477,24 @@ export default function App() {
   }, []);
 
   const idleDetectorStartedRef = useRef(false);
+  const idleDetectorStartingRef = useRef(false);
   const isScreenLockedRef = useRef(false);
   const idleDetectorActiveRef = useRef(false);
 
   async function enableIdleDetection() {
-    if (idleDetectorStartedRef.current) return;
+    // Do not permanently mark the detector as started until detector.start() has actually
+    // succeeded. Chrome can reject the permission/start request (for example when it is not
+    // considered user-initiated). In that case a later Start Timer click must be allowed to
+    // retry instead of silently leaving lock detection disabled for the rest of the session.
+    if (idleDetectorStartedRef.current || idleDetectorStartingRef.current) return;
     if (!("IdleDetector" in window)) return; // Not supported outside Chrome and Edge
-    idleDetectorStartedRef.current = true;
+    idleDetectorStartingRef.current = true;
     try {
       const permission = await window.IdleDetector.requestPermission();
-      if (permission !== "granted") return;
+      if (permission !== "granted") {
+        idleDetectorActiveRef.current = false;
+        return;
+      }
       const controller = new AbortController();
       const detector = new window.IdleDetector();
       let lockedSince = null;
@@ -5527,12 +5535,16 @@ export default function App() {
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
       await detector.start({ threshold: 60000, signal: controller.signal });
-      // Only reachable if start() actually succeeded, if it throws, execution jumps to the
-      // catch block below and this line never runs, so this can never be left true after a
-      // denied permission, an unsupported context, or a failed start.
+      // Only mark the detector as started after start() succeeds. If permission/start fails,
+      // the finally block clears the in-progress flag and the next user action can retry.
+      idleDetectorStartedRef.current = true;
       idleDetectorActiveRef.current = true;
     } catch (err) {
-      // Permission denied, unsupported context, or not triggered by a user gesture
+      idleDetectorStartedRef.current = false;
+      idleDetectorActiveRef.current = false;
+      console.warn("[idle-detection] Could not start; will retry on the next user action.", err);
+    } finally {
+      idleDetectorStartingRef.current = false;
     }
   }
 
