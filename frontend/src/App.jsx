@@ -1146,6 +1146,28 @@ const PERIOD_TYPE_OPTIONS = [
 ];
 const GENERIC_PERIOD_TYPE_OPTIONS = PERIOD_TYPE_OPTIONS;
 
+function isBookkeepingWork(task, template = null) {
+  const haystack = [
+    task?.name, task?.task_type, task?.source_template_name,
+    template?.name, template?.field,
+  ].filter(Boolean).join(" ").toLowerCase();
+  return haystack.includes("bookkeep") || haystack.includes("book keeping");
+}
+
+function taskNamePlaceholder(template = null, taskType = "") {
+  const haystack = [template?.name, template?.field, taskType].filter(Boolean).join(" ").toLowerCase();
+  if (haystack.includes("bookkeep") || haystack.includes("book keeping")) return "e.g. Bank reconciliation";
+  if (haystack.includes("payroll")) return "e.g. Payroll processing";
+  return "e.g. Task name";
+}
+
+function monthInputValue(period) {
+  if (period?.start && /^\d{4}-\d{2}/.test(period.start)) return period.start.slice(0, 7);
+  const year = period?.year || new Date().getFullYear();
+  const month = String(new Date().getMonth() + 1).padStart(2, "0");
+  return `${year}-${month}`;
+}
+
 function payPeriodLabel(type, number) {
   if (!type || !number) return "";
   if (type === "weekly") return `Week ${number}`;
@@ -1202,7 +1224,14 @@ function taskPeriodContext(task) {
     return (task.period_types || []).length > 0 ? "Period: Select later" : "";
   }
   if (type === "year") return year ? String(year) : "Period: Select later";
-  if (type === "weekly") return year && number ? `${year} · W${number}` : (number ? `W${number}` : "Period: Select later");
+  if (type === "weekly") {
+    if (isBookkeepingWork(task) && task.period_start && number) {
+      const monthDate = new Date(`${task.period_start.slice(0, 7)}-01T00:00:00`);
+      const monthLabel = Number.isNaN(monthDate.getTime()) ? task.period_start.slice(0, 7) : monthDate.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+      return `${monthLabel} · Week ${number}`;
+    }
+    return year && number ? `${year} · W${number}` : (number ? `W${number}` : "Period: Select later");
+  }
   if (type === "fortnightly") return year && number ? `${year} · F${number}` : (number ? `F${number}` : "Period: Select later");
   if (type === "monthly") {
     const label = number ? new Date(2000, number - 1, 1).toLocaleDateString(undefined, { month: "short" }) : "";
@@ -1558,13 +1587,22 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                                           return <option key={type} value={type}>{option ? option.label : type}</option>;
                                         })}
                                       </select>
-                                      {period.type && period.type !== "daily" && period.type !== "custom" && (
+                                      {period.type === "weekly" && isBookkeepingWork(t, selectedTemplate) ? (
+                                        <input
+                                          type="month" className="cb-input" style={{ width: 160 }} value={monthInputValue(period)}
+                                          onChange={(e) => {
+                                            const month = e.target.value;
+                                            updatePeriod({ year: month ? month.slice(0, 4) : "", start: month ? `${month}-01` : "", number: "" });
+                                          }}
+                                          aria-label="Bookkeeping month"
+                                        />
+                                      ) : period.type && period.type !== "daily" && period.type !== "custom" && (
                                         <input type="number" min="2000" max="2100" className="cb-input" style={{ width: 110 }} value={period.year || ""} onChange={(e) => updatePeriod({ year: e.target.value })} placeholder="Year" />
                                       )}
                                       {period.type && !["daily", "custom", "year"].includes(period.type) && (
                                         <select className="cb-select" value={period.number || ""} onChange={(e) => updatePeriod({ number: e.target.value })}>
-                                          <option value="">Select period</option>
-                                          {Array.from({ length: periodNumberLimit(period.type) }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{periodNumberLabel(period.type, n)}</option>)}
+                                          <option value="">{period.type === "weekly" && isBookkeepingWork(t, selectedTemplate) ? "Select week" : "Select period"}</option>
+                                          {Array.from({ length: period.type === "weekly" && isBookkeepingWork(t, selectedTemplate) ? 5 : periodNumberLimit(period.type) }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{period.type === "weekly" && isBookkeepingWork(t, selectedTemplate) ? `Week ${n}` : periodNumberLabel(period.type, n)}</option>)}
                                         </select>
                                       )}
                                     </div>
@@ -1592,7 +1630,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                   )}
                 </>
               ) : (
-                <input className="cb-input" placeholder="e.g. Payroll review" value={customName} onChange={(e) => setCustomName(e.target.value)} />
+                <input className="cb-input" placeholder={taskNamePlaceholder(null, taskType)} value={customName} onChange={(e) => setCustomName(e.target.value)} />
               )}
             </div>
 
@@ -1693,6 +1731,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
   const [periodNumber, setPeriodNumber] = useState(task.period_number != null ? String(task.period_number) : (task.pay_period_number != null ? String(task.pay_period_number) : ""));
   const [periodStart, setPeriodStart] = useState(task.period_start || "");
   const [periodEnd, setPeriodEnd] = useState(task.period_end || "");
+  const isWeeklyBookkeeping = periodType === "weekly" && isBookkeepingWork(task);
   const needsClient = task.client_id === UNASSIGNED_CLIENT_ID;
   const [clientId, setClientId] = useState(needsClient ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
@@ -1774,7 +1813,19 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
                     return <option key={type} value={type}>{option ? option.label : type}</option>;
                   })}
                 </select>
-                {periodType && periodType !== "daily" && periodType !== "custom" && (
+                {isWeeklyBookkeeping ? (
+                  <input
+                    type="month" className="cb-input" style={{ width: 160 }}
+                    value={periodStart && /^\d{4}-\d{2}/.test(periodStart) ? periodStart.slice(0, 7) : `${periodYear || new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}`}
+                    onChange={(e) => {
+                      const month = e.target.value;
+                      setPeriodYear(month ? month.slice(0, 4) : "");
+                      setPeriodStart(month ? `${month}-01` : "");
+                      setPeriodNumber("");
+                    }}
+                    aria-label="Bookkeeping month"
+                  />
+                ) : periodType && periodType !== "daily" && periodType !== "custom" && (
                   <input
                     type="number" min="2000" max="2100" className="cb-input" style={{ width: 110 }}
                     value={periodYear} onChange={(e) => setPeriodYear(e.target.value)} placeholder="Year"
@@ -1782,9 +1833,9 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
                 )}
                 {periodType && !["daily", "custom", "year"].includes(periodType) && (
                   <select className="cb-select" value={periodNumber} onChange={(e) => setPeriodNumber(e.target.value)}>
-                    <option value="">Select period</option>
-                    {Array.from({ length: periodNumberLimit(periodType) }, (_, i) => i + 1).map((n) => (
-                      <option key={n} value={n}>{periodNumberLabel(periodType, n)}</option>
+                    <option value="">{isWeeklyBookkeeping ? "Select week" : "Select period"}</option>
+                    {Array.from({ length: isWeeklyBookkeeping ? 5 : periodNumberLimit(periodType) }, (_, i) => i + 1).map((n) => (
+                      <option key={n} value={n}>{isWeeklyBookkeeping ? `Week ${n}` : periodNumberLabel(periodType, n)}</option>
                     ))}
                   </select>
                 )}
@@ -1845,7 +1896,8 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
                 || (periodType === "year" && !periodYear)
-                || (!["daily", "custom", "year"].includes(periodType) && (!periodYear || !periodNumber))))}
+                || (!["daily", "custom", "year"].includes(periodType) && (!periodYear || !periodNumber))
+                || (isWeeklyBookkeeping && !periodStart)))}
             onClick={async () => {
               setBusy(true);
               await onSubmit(
@@ -2225,7 +2277,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
           {isAdmin && addingTask && (
             <form className="cb-tmpl-task-block" onSubmit={addTask}>
               <div className="cb-tmpl-task-row">
-                <input className="cb-input" placeholder="New task name" value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
+                <input className="cb-input" placeholder={taskNamePlaceholder(template, tType)} value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
                 <select className="cb-select" value={tRole} onChange={(e) => setTRole(e.target.value)}>
                   <option value="">No role</option>
                   {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
