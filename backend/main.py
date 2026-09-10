@@ -2198,15 +2198,31 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(True))
     from_dt = parse_utc_naive(date_from)
     to_dt = parse_utc_naive(date_to)
-    if from_dt:
-        query = query.filter(models.TaskInstance.submitted_at >= from_dt)
-    if to_dt:
-        query = query.filter(models.TaskInstance.submitted_at <= to_dt)
     tasks = query.order_by(models.TaskInstance.submitted_at.desc()).all()
+
+    def first_work_start(task):
+        starts = []
+        for seg in (task.segments or []):
+            value = seg.get("start") if isinstance(seg, dict) else None
+            if not value:
+                continue
+            try:
+                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+                if dt.tzinfo is not None:
+                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+                starts.append(dt)
+            except Exception:
+                continue
+        return min(starts) if starts else task.submitted_at
 
     members = {m.id: m.name for m in db.query(models.Member).all()}
     rows = []
     for t in tasks:
+        work_started_at = first_work_start(t)
+        if from_dt and (work_started_at is None or work_started_at < from_dt):
+            continue
+        if to_dt and (work_started_at is None or work_started_at > to_dt):
+            continue
         tracked_seconds = elapsed_seconds(t.segments)
         is_adjusted = t.adjusted_seconds is not None
         final_seconds = t.adjusted_seconds if is_adjusted else tracked_seconds
@@ -2215,7 +2231,8 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             change = t.end_count - t.start_count
         rows.append({
             "id": t.id,
-            "date": t.submitted_at.strftime("%Y-%m-%d") if t.submitted_at else "",
+            "date": work_started_at.strftime("%Y-%m-%d") if work_started_at else "",
+            "work_started_at": (work_started_at.isoformat() + "Z") if work_started_at else None,
             "submitted_at": (t.submitted_at.isoformat() + "Z") if t.submitted_at else None,
             "client": t.client_name,
             "task": t.name,
