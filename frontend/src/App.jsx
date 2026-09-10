@@ -1938,33 +1938,48 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
           />
           Needs a pay period
         </label>
-        <details style={{ position: "relative" }}>
-          <summary className="cb-tmpl-task-option-checkbox" style={{ cursor: "pointer", listStyle: "none" }}>
-            Period{periodTypes.length ? ` (${periodTypes.length})` : ""}
-          </summary>
-          <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 170, boxShadow: "var(--shadow)" }}>
-            {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
-              <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
-                <input
-                  type="checkbox" className="cb-checkbox" checked={periodTypes.includes(option.value)}
-                  onChange={(e) => setPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))}
-                />
-                {option.label}
-              </label>
-            ))}
-          </div>
-        </details>
-        <select
-          className="cb-select cb-tmpl-task-tracks-input"
-          value={tracksLabel}
-          onChange={(e) => setTracksLabel(e.target.value)}
-        >
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
+          <details style={{ position: "relative" }}>
+            <summary
+              className="cb-select"
+              style={{ cursor: "pointer", listStyle: "none", minWidth: 132, paddingTop: 7, paddingBottom: 7 }}
+              title="Choose which work periods are valid for this task. The actual period is optional at start and required at completion."
+            >
+              {periodTypes.length === 0
+                ? "Not required"
+                : periodTypes.length === 1
+                  ? (GENERIC_PERIOD_TYPE_OPTIONS.find((o) => o.value === periodTypes[0])?.label || periodTypes[0])
+                  : `${periodTypes.length} types`}
+            </summary>
+            <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 190, boxShadow: "var(--shadow)", marginTop: 4 }}>
+              <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 6 }}>For Bookkeeping, Year-End, tax and other non-payroll work.</div>
+              {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
+                <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
+                  <input
+                    type="checkbox" className="cb-checkbox" checked={periodTypes.includes(option.value)}
+                    onChange={(e) => setPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))}
+                  />
+                  {option.label}
+                </label>
+              ))}
+            </div>
+          </details>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Tracking</span>
+          <select
+            className="cb-select cb-tmpl-task-tracks-input"
+            value={tracksLabel}
+            onChange={(e) => setTracksLabel(e.target.value)}
+          >
           <option value="">Not tracked</option>
           {trackedMetrics.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
-          {tracksLabel && !trackedMetrics.some((m) => m.name === tracksLabel) && (
-            <option value={tracksLabel}>{tracksLabel}</option>
-          )}
-        </select>
+            {tracksLabel && !trackedMetrics.some((m) => m.name === tracksLabel) && (
+              <option value={tracksLabel}>{tracksLabel}</option>
+            )}
+          </select>
+        </div>
         {isDirty && (
           <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={saving} onClick={handleSave} style={{ marginLeft: "auto" }}>
             {saving ? "Saving..." : "Save"}
@@ -2110,25 +2125,42 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                   <input type="checkbox" className="cb-checkbox" checked={tNeedsPayPeriod} onChange={(e) => setTNeedsPayPeriod(e.target.checked)} />
                   Needs a pay period
                 </label>
-                <details style={{ position: "relative" }}>
-                  <summary className="cb-tmpl-task-option-checkbox" style={{ cursor: "pointer", listStyle: "none" }}>Period{tPeriodTypes.length ? ` (${tPeriodTypes.length})` : ""}</summary>
-                  <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 170, boxShadow: "var(--shadow)" }}>
-                    {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
-                      <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
-                        <input type="checkbox" className="cb-checkbox" checked={tPeriodTypes.includes(option.value)} onChange={(e) => setTPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))} />
-                        {option.label}
-                      </label>
-                    ))}
-                  </div>
-                </details>
-                <select
-                  className="cb-select cb-tmpl-task-tracks-input"
-                  value={tTracksLabel}
-                  onChange={(e) => setTTracksLabel(e.target.value)}
-                >
-                  <option value="">Not tracked</option>
-                  {trackedMetrics.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
-                </select>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
+                  <details style={{ position: "relative" }}>
+                    <summary
+                      className="cb-select"
+                      style={{ cursor: "pointer", listStyle: "none", minWidth: 132, paddingTop: 7, paddingBottom: 7 }}
+                      title="Choose which work periods are valid for this task. The actual period is optional at start and required at completion."
+                    >
+                      {tPeriodTypes.length === 0
+                        ? "Not required"
+                        : tPeriodTypes.length === 1
+                          ? (GENERIC_PERIOD_TYPE_OPTIONS.find((o) => o.value === tPeriodTypes[0])?.label || tPeriodTypes[0])
+                          : `${tPeriodTypes.length} types`}
+                    </summary>
+                    <div style={{ position: "absolute", zIndex: 5, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 8, padding: 10, minWidth: 190, boxShadow: "var(--shadow)", marginTop: 4 }}>
+                      <div style={{ fontSize: 11.5, color: "var(--ink-soft)", marginBottom: 6 }}>For Bookkeeping, Year-End, tax and other non-payroll work.</div>
+                      {GENERIC_PERIOD_TYPE_OPTIONS.map((option) => (
+                        <label key={option.value} style={{ display: "flex", gap: 8, alignItems: "center", padding: "4px 2px", fontSize: 12.5 }}>
+                          <input type="checkbox" className="cb-checkbox" checked={tPeriodTypes.includes(option.value)} onChange={(e) => setTPeriodTypes((prev) => e.target.checked ? [...prev, option.value] : prev.filter((x) => x !== option.value))} />
+                          {option.label}
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Tracking</span>
+                  <select
+                    className="cb-select cb-tmpl-task-tracks-input"
+                    value={tTracksLabel}
+                    onChange={(e) => setTTracksLabel(e.target.value)}
+                  >
+                    <option value="">Not tracked</option>
+                    {trackedMetrics.map((m) => <option key={m.id} value={m.name}>{m.name}</option>)}
+                  </select>
+                </div>
               </div>
             </form>
           )}
