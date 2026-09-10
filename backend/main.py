@@ -2088,6 +2088,15 @@ def reset_task(task_id: str, current_member: models.Member = Depends(get_current
 
 
 @app.post("/api/tasks/{task_id}/submit", response_model=schemas.TaskOut)
+def is_bookkeeping_task(task):
+    text_value = " ".join(filter(None, [
+        getattr(task, "name", None),
+        getattr(task, "task_type", None),
+        getattr(task, "source_template_name", None),
+    ])).lower()
+    return "bookkeep" in text_value or "book keeping" in text_value
+
+
 def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
     if not task:
@@ -2146,9 +2155,15 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
 
         if payload.period_year is not None and not 1900 <= payload.period_year <= 2100:
             raise HTTPException(400, "Select a valid period year")
-        limits = {"weekly": 52, "fortnightly": 26, "monthly": 12, "bi_monthly": 6, "quarterly": 4}
-        if payload.period_type in limits and not 1 <= payload.period_number <= limits[payload.period_type]:
-            raise HTTPException(400, "Select a valid period")
+        if payload.period_type == "weekly" and is_bookkeeping_task(task):
+            if not payload.period_start:
+                raise HTTPException(400, "Select the bookkeeping month")
+            if not 1 <= payload.period_number <= 5:
+                raise HTTPException(400, "Select Week 1 to Week 5 for weekly bookkeeping")
+        else:
+            limits = {"weekly": 52, "fortnightly": 26, "monthly": 12, "bi_monthly": 6, "quarterly": 4}
+            if payload.period_type in limits and not 1 <= payload.period_number <= limits[payload.period_type]:
+                raise HTTPException(400, "Select a valid period")
 
         task.period_type = payload.period_type
         task.period_year = payload.period_year
@@ -2297,6 +2312,12 @@ def period_label(task):
     if type_ == "daily":
         return task.period_start or ""
     if type_ == "weekly":
+        if is_bookkeeping_task(task) and task.period_start and number:
+            try:
+                month = datetime.fromisoformat(task.period_start).strftime("%b %Y")
+            except ValueError:
+                month = task.period_start[:7]
+            return f"{month} · Week {number}"
         return f"Week {number}, {year}" if year else (f"Week {number}" if number else "")
     if type_ == "fortnightly":
         return f"Fortnight {number}, {year}" if year else (f"Fortnight {number}" if number else "")
