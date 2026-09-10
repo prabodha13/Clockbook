@@ -1448,7 +1448,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                               <div className="cb-checklist-meta">
                                 {t.role || "no role"}{t.task_type ? ` \u00b7 ${t.task_type}` : ""}
                                 {t.requires_bank_account ? " \u00b7 needs a bank account" : ""}
-                                {t.needs_pay_period ? " \u00b7 pay period at completion" : ""}
+                                {t.needs_pay_period && !(t.period_types || []).length ? " \u00b7 pay period at completion" : ""}
                                 {(t.period_types || []).length ? " \u00b7 period at completion" : ""}
                                 {t.tracks_number_label ? ` \u00b7 tracks ${t.tracks_number_label.toLowerCase()}` : ""}
                               </div>
@@ -1484,7 +1484,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                                 </select>
                               )}
                               {checked && !disabledForNewClient && (t.needs_pay_period || (t.period_types || []).length > 0) && (() => {
-                                const configured = t.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : (t.period_types || []);
+                                const configured = (t.period_types || []).length > 0 ? (t.period_types || []) : (t.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : []);
                                 const period = periodByTaskId[t.id] || { type: "", year: String(new Date().getFullYear()), number: "", start: "", end: "" };
                                 const updatePeriod = (patch) => setPeriodByTaskId((prev) => ({ ...prev, [t.id]: { ...period, ...patch } }));
                                 return (
@@ -1624,7 +1624,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
   const [role, setRole] = useState(task.role || "");
   const [taskType, setTaskType] = useState(task.task_type || "");
   const configuredPeriodTypes = useMemo(() => (
-    task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : [...(task.period_types || [])]
+    (task.period_types || []).length > 0 ? [...(task.period_types || [])] : (task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : [])
   ), [task.period_types, task.needs_pay_period]);
   const needsPeriod = configuredPeriodTypes.length > 0;
   const [periodType, setPeriodType] = useState(task.period_type || task.pay_period_type || (configuredPeriodTypes.length === 1 ? configuredPeriodTypes[0] : ""));
@@ -1938,7 +1938,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   const [role, setRole] = useState(task.role);
   const [taskType, setTaskType] = useState(task.task_type);
   const [requiresBank, setRequiresBank] = useState(!!task.requires_bank_account);
-  const [needsPayPeriod, setNeedsPayPeriod] = useState(!!task.needs_pay_period);
+  const [needsPayPeriod, setNeedsPayPeriod] = useState(!!task.needs_pay_period && !(task.period_types || []).length);
   const [periodTypes, setPeriodTypes] = useState(task.period_types || []);
   const [tracksLabel, setTracksLabel] = useState(task.tracks_number_label);
   const [saving, setSaving] = useState(false);
@@ -1953,7 +1953,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
     setRole(task.role);
     setTaskType(task.task_type);
     setRequiresBank(!!task.requires_bank_account);
-    setNeedsPayPeriod(!!task.needs_pay_period);
+    setNeedsPayPeriod(!!task.needs_pay_period && !(task.period_types || []).length);
     setPeriodTypes(task.period_types || []);
     setTracksLabel(task.tracks_number_label);
   }, [task.id, task.name, task.role, task.task_type, task.requires_bank_account, task.needs_pay_period, task.period_types, task.tracks_number_label]);
@@ -2010,7 +2010,11 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
         <label className="cb-tmpl-task-option-checkbox">
           <input
             type="checkbox" className="cb-checkbox" checked={needsPayPeriod}
-            onChange={(e) => setNeedsPayPeriod(e.target.checked)}
+            onChange={(e) => {
+              const checked = e.target.checked;
+              setNeedsPayPeriod(checked);
+              if (checked) setPeriodTypes([]);
+            }}
           />
           Needs a pay period
         </label>
@@ -2018,7 +2022,10 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
           <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
           <WorkPeriodTypePicker
             value={periodTypes}
-            onChange={setPeriodTypes}
+            onChange={(next) => {
+              setPeriodTypes(next);
+              if (next.length > 0) setNeedsPayPeriod(false);
+            }}
             open={periodPickerOpen}
             onOpenChange={setPeriodPickerOpen}
           />
@@ -2152,7 +2159,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                     {t.role && <span>{t.role}</span>}
                     {t.task_type && <span>{t.task_type}</span>}
                     {t.requires_bank_account && <span>Needs a bank account</span>}
-                    {t.needs_pay_period && <span>Payroll period at completion</span>}
+                    {t.needs_pay_period && !(t.period_types || []).length && <span>Payroll period at completion</span>}
                     {(t.period_types || []).length > 0 && <span>Period at completion</span>}
                     {t.tracks_number_label && <span>Tracks: {t.tracks_number_label}</span>}
                   </div>
@@ -2180,14 +2187,14 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
                   Requires a bank account
                 </label>
                 <label className="cb-tmpl-task-option-checkbox">
-                  <input type="checkbox" className="cb-checkbox" checked={tNeedsPayPeriod} onChange={(e) => setTNeedsPayPeriod(e.target.checked)} />
+                  <input type="checkbox" className="cb-checkbox" checked={tNeedsPayPeriod} onChange={(e) => { const checked = e.target.checked; setTNeedsPayPeriod(checked); if (checked) setTPeriodTypes([]); }} />
                   Needs a pay period
                 </label>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ fontSize: 12.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }}>Work period</span>
                   <WorkPeriodTypePicker
                     value={tPeriodTypes}
-                    onChange={setTPeriodTypes}
+                    onChange={(next) => { setTPeriodTypes(next); if (next.length > 0) setTNeedsPayPeriod(false); }}
                     open={tPeriodPickerOpen}
                     onOpenChange={setTPeriodPickerOpen}
                   />
