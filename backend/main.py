@@ -83,6 +83,9 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE members ADD COLUMN slack_user_id VARCHAR"))
             if "notification_channel" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN notification_channel VARCHAR DEFAULT 'browser'"))
+            if "weekly_capacity_hours" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN weekly_capacity_hours FLOAT DEFAULT 40.0"))
+                conn.execute(text("UPDATE members SET weekly_capacity_hours = 40.0 WHERE weekly_capacity_hours IS NULL"))
 
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
@@ -1022,6 +1025,24 @@ def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, curren
     return member
 
 
+@app.patch("/api/members/{member_id}/capacity", response_model=schemas.MemberOut)
+def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    if member_id not in allowed_ids:
+        raise HTTPException(403, "You cannot change capacity for that person")
+    value = float(payload.weekly_capacity_hours)
+    if value < 0 or value > 168:
+        raise HTTPException(400, "Weekly capacity must be between 0 and 168 hours")
+    member.weekly_capacity_hours = round(value, 2)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
 @app.patch("/api/members/{member_id}/credentials", response_model=schemas.MemberOut)
 def set_member_credentials(member_id: str, payload: schemas.LoginRequest, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     # Lets an admin give login access to a legacy passwordless account, or reset someone's
@@ -1552,6 +1573,63 @@ def _insights_is_meeting(task: models.TaskInstance):
     return bool(task.source_calendar_event_id) or "meeting" in task_type or "meeting" in name
 
 
+def _insights_is_billable(task: models.TaskInstance):
+    return (task.task_type or "").strip().lower().startswith("billable:")
+
+
+def _insights_business_days(start_date, end_date):
+    if end_date < start_date:
+        return 0
+    count = 0
+    cursor = start_date
+    while cursor <= end_date:
+        if cursor.weekday() < 5:
+            count += 1
+        cursor += timedelta(days=1)
+    return count
+
+
+def _insights_capacity_seconds(member: models.Member, start_date, end_date):
+    weekly_hours = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0)
+    business_days = _insights_business_days(start_date, end_date)
+    return weekly_hours * 3600.0 * (business_days / 5.0)
+
+
+def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date):
+    buckets = {}
+    first_week = start_date - timedelta(days=start_date.weekday())
+    last_week = end_date - timedelta(days=end_date.weekday())
+    cursor = first_week
+    while cursor <= last_week:
+        week_end = cursor + timedelta(days=6)
+        overlap_start = max(cursor, start_date)
+        overlap_end = min(week_end, end_date)
+        buckets[cursor.isoformat()] = {
+            "period_start": cursor.isoformat(),
+            "capacity_seconds": round(_insights_capacity_seconds(member, overlap_start, overlap_end), 1),
+            "tracked_seconds": 0.0,
+            "billable_seconds": 0.0,
+        }
+        cursor += timedelta(days=7)
+    for task in tasks:
+        dt = _insights_task_work_date(task)
+        if not dt:
+            continue
+        day = dt.date()
+        week_start = day - timedelta(days=day.weekday())
+        row = buckets.get(week_start.isoformat())
+        if not row:
+            continue
+        seconds = _insights_task_seconds(task)
+        row["tracked_seconds"] += seconds
+        if _insights_is_billable(task):
+            row["billable_seconds"] += seconds
+    return [
+        {**row, "tracked_seconds": round(row["tracked_seconds"], 1), "billable_seconds": round(row["billable_seconds"], 1)}
+        for _, row in sorted(buckets.items())
+    ]
+
+
 def _insights_change(current_value, previous_value):
     current_value = float(current_value or 0)
     previous_value = float(previous_value or 0)
@@ -1622,6 +1700,14 @@ def get_insights(
 
     current_totals = task_totals(current_tasks)
     previous_totals = task_totals(previous_tasks)
+
+    current_billable_seconds = sum(_insights_task_seconds(t) for t in current_tasks if _insights_is_billable(t))
+    previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t))
+    capacity_seconds = _insights_capacity_seconds(target, start_date, end_date)
+    previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end)
+    overall_utilization = round((current_totals["tracked"] / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
+    client_utilization = round((current_billable_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
+    capacity_trend = _insights_capacity_trend(target, current_tasks, start_date, end_date)
 
     current_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
@@ -1810,6 +1896,58 @@ def get_insights(
         delegation_candidates.sort(key=lambda row: row["seconds"], reverse=True)
         delegation_candidates = delegation_candidates[:12]
 
+    team_capacity = None
+    if current_member.role in ("admin", "super_admin"):
+        team_members = db.query(models.Member).filter(
+            models.Member.id.in_(allowed_ids),
+            models.Member.role == "member",
+        ).order_by(models.Member.name).all()
+        if team_members:
+            team_ids = [m.id for m in team_members]
+            team_tasks_all = db.query(models.TaskInstance).filter(
+                models.TaskInstance.status == "submitted",
+                models.TaskInstance.submitted_by_id.in_(team_ids),
+            ).all()
+            member_rows = []
+            aggregate_week = {}
+            total_capacity = total_tracked = total_billable = 0.0
+            for member in team_members:
+                member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and in_range(t, start_date, end_date)]
+                tracked = sum(_insights_task_seconds(t) for t in member_tasks)
+                billable = sum(_insights_task_seconds(t) for t in member_tasks if _insights_is_billable(t))
+                capacity = _insights_capacity_seconds(member, start_date, end_date)
+                total_capacity += capacity
+                total_tracked += tracked
+                total_billable += billable
+                member_rows.append({
+                    "member_id": member.id,
+                    "name": member.name,
+                    "capacity_seconds": round(capacity, 1),
+                    "tracked_seconds": round(tracked, 1),
+                    "billable_seconds": round(billable, 1),
+                    "overall_utilization": round((tracked / capacity) * 100, 1) if capacity > 0 else None,
+                    "client_utilization": round((billable / capacity) * 100, 1) if capacity > 0 else None,
+                    "available_seconds": round(max(capacity - tracked, 0.0), 1),
+                })
+                for row in _insights_capacity_trend(member, member_tasks, start_date, end_date):
+                    agg = aggregate_week.setdefault(row["period_start"], {"period_start": row["period_start"], "capacity_seconds": 0.0, "tracked_seconds": 0.0, "billable_seconds": 0.0})
+                    agg["capacity_seconds"] += row["capacity_seconds"]
+                    agg["tracked_seconds"] += row["tracked_seconds"]
+                    agg["billable_seconds"] += row["billable_seconds"]
+            team_capacity = {
+                "capacity_seconds": round(total_capacity, 1),
+                "tracked_seconds": round(total_tracked, 1),
+                "billable_seconds": round(total_billable, 1),
+                "overall_utilization": round((total_tracked / total_capacity) * 100, 1) if total_capacity > 0 else None,
+                "client_utilization": round((total_billable / total_capacity) * 100, 1) if total_capacity > 0 else None,
+                "available_seconds": round(max(total_capacity - total_tracked, 0.0), 1),
+                "trend": [
+                    {k: (round(v, 1) if k.endswith("_seconds") else v) for k, v in row.items()}
+                    for _, row in sorted(aggregate_week.items())
+                ],
+                "members": member_rows,
+            }
+
     return {
         "member": {"id": target.id, "name": target.name},
         "date_from": start_date.isoformat(),
@@ -1837,6 +1975,19 @@ def get_insights(
                 "support_received_seconds": round(prev_received_seconds, 1),
             },
         },
+        "capacity": {
+            "weekly_capacity_hours": round(float(getattr(target, "weekly_capacity_hours", 40.0) or 0.0), 2),
+            "capacity_seconds": round(capacity_seconds, 1),
+            "tracked_seconds": round(current_totals["tracked"], 1),
+            "billable_seconds": round(current_billable_seconds, 1),
+            "available_seconds": round(max(capacity_seconds - current_totals["tracked"], 0.0), 1),
+            "overall_utilization": overall_utilization,
+            "client_utilization": client_utilization,
+            "previous_capacity_seconds": round(previous_capacity_seconds, 1),
+            "previous_billable_seconds": round(previous_billable_seconds, 1),
+            "trend": capacity_trend,
+        },
+        "team_capacity": team_capacity,
         "support_trend": support_trend,
         "tracked_trend": tracked_trend,
         "work_mix": work_mix,

@@ -20,6 +20,7 @@ class MemberOut(BaseModel):
     slack_connected: bool = False
     slack_email: Optional[str] = None
     notification_channel: str = "browser"
+    weekly_capacity_hours: float = 40.0
 
 
 class PodOut(BaseModel):
@@ -52,6 +53,10 @@ class MemberCreate(BaseModel):
 
 class MemberRoleUpdate(BaseModel):
     role: str
+
+
+class MemberCapacityUpdate(BaseModel):
+    weekly_capacity_hours: float
 
 
 class LoginRequest(BaseModel):

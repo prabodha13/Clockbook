@@ -46,6 +46,7 @@ class Member(Base):
     slack_email = Column(String, nullable=True)
     slack_user_id = Column(String, nullable=True)
     notification_channel = Column(String, default="browser")  # "browser" or "slack"
+    weekly_capacity_hours = Column(Float, default=40.0)  # planning capacity used by Insights
 
     @property
     def google_calendar_connected(self):
