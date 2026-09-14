@@ -3462,10 +3462,12 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   const [memberId, setMemberId] = useState(currentUser?.id || "");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [capacityView, setCapacityView] = useState("person");
 
   useEffect(() => {
     if (forceSelfOnly && currentUser?.id) setMemberId(currentUser.id);
-  }, [forceSelfOnly, currentUser?.id]);
+    if (!isAdmin || forceSelfOnly) setCapacityView("person");
+  }, [forceSelfOnly, currentUser?.id, isAdmin]);
 
   const isSuperAdmin = currentUser?.role === "super_admin";
   const selectableMembers = useMemo(() => {
@@ -3519,21 +3521,54 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
   useEffect(() => { load(); }, [load]);
 
+  const comparisonPeriodLabel = range === "last_week"
+    ? "previous week"
+    : range === "30"
+      ? "previous 30 days"
+      : range === "90"
+        ? "previous 3 months"
+        : range === "180"
+          ? "previous 6 months"
+          : range === "365"
+            ? "previous 12 months"
+            : "previous period";
+  const comparisonHeading = `Compared with ${comparisonPeriodLabel}`;
+  const comparisonEitherLabel = range === "last_week" ? "either week" : "either period";
+
   const comparisonInfo = (currentValue, previousValue, changeValue) => {
     const current = Number(currentValue || 0);
     const previous = Number(previousValue || 0);
-    if (previous <= 0 && current <= 0) return { compact: "—", detail: "No activity in either period", color: "var(--muted)" };
-    if (previous <= 0 && current > 0) return { compact: "New", detail: `New · +${formatHM(current)}`, color: "#168A45" };
+    if (previous <= 0 && current <= 0) {
+      return { compact: "—", primary: "—", secondary: `None in ${comparisonEitherLabel}`, detail: `None in ${comparisonEitherLabel}`, color: "var(--muted)" };
+    }
+    if (previous <= 0 && current > 0) {
+      return { compact: "New", primary: "New", secondary: `No time in ${comparisonPeriodLabel}`, detail: `New · +${formatHM(current)}`, color: "#168A45" };
+    }
     const change = Number(changeValue ?? (((current - previous) / previous) * 100));
-    if (Math.abs(change) < 0.05) return { compact: "—", detail: "No change", color: "var(--muted)" };
+    const delta = current - previous;
+    if (Math.abs(change) < 0.05) {
+      return { compact: "—", primary: "No change", secondary: `Same as ${comparisonPeriodLabel}`, detail: `No change vs ${comparisonPeriodLabel}`, color: "var(--muted)" };
+    }
     const direction = change > 0 ? "↑" : "↓";
     const color = change > 0 ? "#168A45" : "#C23B3B";
-    const delta = Math.abs(current - previous);
+    const deltaText = `${delta > 0 ? "+" : "−"}${formatHM(Math.abs(delta))}`;
     if (change >= 200) {
       const multiple = current / previous;
-      return { compact: `${multiple.toFixed(1)}×`, detail: `+${formatHM(delta)} · ${multiple.toFixed(1)}× previous period`, color };
+      return {
+        compact: `${multiple.toFixed(1)}×`,
+        primary: `${multiple.toFixed(1)}× ${comparisonPeriodLabel}`,
+        secondary: deltaText,
+        detail: `${deltaText} · ${multiple.toFixed(1)}× ${comparisonPeriodLabel}`,
+        color,
+      };
     }
-    return { compact: `${direction} ${Math.abs(change).toFixed(0)}%`, detail: `${direction} ${Math.abs(change).toFixed(0)}% vs previous period`, color };
+    return {
+      compact: `${direction} ${Math.abs(change).toFixed(0)}%`,
+      primary: `${direction} ${Math.abs(change).toFixed(0)}%`,
+      secondary: `${deltaText} vs ${comparisonPeriodLabel}`,
+      detail: `${deltaText} · ${direction} ${Math.abs(change).toFixed(0)}% vs ${comparisonPeriodLabel}`,
+      color,
+    };
   };
 
   const totalMix = (data?.work_mix || []).reduce((sum, row) => sum + Number(row.seconds || 0), 0);
@@ -3595,6 +3630,29 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
     );
   }
 
+  function CapacityTrendChart({ rows = [] }) {
+    if (!rows.length) return <div className="cb-empty">No capacity trend available for this period.</div>;
+    const width = 720, height = 190, padL = 42, padR = 16, padT = 22, padB = 34;
+    const maxValue = Math.max(1, ...rows.flatMap((r) => [Number(r.capacity_seconds || 0), Number(r.tracked_seconds || 0), Number(r.billable_seconds || 0)]));
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    const makePoints = (key) => rows.map((r, i) => `${x(i)},${y(r[key])}`).join(" ");
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 205, display: "block" }} role="img" aria-label="Capacity and utilization trend">
+        {[0, .25, .5, .75, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="2" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
+        <polyline fill="none" stroke="#16A05D" strokeWidth="2" strokeDasharray="6 5" points={makePoints("capacity_seconds")}/>
+        <polyline fill="none" stroke="#168A45" strokeWidth="2.5" points={makePoints("tracked_seconds")}/>
+        <polyline fill="none" stroke="#2467D7" strokeWidth="2.5" points={makePoints("billable_seconds")}/>
+        {rows.map((r, i) => <g key={r.period_start}>
+          <circle cx={x(i)} cy={y(r.tracked_seconds)} r="3.3" fill="#168A45"/>
+          <circle cx={x(i)} cy={y(r.billable_seconds)} r="3.3" fill="#2467D7"/>
+          <text x={x(i)} y={height-10} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>
+        </g>)}
+      </svg>
+    );
+  }
+
   const cardStyle = { border: "1px solid #DDE4EC", borderRadius: 10, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.02)" };
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
   const metricCards = data ? [
@@ -3604,6 +3662,11 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
     { label: "Support received", seconds: data.summary.support_received_seconds, previousSeconds: data.summary.previous?.support_received_seconds, change: data.summary.changes.support_received, icon: HeartHandshake, bg: "#ECFAF3", fg: "#169B62" },
     { label: "Support given", seconds: data.summary.support_given_seconds, previousSeconds: data.summary.previous?.support_given_seconds, change: data.summary.changes.support_given, icon: HeartHandshake, bg: "#EDF9F1", fg: "#168A45" },
   ] : [];
+
+  const capacityData = capacityView === "team" && data?.team_capacity ? data.team_capacity : data?.capacity;
+  const capacityLabel = capacityView === "team" ? "Team capacity" : "Available capacity";
+  const capacityTrackedPct = capacityData?.overall_utilization;
+  const capacityBillablePct = capacityData?.client_utilization;
 
   const supportCurrent = Number(data?.summary?.support_received_seconds || 0);
   const supportPrevious = Number(data?.summary?.previous?.support_received_seconds || 0);
@@ -3711,11 +3774,19 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
             </div>
 
             <div style={panelStyle}>
-              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Compared with previous period</div>
+              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>{comparisonHeading}</div>
               <div style={{ display: "grid", gap: 9 }}>
                 {metricCards.map((m) => {
                   const comparison = comparisonInfo(m.seconds, m.previousSeconds, m.change);
-                  return <div key={m.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11.5, borderBottom: "1px solid #EEF1F4", paddingBottom: 7 }}><span>{m.label}</span><strong style={{ color: comparison.color, whiteSpace: "nowrap" }}>{comparison.compact}</strong></div>;
+                  return (
+                    <div key={m.label} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "start", fontSize: 11.5, borderBottom: "1px solid #EEF1F4", paddingBottom: 7 }}>
+                      <span>{m.label}</span>
+                      <div style={{ textAlign: "right", minWidth: 0 }}>
+                        <div style={{ color: comparison.color, fontWeight: 700, whiteSpace: "nowrap" }}>{comparison.primary}</div>
+                        <div style={{ marginTop: 2, fontSize: 9.5, color: "var(--muted)", whiteSpace: "nowrap" }}>{comparison.secondary}</div>
+                      </div>
+                    </div>
+                  );
                 })}
               </div>
             </div>
@@ -3742,6 +3813,65 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               </div>
             </div>
           </div>
+
+          {capacityData && (
+            <div style={{ ...panelStyle, marginBottom: 14, borderColor: "#BFE6CE", boxShadow: "0 0 0 1px rgba(22,138,69,.08)" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <div className="cb-group-title" style={{ fontSize: 15 }}>Capacity & utilization</div>
+                  <div className="cb-hint" style={{ marginTop: 3 }}>Capacity is a planning baseline, not a performance score.</div>
+                </div>
+                {isAdmin && !forceSelfOnly && data.team_capacity && (
+                  <div className="cb-tabs" style={{ flexShrink: 0 }}>
+                    <button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button>
+                    <button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .8fr) minmax(520px, 1.7fr)", gap: 18, alignItems: "stretch" }}>
+                <div style={{ borderRight: "1px solid #E6ECE9", paddingRight: 18 }}>
+                  <div style={{ display: "grid", gap: 11 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center", paddingBottom: 9, borderBottom: "1px solid #EEF2F0" }}>
+                      <span className="cb-hint">{capacityLabel}</span><strong>{formatHM(capacityData.capacity_seconds || 0)}</strong>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 56px", gap: 10, alignItems: "center" }}>
+                      <span>Tracked time</span><strong>{formatHM(capacityData.tracked_seconds || 0)}</strong><strong style={{ color: "#168A45", textAlign: "right" }}>{capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}%`}</strong>
+                    </div>
+                    <div style={{ height: 9, borderRadius: 99, background: "#E8EEE9", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, Math.max(0, Number(capacityTrackedPct || 0)))}%`, background: "#16A05D", borderRadius: 99 }}/></div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 56px", gap: 10, alignItems: "center", marginTop: 2 }}>
+                      <span>Client (billable) time</span><strong>{formatHM(capacityData.billable_seconds || 0)}</strong><strong style={{ color: "#2467D7", textAlign: "right" }}>{capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`}</strong>
+                    </div>
+                    <div style={{ height: 9, borderRadius: 99, background: "#E8EDF5", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, Math.max(0, Number(capacityBillablePct || 0)))}%`, background: "#2467D7", borderRadius: 99 }}/></div>
+                    <div style={{ marginTop: 7, padding: "11px 12px", borderRadius: 8, background: "#EFFAF4", border: "1px solid #D4EFDF" }}>
+                      <div style={{ fontWeight: 700, fontSize: 12 }}>{capacityTrackedPct == null ? "No capacity has been set for this period." : `${Math.round(capacityTrackedPct)}% of available capacity was recorded.`}</div>
+                      <div className="cb-hint" style={{ marginTop: 3, color: "#46675A" }}>{formatHM(capacityData.available_seconds || 0)} available capacity remaining · {capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`} client work</div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 2 }}>
+                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>Weekly trend</div>
+                    <div style={{ display: "flex", gap: 13, fontSize: 10.5, color: "var(--ink-soft)", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                      <span><span style={{ display: "inline-block", width: 13, borderTop: "2px dashed #16A05D", marginRight: 5, verticalAlign: "middle" }}/>Capacity</span>
+                      <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "#168A45", marginRight: 5 }}/>Tracked</span>
+                      <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "#2467D7", marginRight: 5 }}/>Client work</span>
+                    </div>
+                  </div>
+                  <CapacityTrendChart rows={capacityData.trend || []}/>
+                </div>
+              </div>
+              {capacityView === "team" && (capacityData.members || []).length > 0 && (
+                <div className="cb-table-wrap" style={{ marginTop: 14 }}>
+                  <table className="cb-table">
+                    <thead><tr><th>Person</th><th className="num">Capacity</th><th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client work</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead>
+                    <tbody>{capacityData.members.map((row) => <tr key={row.member_id}>
+                      <td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td><td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td>
+                    </tr>)}</tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: ".9fr .7fr 1.08fr 1.75fr", gap: 14, marginBottom: 14 }}>
             <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Average task duration</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{formatHM(data.summary.average_task_seconds || 0)}</div></div>
@@ -4319,7 +4449,7 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
@@ -4363,6 +4493,23 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {isAdmin && (
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                  Capacity
+                  <input
+                    className="cb-input"
+                    type="number" min="0" max="168" step="0.5"
+                    defaultValue={Number(m.weekly_capacity_hours ?? 40)}
+                    onBlur={(e) => {
+                      const value = Number(e.target.value);
+                      if (Number.isFinite(value) && value >= 0 && value <= 168 && value !== Number(m.weekly_capacity_hours ?? 40)) onChangeCapacity(m.id, value);
+                    }}
+                    style={{ width: 70, padding: "6px 8px", fontSize: 12.5 }}
+                    aria-label={`Weekly capacity hours for ${m.name}`}
+                  />
+                  h/wk
+                </label>
+              )}
               {currentUser.role === "super_admin" && pods.length > 0 && (
                 <select
                   className="cb-select"
@@ -6332,6 +6479,17 @@ export default function App() {
     }
   }
 
+  async function changeMemberCapacity(memberId, weeklyCapacityHours) {
+    try {
+      const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      if (updated.id === currentUser.id) setCurrentUser(updated);
+      showToast(`Weekly capacity updated to ${Number(updated.weekly_capacity_hours || 0).toFixed(1)}h`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
   async function addPod(name) {
     try {
       const pod = await api.createPod(name.trim());
@@ -6782,6 +6940,7 @@ export default function App() {
               <StaffView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
+                onChangeCapacity={changeMemberCapacity}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
                 pods={pods} onAssignPod={assignMemberPod}
