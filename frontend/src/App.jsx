@@ -3707,8 +3707,9 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               </div>
               <div className="cb-table-wrap">
                 <table className="cb-table">
-                  <thead><tr><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Also completed by</th><th>Insight</th></tr></thead>
+                  <thead><tr><th>Client</th><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Also completed by</th><th>Insight</th></tr></thead>
                   <tbody>{data.delegation_candidates.map((row) => <tr key={row.task_key}>
+                    <td style={{ fontWeight: 650 }}>{row.client_name || "—"}</td>
                     <td style={{ fontWeight: 650 }}>{row.template_name || "—"}</td>
                     <td>{row.task}</td>
                     <td>{row.task_type || "—"}</td>
