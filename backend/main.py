@@ -1547,8 +1547,10 @@ def _insights_is_meeting(task: models.TaskInstance):
 def _insights_change(current_value, previous_value):
     current_value = float(current_value or 0)
     previous_value = float(previous_value or 0)
+    # A percentage increase from a zero baseline is undefined.  Return None and
+    # let the UI describe this as "New" rather than a misleading 100% rise.
     if previous_value <= 0:
-        return None if current_value <= 0 else 100.0
+        return None
     return round(((current_value - previous_value) / previous_value) * 100, 1)
 
 
@@ -1817,6 +1819,13 @@ def get_insights(
                 "meeting": _insights_change(current_totals["meeting"], previous_totals["meeting"]),
                 "support_given": _insights_change(helped_seconds, prev_helped_seconds),
                 "support_received": _insights_change(received_seconds, prev_received_seconds),
+            },
+            "previous": {
+                "tracked_seconds": round(previous_totals["tracked"], 1),
+                "focused_seconds": round(previous_totals["focused"], 1),
+                "meeting_seconds": round(previous_totals["meeting"], 1),
+                "support_given_seconds": round(prev_helped_seconds, 1),
+                "support_received_seconds": round(prev_received_seconds, 1),
             },
         },
         "support_trend": support_trend,
