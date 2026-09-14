@@ -3710,7 +3710,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   ] : [];
 
   const capacityData = capacityView === "team" && data?.team_capacity ? data.team_capacity : data?.capacity;
-  const capacityLabel = capacityView === "team" ? "Team capacity" : "Available capacity";
+  const capacityLabel = capacityView === "team" ? "Team capacity for period" : "Available capacity for period";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
 
@@ -3888,8 +3888,16 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .8fr) minmax(520px, 1.7fr)", gap: 18, alignItems: "stretch" }}>
                 <div style={{ borderRight: "1px solid #E6ECE9", paddingRight: 18 }}>
                   <div style={{ display: "grid", gap: 11 }}>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center", paddingBottom: 9, borderBottom: "1px solid #EEF2F0" }}>
-                      <span className="cb-hint">{capacityLabel}</span><strong>{formatHM(capacityData.capacity_seconds || 0)}</strong>
+                    <div style={{ paddingBottom: 9, borderBottom: "1px solid #EEF2F0" }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
+                        <span className="cb-hint">{capacityLabel}</span><strong>{formatHM(capacityData.capacity_seconds || 0)}</strong>
+                      </div>
+                      {capacityView === "person" && (
+                        <div className="cb-hint" style={{ marginTop: 4 }}>
+                          Weekly capacity: {Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h
+                          {capacityData.capacity_effective_from ? ` · effective ${formatDate(capacityData.capacity_effective_from)}` : ""}
+                        </div>
+                      )}
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr auto 56px", gap: 10, alignItems: "center" }}>
                       <span>Tracked time</span><strong>{formatHM(capacityData.tracked_seconds || 0)}</strong><strong style={{ color: "#168A45", textAlign: "right" }}>{capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}%`}</strong>
@@ -4547,21 +4555,37 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               {isAdmin && (
-                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
-                  Capacity
-                  <input
-                    className="cb-input"
-                    type="number" min="0" max="168" step="0.5"
-                    defaultValue={Number(m.weekly_capacity_hours ?? 40)}
-                    onBlur={(e) => {
-                      const value = Number(e.target.value);
-                      if (Number.isFinite(value) && value >= 0 && value <= 168 && value !== Number(m.weekly_capacity_hours ?? 40)) onChangeCapacity(m.id, value);
-                    }}
-                    style={{ width: 70, padding: "6px 8px", fontSize: 12.5 }}
-                    aria-label={`Weekly capacity hours for ${m.name}`}
-                  />
-                  h/wk
-                </label>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    Capacity
+                    <input
+                      className="cb-input"
+                      type="number" min="0" max="168" step="0.5"
+                      defaultValue={Number(m.weekly_capacity_hours ?? 40)}
+                      onBlur={(e) => {
+                        const value = Number(e.target.value);
+                        if (Number.isFinite(value) && value >= 0 && value <= 168 && value !== Number(m.weekly_capacity_hours ?? 40)) onChangeCapacity(m.id, value, m.capacity_effective_from);
+                      }}
+                      style={{ width: 70, padding: "6px 8px", fontSize: 12.5 }}
+                      aria-label={`Weekly capacity hours for ${m.name}`}
+                    />
+                    h/wk
+                  </label>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    From
+                    <input
+                      className="cb-input"
+                      type="date"
+                      defaultValue={m.capacity_effective_from || ""}
+                      onBlur={(e) => {
+                        const value = e.target.value;
+                        if (value && value !== (m.capacity_effective_from || "")) onChangeCapacity(m.id, Number(m.weekly_capacity_hours ?? 40), value);
+                      }}
+                      style={{ width: 138, padding: "6px 8px", fontSize: 12.5 }}
+                      aria-label={`Capacity effective from for ${m.name}`}
+                    />
+                  </label>
+                </div>
               )}
               {currentUser.role === "super_admin" && pods.length > 0 && (
                 <select
@@ -6532,12 +6556,12 @@ export default function App() {
     }
   }
 
-  async function changeMemberCapacity(memberId, weeklyCapacityHours) {
+  async function changeMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom = null) {
     try {
-      const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours);
+      const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
-      showToast(`Weekly capacity updated to ${Number(updated.weekly_capacity_hours || 0).toFixed(1)}h`);
+      showToast(`Capacity updated: ${Number(updated.weekly_capacity_hours || 0).toFixed(1)}h/week${updated.capacity_effective_from ? ` from ${formatDate(updated.capacity_effective_from)}` : ""}`);
     } catch (err) {
       showToast(err.message, true);
     }

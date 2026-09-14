@@ -73,8 +73,8 @@ export const api = {
     request("/members", { method: "POST", body: JSON.stringify({ name, email, password }) }),
   updateMemberRole: (memberId, role) =>
     request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
-  updateMemberCapacity: (memberId, weeklyCapacityHours) =>
-    request(`/members/${memberId}/capacity`, { method: "PATCH", body: JSON.stringify({ weekly_capacity_hours: weeklyCapacityHours }) }),
+  updateMemberCapacity: (memberId, weeklyCapacityHours, capacityEffectiveFrom = null) =>
+    request(`/members/${memberId}/capacity`, { method: "PATCH", body: JSON.stringify({ weekly_capacity_hours: weeklyCapacityHours, capacity_effective_from: capacityEffectiveFrom || null }) }),
   setMemberCredentials: (memberId, email, password) =>
     request(`/members/${memberId}/credentials`, { method: "PATCH", body: JSON.stringify({ email, password }) }),
   deleteMember: (memberId) => request(`/members/${memberId}`, { method: "DELETE" }),
