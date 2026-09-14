@@ -1764,11 +1764,16 @@ def get_insights(
         for task in current_tasks:
             if not eligible_for_delegation(task):
                 continue
-            key = task_key(task)
-            if key not in evidence:
+            evidence_key = task_key(task)
+            if evidence_key not in evidence:
                 continue
-            row = own_by_key.setdefault(key, {
-                "task_key": key,
+            # Keep the staff-evidence match broad across clients, but split the admin's
+            # displayed opportunities by client so the insight is actionable.
+            client_key = (task.client_id or "").strip().lower() or (task.client_name or "").strip().lower()
+            display_key = f"{evidence_key}|client:{client_key}"
+            row = own_by_key.setdefault(display_key, {
+                "task_key": display_key,
+                "client_name": task.client_name or "",
                 "template_name": task.source_template_name or "",
                 "task": task.name,
                 "task_type": task.task_type or "",
@@ -1778,11 +1783,12 @@ def get_insights(
             })
             row["occurrences"] += 1
             row["seconds"] += _insights_task_seconds(task)
-            row["staff_ids"].update(evidence[key])
+            row["staff_ids"].update(evidence[evidence_key])
 
         for row in own_by_key.values():
             delegation_candidates.append({
                 "task_key": row["task_key"],
+                "client_name": row["client_name"],
                 "template_name": row["template_name"],
                 "task": row["task"],
                 "task_type": row["task_type"],
