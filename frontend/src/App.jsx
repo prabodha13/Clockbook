@@ -4586,7 +4586,8 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                       defaultValue={m.capacity_effective_from || ""}
                       onBlur={(e) => {
                         const value = e.target.value;
-                        if (value && value !== (m.capacity_effective_from || "")) onChangeCapacity(m.id, Number(m.weekly_capacity_hours ?? 40), value);
+                        const currentValue = m.capacity_effective_from || "";
+                        if (value !== currentValue) onChangeCapacity(m.id, Number(m.weekly_capacity_hours ?? 40), value || null);
                       }}
                       style={{ width: 138, padding: "6px 8px", fontSize: 12.5 }}
                       aria-label={`Capacity effective from for ${m.name}`}
