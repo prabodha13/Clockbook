@@ -1,7 +1,7 @@
 import uuid
 import secrets
-from datetime import datetime
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, Integer, Float, JSON, Text
+from datetime import datetime, date
+from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Integer, Float, JSON, Text
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -47,6 +47,7 @@ class Member(Base):
     slack_user_id = Column(String, nullable=True)
     notification_channel = Column(String, default="browser")  # "browser" or "slack"
     weekly_capacity_hours = Column(Float, default=40.0)  # planning capacity used by Insights
+    capacity_effective_from = Column(Date, default=date.today)  # do not apply capacity before this date
 
     @property
     def google_calendar_connected(self):

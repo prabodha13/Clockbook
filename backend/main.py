@@ -86,6 +86,12 @@ def run_startup_migrations():
             if "weekly_capacity_hours" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN weekly_capacity_hours FLOAT DEFAULT 40.0"))
                 conn.execute(text("UPDATE members SET weekly_capacity_hours = 40.0 WHERE weekly_capacity_hours IS NULL"))
+            if "capacity_effective_from" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN capacity_effective_from DATE"))
+                # Existing installations should not manufacture historical unused capacity.
+                # Start capacity from the date this migration is first deployed; admins can
+                # move the date earlier later if historical capacity is genuinely required.
+                conn.execute(text("UPDATE members SET capacity_effective_from = CURRENT_DATE WHERE capacity_effective_from IS NULL"))
 
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
@@ -1048,6 +1054,8 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
     if value < 0 or value > 168:
         raise HTTPException(400, "Weekly capacity must be between 0 and 168 hours")
     member.weekly_capacity_hours = round(value, 2)
+    if payload.capacity_effective_from is not None:
+        member.capacity_effective_from = payload.capacity_effective_from
     db.commit()
     db.refresh(member)
     return member
@@ -1604,20 +1612,43 @@ def _insights_business_days(start_date, end_date):
     return count
 
 
+def _insights_capacity_effective_start(member: models.Member, start_date):
+    effective_from = getattr(member, "capacity_effective_from", None)
+    return max(start_date, effective_from) if effective_from else start_date
+
+
 def _insights_capacity_seconds(member: models.Member, start_date, end_date):
+    effective_start = _insights_capacity_effective_start(member, start_date)
+    if effective_start > end_date:
+        return 0.0
     weekly_hours = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0)
-    business_days = _insights_business_days(start_date, end_date)
+    business_days = _insights_business_days(effective_start, end_date)
     return weekly_hours * 3600.0 * (business_days / 5.0)
 
 
+def _insights_capacity_tasks(member: models.Member, tasks, start_date, end_date):
+    effective_start = _insights_capacity_effective_start(member, start_date)
+    if effective_start > end_date:
+        return []
+    rows = []
+    for task in tasks:
+        dt = _insights_task_work_date(task)
+        if dt and effective_start <= dt.date() <= end_date:
+            rows.append(task)
+    return rows
+
+
 def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date, billing_by_type=None):
+    effective_start = _insights_capacity_effective_start(member, start_date)
+    if effective_start > end_date:
+        return []
     buckets = {}
-    first_week = start_date - timedelta(days=start_date.weekday())
+    first_week = effective_start - timedelta(days=effective_start.weekday())
     last_week = end_date - timedelta(days=end_date.weekday())
     cursor = first_week
     while cursor <= last_week:
         week_end = cursor + timedelta(days=6)
-        overlap_start = max(cursor, start_date)
+        overlap_start = max(cursor, effective_start)
         overlap_end = min(week_end, end_date)
         buckets[cursor.isoformat()] = {
             "period_start": cursor.isoformat(),
@@ -1631,6 +1662,8 @@ def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date,
         if not dt:
             continue
         day = dt.date()
+        if day < effective_start or day > end_date:
+            continue
         week_start = day - timedelta(days=day.weekday())
         row = buckets.get(week_start.isoformat())
         if not row:
@@ -1721,13 +1754,17 @@ def get_insights(
     current_totals = task_totals(current_tasks)
     previous_totals = task_totals(previous_tasks)
 
-    current_billable_seconds = sum(_insights_task_seconds(t) for t in current_tasks if _insights_is_billable(t, billing_by_type))
-    previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t, billing_by_type))
+    current_capacity_tasks = _insights_capacity_tasks(target, current_tasks, start_date, end_date)
+    previous_capacity_tasks = _insights_capacity_tasks(target, previous_tasks, previous_start, previous_end)
+    current_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks)
+    previous_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in previous_capacity_tasks)
+    current_billable_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks if _insights_is_billable(t, billing_by_type))
+    previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_capacity_tasks if _insights_is_billable(t, billing_by_type))
     capacity_seconds = _insights_capacity_seconds(target, start_date, end_date)
     previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end)
-    overall_utilization = round((current_totals["tracked"] / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
+    overall_utilization = round((current_capacity_tracked_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
     client_utilization = round((current_billable_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
-    capacity_trend = _insights_capacity_trend(target, current_tasks, start_date, end_date, billing_by_type)
+    capacity_trend = _insights_capacity_trend(target, current_capacity_tasks, start_date, end_date, billing_by_type)
 
     current_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
@@ -1933,8 +1970,9 @@ def get_insights(
             total_capacity = total_tracked = total_billable = 0.0
             for member in team_members:
                 member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and in_range(t, start_date, end_date)]
-                tracked = sum(_insights_task_seconds(t) for t in member_tasks)
-                billable = sum(_insights_task_seconds(t) for t in member_tasks if _insights_is_billable(t, billing_by_type))
+                capacity_tasks = _insights_capacity_tasks(member, member_tasks, start_date, end_date)
+                tracked = sum(_insights_task_seconds(t) for t in capacity_tasks)
+                billable = sum(_insights_task_seconds(t) for t in capacity_tasks if _insights_is_billable(t, billing_by_type))
                 capacity = _insights_capacity_seconds(member, start_date, end_date)
                 total_capacity += capacity
                 total_tracked += tracked
@@ -1949,7 +1987,7 @@ def get_insights(
                     "client_utilization": round((billable / capacity) * 100, 1) if capacity > 0 else None,
                     "available_seconds": round(max(capacity - tracked, 0.0), 1),
                 })
-                for row in _insights_capacity_trend(member, member_tasks, start_date, end_date):
+                for row in _insights_capacity_trend(member, capacity_tasks, start_date, end_date):
                     agg = aggregate_week.setdefault(row["period_start"], {"period_start": row["period_start"], "capacity_seconds": 0.0, "tracked_seconds": 0.0, "billable_seconds": 0.0})
                     agg["capacity_seconds"] += row["capacity_seconds"]
                     agg["tracked_seconds"] += row["tracked_seconds"]
@@ -1997,10 +2035,11 @@ def get_insights(
         },
         "capacity": {
             "weekly_capacity_hours": round(float(getattr(target, "weekly_capacity_hours", 40.0) or 0.0), 2),
+            "capacity_effective_from": target.capacity_effective_from.isoformat() if getattr(target, "capacity_effective_from", None) else None,
             "capacity_seconds": round(capacity_seconds, 1),
-            "tracked_seconds": round(current_totals["tracked"], 1),
+            "tracked_seconds": round(current_capacity_tracked_seconds, 1),
             "billable_seconds": round(current_billable_seconds, 1),
-            "available_seconds": round(max(capacity_seconds - current_totals["tracked"], 0.0), 1),
+            "available_seconds": round(max(capacity_seconds - current_capacity_tracked_seconds, 0.0), 1),
             "overall_utilization": overall_utilization,
             "client_utilization": client_utilization,
             "previous_capacity_seconds": round(previous_capacity_seconds, 1),

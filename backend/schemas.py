@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, field_serializer
 
@@ -21,6 +21,7 @@ class MemberOut(BaseModel):
     slack_email: Optional[str] = None
     notification_channel: str = "browser"
     weekly_capacity_hours: float = 40.0
+    capacity_effective_from: Optional[date] = None
 
 
 class PodOut(BaseModel):
@@ -57,6 +58,7 @@ class MemberRoleUpdate(BaseModel):
 
 class MemberCapacityUpdate(BaseModel):
     weekly_capacity_hours: float
+    capacity_effective_from: Optional[date] = None
 
 
 class LoginRequest(BaseModel):
