@@ -180,6 +180,7 @@ class TaskInstance(Base):
     period_end = Column(String, nullable=True)  # YYYY-MM-DD for custom periods
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
     source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed
+    source_template_field = Column(String, nullable=True)  # broad template field/category (e.g. Tax, Bookkeeping, Payroll) copied for reliable historical insights
     last_heartbeat_at = Column(DateTime, nullable=True)  # updated periodically while running, a stale value means the browser tracking it is gone (closed, crashed, or the machine shut down)
 
 
@@ -196,6 +197,7 @@ class HelpEvent(Base):
     adjusted = Column(Boolean, default=False)  # true if the person changed the pre-filled duration before confirming, matching the same visible flagging tasks already have
     context = Column(Text, default="")
     inactivity_event_id = Column(String, nullable=True)  # exact away-period this help classification resolved, if it came from the sleep/lock prompt
+
 
 
 class InactivityEvent(Base):

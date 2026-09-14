@@ -155,6 +155,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_calendar_event_id VARCHAR"))
             if "source_template_name" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
+            if "source_template_field" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_field VARCHAR"))
             if "last_heartbeat_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
     # Normalize the old payroll-only requirement into the generic Work period model.
@@ -182,6 +184,17 @@ def run_startup_migrations():
                 changed = True
             if configured and not task_instance.period_required:
                 task_instance.period_required = True
+                changed = True
+
+        # Backfill the broad template field for historical tasks where the template name
+        # still uniquely identifies a current template. Future tasks copy this at creation.
+        template_name_rows = {}
+        for tpl in migration_db.query(models.Template).all():
+            template_name_rows.setdefault(tpl.name, []).append(tpl.field)
+        unique_template_fields = {name: fields[0] for name, fields in template_name_rows.items() if len(set(fields)) == 1}
+        for task_instance in migration_db.query(models.TaskInstance).all():
+            if not getattr(task_instance, "source_template_field", None) and task_instance.source_template_name in unique_template_fields:
+                task_instance.source_template_field = unique_template_fields[task_instance.source_template_name]
                 changed = True
         if changed:
             migration_db.commit()
@@ -1480,6 +1493,330 @@ def help_events_detail(current_member: models.Member = Depends(get_current_membe
     ]
 
 
+
+# ---------------------------------------------------------------
+# Insights
+# ---------------------------------------------------------------
+
+def _insights_allowed_member_ids(current_member: models.Member, db: Session):
+    if current_member.role == "member":
+        return {current_member.id}
+    if current_member.role == "super_admin":
+        return {m.id for m in db.query(models.Member.id).all()}
+    # Match the existing admin visibility model used by Dashboard / Export:
+    # regular admins never see super-admin data, and pod admins stay inside their pod.
+    query = db.query(models.Member.id).filter(models.Member.role != "super_admin")
+    if current_member.pod_id:
+        query = query.filter(models.Member.pod_id == current_member.pod_id)
+    return {m.id for m in query.all()}
+
+
+def _insights_task_work_date(task: models.TaskInstance):
+    starts = []
+    for seg in (task.segments or []):
+        value = seg.get("start") if isinstance(seg, dict) else None
+        if not value:
+            continue
+        try:
+            dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+            starts.append(dt)
+        except Exception:
+            continue
+    return min(starts) if starts else task.submitted_at
+
+
+def _insights_task_seconds(task: models.TaskInstance):
+    tracked = elapsed_seconds(task.segments)
+    return max(float(task.adjusted_seconds if task.adjusted_seconds is not None else tracked), 0.0)
+
+
+def _insights_is_support(task: models.TaskInstance):
+    return (task.task_type or "") == "Non-billable: Colleague Support"
+
+
+def _insights_is_meeting(task: models.TaskInstance):
+    task_type = (task.task_type or "").lower()
+    name = (task.name or "").lower()
+    return "meeting" in task_type or name.startswith("ad hoc meeting")
+
+
+def _insights_change(current_value, previous_value):
+    current_value = float(current_value or 0)
+    previous_value = float(previous_value or 0)
+    if previous_value <= 0:
+        return None if current_value <= 0 else 100.0
+    return round(((current_value - previous_value) / previous_value) * 100, 1)
+
+
+@app.get("/api/insights")
+def get_insights(
+    member_id: str = None,
+    date_from: str = None,
+    date_to: str = None,
+    current_member: models.Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+):
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    target_id = member_id or current_member.id
+    if target_id not in allowed_ids:
+        raise HTTPException(403, "You cannot view insights for that person")
+    target = db.get(models.Member, target_id)
+    if not target:
+        raise HTTPException(404, "Member not found")
+
+    today = datetime.utcnow().date()
+    try:
+        start_date = datetime.fromisoformat(date_from).date() if date_from else today - timedelta(days=89)
+        end_date = datetime.fromisoformat(date_to).date() if date_to else today
+    except ValueError:
+        raise HTTPException(400, "Invalid insight date range")
+    if end_date < start_date:
+        raise HTTPException(400, "date_to must be on or after date_from")
+    days = (end_date - start_date).days + 1
+    previous_end = start_date - timedelta(days=1)
+    previous_start = previous_end - timedelta(days=days - 1)
+
+    all_tasks = db.query(models.TaskInstance).filter(
+        models.TaskInstance.status == "submitted",
+        models.TaskInstance.submitted_by_id == target_id,
+    ).all()
+
+    def in_range(task, start, end):
+        dt = _insights_task_work_date(task)
+        if not dt:
+            return False
+        d = dt.date()
+        return start <= d <= end
+
+    current_tasks = [t for t in all_tasks if in_range(t, start_date, end_date)]
+    previous_tasks = [t for t in all_tasks if in_range(t, previous_start, previous_end)]
+
+    def task_totals(tasks):
+        tracked = focused = meeting = 0.0
+        completed = 0
+        for task in tasks:
+            seconds = _insights_task_seconds(task)
+            tracked += seconds
+            completed += 1
+            if _insights_is_support(task):
+                continue
+            if _insights_is_meeting(task):
+                meeting += seconds
+            else:
+                focused += seconds
+        return {"tracked": tracked, "focused": focused, "meeting": meeting, "completed": completed}
+
+    current_totals = task_totals(current_tasks)
+    previous_totals = task_totals(previous_tasks)
+
+    current_help = db.query(models.HelpEvent).filter(
+        models.HelpEvent.member_id == target_id,
+        models.HelpEvent.created_at >= datetime.combine(start_date, datetime.min.time()),
+        models.HelpEvent.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()),
+    ).all()
+    previous_help = db.query(models.HelpEvent).filter(
+        models.HelpEvent.member_id == target_id,
+        models.HelpEvent.created_at >= datetime.combine(previous_start, datetime.min.time()),
+        models.HelpEvent.created_at < datetime.combine(previous_end + timedelta(days=1), datetime.min.time()),
+    ).all()
+
+    def help_totals(events):
+        helped = sum(float(e.seconds or 0) for e in events if e.direction == "helped")
+        received = sum(float(e.seconds or 0) for e in events if e.direction == "received")
+        return helped, received
+
+    helped_seconds, received_seconds = help_totals(current_help)
+    prev_helped_seconds, prev_received_seconds = help_totals(previous_help)
+
+    # Weekly support trend, aligned to Mondays, using the exact recorded support events.
+    # Empty weeks are kept as zero so reductions in support remain visible.
+    week_map = {}
+    first_week = start_date - timedelta(days=start_date.weekday())
+    last_week = end_date - timedelta(days=end_date.weekday())
+    cursor = first_week
+    while cursor <= last_week:
+        key = cursor.isoformat()
+        week_map[key] = {"week_start": key, "helped_seconds": 0.0, "received_seconds": 0.0}
+        cursor += timedelta(days=7)
+    for event in current_help:
+        day = event.created_at.date()
+        week_start = day - timedelta(days=day.weekday())
+        key = week_start.isoformat()
+        row = week_map.setdefault(key, {"week_start": key, "helped_seconds": 0.0, "received_seconds": 0.0})
+        if event.direction == "helped":
+            row["helped_seconds"] += float(event.seconds or 0)
+        else:
+            row["received_seconds"] += float(event.seconds or 0)
+    support_trend = [week_map[k] for k in sorted(week_map)]
+
+    work_mix_map = {}
+    task_type_mix_map = {}
+    top_client_map = {}
+    for task in current_tasks:
+        seconds = _insights_task_seconds(task)
+        if _insights_is_support(task):
+            category_label = "Colleague support"
+            task_type_label = "Colleague support"
+        elif _insights_is_meeting(task):
+            category_label = "Meetings"
+            task_type_label = "Meetings"
+        else:
+            # Template.field is the broad category admins already maintain (Tax, Bookkeeping, Payroll, etc.).
+            # A copy is stored on the task so historical insights remain stable even if templates later change.
+            category_label = (getattr(task, "source_template_field", None) or "Other").strip() or "Other"
+            task_type_label = (task.task_type or task.name or "Other").strip() or "Other"
+        work_mix_map[category_label] = work_mix_map.get(category_label, 0.0) + seconds
+        task_type_mix_map[task_type_label] = task_type_mix_map.get(task_type_label, 0.0) + seconds
+        if task.client_name and task.client_name != "Internal Support":
+            top_client_map[task.client_name] = top_client_map.get(task.client_name, 0.0) + seconds
+
+    work_mix = [
+        {"label": label, "seconds": round(seconds, 1)}
+        for label, seconds in sorted(work_mix_map.items(), key=lambda item: item[1], reverse=True)[:8]
+    ]
+    task_type_mix = [
+        {"label": label, "seconds": round(seconds, 1)}
+        for label, seconds in sorted(task_type_mix_map.items(), key=lambda item: item[1], reverse=True)[:8]
+    ]
+    top_clients = [
+        {"label": label, "seconds": round(seconds, 1)}
+        for label, seconds in sorted(top_client_map.items(), key=lambda item: item[1], reverse=True)[:6]
+    ]
+
+    # Tracked-time trend. Use weekly buckets for shorter ranges and monthly buckets for longer views.
+    trend_map = {}
+    use_months = days > 120
+    for task in current_tasks:
+        dt = _insights_task_work_date(task)
+        if not dt:
+            continue
+        d = dt.date()
+        if use_months:
+            key = d.replace(day=1).isoformat()
+        else:
+            key = (d - timedelta(days=d.weekday())).isoformat()
+        trend_map[key] = trend_map.get(key, 0.0) + _insights_task_seconds(task)
+    tracked_trend = [{"period_start": key, "seconds": round(trend_map[key], 1)} for key in sorted(trend_map)]
+
+    tracked_work_dates = {
+        _insights_task_work_date(task).date()
+        for task in current_tasks
+        if _insights_task_work_date(task) is not None and _insights_task_seconds(task) > 0
+    }
+    working_days = 0
+    cursor_day = start_date
+    while cursor_day <= end_date:
+        if cursor_day.weekday() < 5:
+            working_days += 1
+        cursor_day += timedelta(days=1)
+    tracked_working_days = sum(1 for d in tracked_work_dates if d.weekday() < 5)
+    tracking_consistency = round((tracked_working_days / working_days) * 100, 1) if working_days else 0.0
+
+    average_task_seconds = (
+        current_totals["tracked"] / current_totals["completed"] if current_totals["completed"] else 0.0
+    )
+
+    delegation_candidates = []
+    # Delegation is deliberately an admin-owned review, never a system judgement. We only
+    # surface evidence when this admin is viewing their own insights and a staff member has
+    # already completed the same template/task signature at least once.
+    if current_member.role in ("admin", "super_admin") and target_id == current_member.id:
+        staff_query = db.query(models.Member).filter(models.Member.role == "member")
+        if current_member.role == "admin" and current_member.pod_id:
+            staff_query = staff_query.filter(models.Member.pod_id == current_member.pod_id)
+        staff_members = staff_query.all()
+        staff_ids = {m.id for m in staff_members}
+        staff_names = {m.id: m.name for m in staff_members}
+        staff_tasks = []
+        if staff_ids:
+            staff_tasks = db.query(models.TaskInstance).filter(
+                models.TaskInstance.status == "submitted",
+                models.TaskInstance.submitted_by_id.in_(staff_ids),
+            ).all()
+
+        def task_key(task):
+            return "|".join([
+                (task.source_template_name or "").strip().lower(),
+                (task.name or "").strip().lower(),
+                (task.task_type or "").strip().lower(),
+            ])
+
+        evidence = {}
+        for task in staff_tasks:
+            if _insights_is_support(task) or _insights_is_meeting(task):
+                continue
+            key = task_key(task)
+            row = evidence.setdefault(key, set())
+            if task.submitted_by_id:
+                row.add(task.submitted_by_id)
+
+        own_by_key = {}
+        for task in current_tasks:
+            if _insights_is_support(task) or _insights_is_meeting(task):
+                continue
+            key = task_key(task)
+            if key not in evidence:
+                continue
+            row = own_by_key.setdefault(key, {
+                "task_key": key,
+                "template_name": task.source_template_name or "",
+                "task": task.name,
+                "task_type": task.task_type or "",
+                "occurrences": 0,
+                "seconds": 0.0,
+                "staff_ids": set(),
+            })
+            row["occurrences"] += 1
+            row["seconds"] += _insights_task_seconds(task)
+            row["staff_ids"].update(evidence[key])
+
+        for row in own_by_key.values():
+            delegation_candidates.append({
+                "task_key": row["task_key"],
+                "template_name": row["template_name"],
+                "task": row["task"],
+                "task_type": row["task_type"],
+                "occurrences": row["occurrences"],
+                "seconds": round(row["seconds"], 1),
+                "staff_names": sorted(staff_names[mid] for mid in row["staff_ids"] if mid in staff_names),
+            })
+        delegation_candidates.sort(key=lambda row: row["seconds"], reverse=True)
+        delegation_candidates = delegation_candidates[:12]
+
+    return {
+        "member": {"id": target.id, "name": target.name},
+        "date_from": start_date.isoformat(),
+        "date_to": end_date.isoformat(),
+        "summary": {
+            "tracked_seconds": round(current_totals["tracked"], 1),
+            "focused_seconds": round(current_totals["focused"], 1),
+            "meeting_seconds": round(current_totals["meeting"], 1),
+            "support_given_seconds": round(helped_seconds, 1),
+            "support_received_seconds": round(received_seconds, 1),
+            "completed_tasks": current_totals["completed"],
+            "average_task_seconds": round(average_task_seconds, 1),
+            "changes": {
+                "tracked": _insights_change(current_totals["tracked"], previous_totals["tracked"]),
+                "focused": _insights_change(current_totals["focused"], previous_totals["focused"]),
+                "meeting": _insights_change(current_totals["meeting"], previous_totals["meeting"]),
+                "support_given": _insights_change(helped_seconds, prev_helped_seconds),
+                "support_received": _insights_change(received_seconds, prev_received_seconds),
+            },
+        },
+        "support_trend": support_trend,
+        "tracked_trend": tracked_trend,
+        "work_mix": work_mix,
+        "task_type_mix": task_type_mix,
+        "top_clients": top_clients,
+        "tracking_consistency": tracking_consistency,
+        "tracked_working_days": tracked_working_days,
+        "working_days": working_days,
+        "delegation_candidates": delegation_candidates,
+    }
+
+
 # ---------------------------------------------------------------
 # Clients
 # ---------------------------------------------------------------
@@ -1777,11 +2114,12 @@ def update_template(template_id: str, payload: schemas.TemplateCreate, current_m
     if not field or not name:
         raise HTTPException(400, "Enter both a field and a template name")
     old_name = tpl.name
+    old_field = tpl.field
     tpl.field = field
     tpl.name = name
-    if old_name != name:
+    if old_name != name or old_field != field:
         db.query(models.TaskInstance).filter(models.TaskInstance.source_template_name == old_name).update(
-            {"source_template_name": name}, synchronize_session=False
+            {"source_template_name": name, "source_template_field": field}, synchronize_session=False
         )
     db.commit()
     db.refresh(tpl)
@@ -1933,6 +2271,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         pay_period_number=payload.period_number if payload.needs_pay_period and not list(payload.period_types or []) else payload.pay_period_number,
         source_calendar_event_id=payload.source_calendar_event_id,
         source_template_name=payload.source_template_name,
+        source_template_field=payload.source_template_field,
     )
     db.add(task)
     db.commit()
