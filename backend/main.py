@@ -2399,6 +2399,7 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             "work_started_at": (work_started_at.isoformat() + "Z") if work_started_at else None,
             "submitted_at": (t.submitted_at.isoformat() + "Z") if t.submitted_at else None,
             "client": t.client_name,
+            "template_name": getattr(t, "source_template_name", None),
             "task": t.name,
             "role": t.role,
             "task_type": t.task_type,
@@ -2455,12 +2456,12 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([
-        "Date", "Client", "Task", "Role", "Task Type", "Period", "Hours", "Tracked Hours", "Notes", "Tracked by", "Pushed to Karbon",
+        "Date", "Client", "Template", "Task", "Role", "Task Type", "Period", "Hours", "Tracked Hours", "Notes", "Tracked by", "Pushed to Karbon",
         "Bank Account", "Metric", "Start Count", "End Count", "Change",
     ])
     for r in rows:
         writer.writerow([
-            r["date"], r["client"], r["task"], r["role"], r["task_type"], r["period"],
+            r["date"], r["client"], r["template_name"] or "", r["task"], r["role"], r["task_type"], r["period"],
             r["hours"], r["tracked_hours"] if r["tracked_hours"] is not None else "",
             r["note"], r["tracked_by"], "Yes" if r["pushed"] else "No",
             r["bank_account"], r["metric"],
