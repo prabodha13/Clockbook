@@ -3455,8 +3455,20 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   }, [currentUser?.id, isAdmin, forceSelfOnly, selectableMembers, memberId]);
 
   const dates = useMemo(() => {
-    const end = new Date();
-    const start = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    const today = new Date();
+    const end = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    if (range === "last_week") {
+      const day = end.getDay();
+      const daysSinceMonday = (day + 6) % 7;
+      const startOfThisWeek = new Date(end);
+      startOfThisWeek.setDate(end.getDate() - daysSinceMonday);
+      const lastWeekEnd = new Date(startOfThisWeek);
+      lastWeekEnd.setDate(startOfThisWeek.getDate() - 1);
+      const lastWeekStart = new Date(lastWeekEnd);
+      lastWeekStart.setDate(lastWeekEnd.getDate() - 6);
+      return { from: toDateKey(lastWeekStart), to: toDateKey(lastWeekEnd) };
+    }
+    const start = new Date(end);
     start.setDate(start.getDate() - (Number(range) - 1));
     return { from: toDateKey(start), to: toDateKey(end) };
   }, [range]);
@@ -3564,26 +3576,32 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
           <div className="cb-page-title cb-serif" style={{ fontSize: 30, lineHeight: 1.05 }}>Insights</div>
           <div className="cb-page-sub" style={{ marginTop: 5 }}>A personal view of how you spend your time</div>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {isAdmin && !forceSelfOnly && (
+        <div>
+          <div style={{ display: "grid", gridTemplateColumns: isAdmin && !forceSelfOnly ? "250px 160px auto" : "160px auto", gap: 10, alignItems: "end", justifyContent: "end" }}>
+            {isAdmin && !forceSelfOnly && (
+              <div>
+                <div className="cb-label">Person</div>
+                <select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)} style={{ width: "100%" }}>
+                  {selectableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === currentUser.id ? " (you)" : ""}</option>)}
+                </select>
+              </div>
+            )}
             <div>
-              <div className="cb-label">Person</div>
-              <select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)} style={{ minWidth: 250 }}>
-                {selectableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === currentUser.id ? " (you)" : ""}</option>)}
+              <div className="cb-label">Period</div>
+              <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
+                <option value="last_week">Last week</option>
+                <option value="30">Last 30 days</option>
+                <option value="90">Last 3 months</option>
+                <option value="180">Last 6 months</option>
+                <option value="365">Last 12 months</option>
               </select>
-              <div className="cb-hint" style={{ marginTop: 4 }}>Admins can view insights for staff in their scope.</div>
             </div>
-          )}
-          <div>
-            <div className="cb-label">Period</div>
-            <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ minWidth: 150 }}>
-              <option value="30">Last 30 days</option>
-              <option value="90">Last 3 months</option>
-              <option value="180">Last 6 months</option>
-              <option value="365">Last 12 months</option>
-            </select>
+            <div>
+              <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
+              <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />Refresh</button>
+            </div>
           </div>
-          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36 }}><RotateCcw size={13} />Refresh</button>
+          {isAdmin && !forceSelfOnly && <div className="cb-hint" style={{ marginTop: 4, textAlign: "right" }}>Admins can view insights for staff in their scope.</div>}
         </div>
       </div>
 
