@@ -3486,12 +3486,22 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
   useEffect(() => { load(); }, [load]);
 
-  const changeText = (value) => {
-    if (value == null) return "No prior comparison";
-    if (Math.abs(value) < 0.05) return "No change vs previous period";
-    return `${value > 0 ? "↑" : "↓"} ${Math.abs(value).toFixed(0)}% vs previous period`;
+  const comparisonInfo = (currentValue, previousValue, changeValue) => {
+    const current = Number(currentValue || 0);
+    const previous = Number(previousValue || 0);
+    if (previous <= 0 && current <= 0) return { compact: "—", detail: "No activity in either period", color: "var(--muted)" };
+    if (previous <= 0 && current > 0) return { compact: "New", detail: `New · +${formatHM(current)}`, color: "#168A45" };
+    const change = Number(changeValue ?? (((current - previous) / previous) * 100));
+    if (Math.abs(change) < 0.05) return { compact: "—", detail: "No change", color: "var(--muted)" };
+    const direction = change > 0 ? "↑" : "↓";
+    const color = change > 0 ? "#168A45" : "#C23B3B";
+    const delta = Math.abs(current - previous);
+    if (change >= 200) {
+      const multiple = current / previous;
+      return { compact: `${multiple.toFixed(1)}×`, detail: `+${formatHM(delta)} · ${multiple.toFixed(1)}× previous period`, color };
+    }
+    return { compact: `${direction} ${Math.abs(change).toFixed(0)}%`, detail: `${direction} ${Math.abs(change).toFixed(0)}% vs previous period`, color };
   };
-  const changeColor = (value) => value == null || Math.abs(value) < 0.05 ? "var(--muted)" : value > 0 ? "#168A45" : "#C23B3B";
 
   const totalMix = (data?.work_mix || []).reduce((sum, row) => sum + Number(row.seconds || 0), 0);
   const mixPalette = ["#2563D9", "#4EB68A", "#6E51C6", "#F28A49", "#8A98A8", "#3CA4D8", "#D06A8B", "#91A34E"];
@@ -3555,19 +3565,25 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   const cardStyle = { border: "1px solid #DDE4EC", borderRadius: 10, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.02)" };
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
   const metricCards = data ? [
-    { label: "Tracked time", seconds: data.summary.tracked_seconds, change: data.summary.changes.tracked, icon: Clock, bg: "#EAF2FF", fg: "#2467D7" },
-    { label: "Focused work", seconds: data.summary.focused_seconds, change: data.summary.changes.focused, icon: ClipboardList, bg: "#EAF8EF", fg: "#168A45" },
-    { label: "Meeting time", seconds: data.summary.meeting_seconds, change: data.summary.changes.meeting, icon: Users, bg: "#EEF3FF", fg: "#2867D5" },
-    { label: "Support received", seconds: data.summary.support_received_seconds, change: data.summary.changes.support_received, icon: HeartHandshake, bg: "#ECFAF3", fg: "#169B62" },
-    { label: "Support given", seconds: data.summary.support_given_seconds, change: data.summary.changes.support_given, icon: HeartHandshake, bg: "#EDF9F1", fg: "#168A45" },
+    { label: "Tracked time", seconds: data.summary.tracked_seconds, previousSeconds: data.summary.previous?.tracked_seconds, change: data.summary.changes.tracked, icon: Clock, bg: "#EAF2FF", fg: "#2467D7" },
+    { label: "Focused work", seconds: data.summary.focused_seconds, previousSeconds: data.summary.previous?.focused_seconds, change: data.summary.changes.focused, icon: ClipboardList, bg: "#EAF8EF", fg: "#168A45" },
+    { label: "Meeting time", seconds: data.summary.meeting_seconds, previousSeconds: data.summary.previous?.meeting_seconds, change: data.summary.changes.meeting, icon: Users, bg: "#EEF3FF", fg: "#2867D5" },
+    { label: "Support received", seconds: data.summary.support_received_seconds, previousSeconds: data.summary.previous?.support_received_seconds, change: data.summary.changes.support_received, icon: HeartHandshake, bg: "#ECFAF3", fg: "#169B62" },
+    { label: "Support given", seconds: data.summary.support_given_seconds, previousSeconds: data.summary.previous?.support_given_seconds, change: data.summary.changes.support_given, icon: HeartHandshake, bg: "#EDF9F1", fg: "#168A45" },
   ] : [];
 
+  const supportCurrent = Number(data?.summary?.support_received_seconds || 0);
+  const supportPrevious = Number(data?.summary?.previous?.support_received_seconds || 0);
   const supportChange = data?.summary?.changes?.support_received;
-  const supportCallout = supportChange == null
-    ? "There is not enough previous-period data yet to compare support received."
-    : Math.abs(supportChange) < 0.05
-      ? "Support received is broadly unchanged compared with the previous period."
-      : `Support received ${supportChange < 0 ? "reduced" : "increased"} by ${Math.abs(supportChange).toFixed(0)}% compared with the previous period.`;
+  const supportCallout = supportPrevious <= 0 && supportCurrent <= 0
+    ? "No support received was recorded in either period."
+    : supportPrevious <= 0 && supportCurrent > 0
+      ? `Support received is new in this period (${formatHM(supportCurrent)}).`
+      : Math.abs(Number(supportChange || 0)) < 0.05
+        ? "Support received is broadly unchanged compared with the previous period."
+        : Number(supportChange) >= 200
+          ? `Support received increased by ${formatHM(Math.max(0, supportCurrent - supportPrevious))} (${(supportCurrent / supportPrevious).toFixed(1)}× the previous period).`
+          : `Support received ${supportChange < 0 ? "reduced" : "increased"} by ${Math.abs(supportChange).toFixed(0)}% compared with the previous period.`;
 
   return (
     <div style={{ maxWidth: 1460, margin: "0 auto" }}>
@@ -3610,16 +3626,18 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
       {data && (
         <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, marginBottom: 14 }}>
-            {metricCards.map(({ label, seconds, change, icon: Icon, bg, fg }) => (
+            {metricCards.map(({ label, seconds, previousSeconds, change, icon: Icon, bg, fg }) => {
+              const comparison = comparisonInfo(seconds, previousSeconds, change);
+              return (
               <div key={label} style={{ ...cardStyle, padding: "14px 15px", display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
                 <div style={{ width: 40, height: 40, borderRadius: 999, background: bg, color: fg, display: "grid", placeItems: "center", flex: "0 0 auto" }}><Icon size={20}/></div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-soft)" }}>{label}</div>
                   <div className="cb-serif" style={{ fontSize: 23, fontWeight: 700, lineHeight: 1.2, marginTop: 2 }}>{formatHM(seconds || 0)}</div>
-                  <div style={{ fontSize: 10.5, marginTop: 3, color: changeColor(change), whiteSpace: "nowrap" }}>{changeText(change)}</div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, color: comparison.color, whiteSpace: "nowrap" }}>{comparison.detail}</div>
                 </div>
               </div>
-            ))}
+            );})}
           </div>
 
           <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.45fr) minmax(330px, 1fr)", gap: 14, marginBottom: 14 }}>
@@ -3662,7 +3680,10 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
             <div style={panelStyle}>
               <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Compared with previous period</div>
               <div style={{ display: "grid", gap: 9 }}>
-                {metricCards.map((m) => <div key={m.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11.5, borderBottom: "1px solid #EEF1F4", paddingBottom: 7 }}><span>{m.label}</span><strong style={{ color: changeColor(m.change) }}>{m.change == null ? "—" : `${m.change > 0 ? "↑" : m.change < 0 ? "↓" : ""} ${Math.abs(m.change).toFixed(0)}%`}</strong></div>)}
+                {metricCards.map((m) => {
+                  const comparison = comparisonInfo(m.seconds, m.previousSeconds, m.change);
+                  return <div key={m.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11.5, borderBottom: "1px solid #EEF1F4", paddingBottom: 7 }}><span>{m.label}</span><strong style={{ color: comparison.color, whiteSpace: "nowrap" }}>{comparison.compact}</strong></div>;
+                })}
               </div>
             </div>
 
@@ -3671,7 +3692,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               <div style={{ display: "grid", gap: 9 }}>
                 {(data.top_clients || []).map((row) => {
                   const max = Math.max(1, ...(data.top_clients || []).map((r) => r.seconds || 0));
-                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(90px, 1fr) 120px auto", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / max) * 100)}%`, background: "#67AEEF", borderRadius: 99 }}/></div><span className="cb-mono">{formatHM(row.seconds)}</span></div>;
+                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 120px 58px", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / max) * 100)}%`, background: "#67AEEF", borderRadius: 99 }}/></div><span className="cb-mono" style={{ textAlign: "right", whiteSpace: "nowrap" }}>{formatHM(row.seconds)}</span></div>;
                 })}
                 {(data.top_clients || []).length === 0 && <div className="cb-empty">No client work.</div>}
               </div>
@@ -3682,7 +3703,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               <div style={{ display: "grid", gap: 9 }}>
                 {(data.task_type_mix || []).slice(0, 6).map((row) => {
                   const total = (data.task_type_mix || []).reduce((sum, r) => sum + Number(r.seconds || 0), 0) || 1;
-                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) 100px auto", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / total) * 100)}%`, background: "#2F86D8", borderRadius: 99 }}/></div><strong>{Math.round((row.seconds / total) * 100)}%</strong></div>;
+                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 100px 42px", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / total) * 100)}%`, background: "#2F86D8", borderRadius: 99 }}/></div><strong style={{ textAlign: "right", whiteSpace: "nowrap" }}>{Math.round((row.seconds / total) * 100)}%</strong></div>;
                 })}
                 {(data.task_type_mix || []).length === 0 && <div className="cb-empty">No task-type data.</div>}
               </div>
