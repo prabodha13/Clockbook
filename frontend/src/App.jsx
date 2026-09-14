@@ -330,6 +330,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     { id: "templates", label: "Templates", icon: ListTree },
     { id: "clients", label: "Clients", icon: Building2 },
     { id: "calendar", label: "Calendar", icon: CalendarIcon },
+    { id: "insights", label: "Insights", icon: LayoutDashboard },
     { id: "export", label: "Export", icon: FileSpreadsheet },
     { id: "staff", label: "Staff", icon: Users },
     ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
@@ -596,6 +597,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
               tracks_number_label: tt.tracks_number_label || "",
               source_calendar_event_id: row.suggestion.id,
               source_template_name: tpl ? tpl.name : null,
+              source_template_field: tpl ? tpl.field : null,
             });
           }
         }
@@ -1453,6 +1455,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             period_start: periodByTaskId[t.id]?.start || null,
             period_end: periodByTaskId[t.id]?.end || null,
             source_template_name: selectedTemplate.name,
+            source_template_field: selectedTemplate.field,
           };
         });
       } else {
@@ -2234,7 +2237,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     <div className="cb-tmpl-card">
       {isEditingHeader ? (
         <div className="cb-tmpl-head" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
+          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field / category" autoFocus />
           <input className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
           <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={renaming} onClick={saveHeader}>Save</button>
           <button className="cb-btn cb-btn-sm cb-btn-ghost" disabled={renaming} onClick={() => setIsEditingHeader(false)}>Cancel</button>
@@ -2598,12 +2601,12 @@ function SettingsView({
           <div className="cb-tmpl-head">
             <div>
               <div className="cb-tmpl-field">Audit</div>
-              <div className="cb-tmpl-name">Inactivity audit recording</div>
+              <div className="cb-tmpl-name">Audit recording</div>
             </div>
           </div>
           <div style={{ padding: 16 }}>
             <div className="cb-hint" style={{ marginBottom: 10 }}>
-              Records supported screen-lock and sleep/inactive-browser periods for the super-admin inactivity audit report. Turning this off stops new audit events from being recorded.
+              Records supported screen-lock and sleep/inactive-browser periods for the super-admin Audit report. Turning this off stops new audit events from being recorded.
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 13.5, fontWeight: 600 }}>
@@ -2697,8 +2700,8 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
         <form className="cb-tmpl-card" onSubmit={submitNew} style={{ padding: 16 }}>
           <div className="cb-field-row">
             <div className="cb-field">
-              <label className="cb-label">Field</label>
-              <input className="cb-input" placeholder="e.g. Payroll" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
+              <label className="cb-label">Field / category</label>
+              <input className="cb-input" placeholder="e.g. Tax, Bookkeeping, Payroll" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
             </div>
             <div className="cb-field">
               <label className="cb-label">Template name</label>
@@ -3410,6 +3413,297 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
         members={members} currentUser={currentUser}
         onClose={() => setEditor(null)} onSaved={load} onDeleted={load}
       />}
+    </div>
+  );
+}
+
+
+function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
+  const toDateKey = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const [range, setRange] = useState("90");
+  const [memberId, setMemberId] = useState(currentUser?.id || "");
+  const [data, setData] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (forceSelfOnly && currentUser?.id) setMemberId(currentUser.id);
+  }, [forceSelfOnly, currentUser?.id]);
+
+  const isSuperAdmin = currentUser?.role === "super_admin";
+  const selectableMembers = useMemo(() => {
+    if (!isAdmin || forceSelfOnly) return [];
+    if (isSuperAdmin) return [...members].sort((a, b) => a.name.localeCompare(b.name));
+    const visible = members.filter((m) => m.role !== "super_admin" && (!currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+    const byId = new Map([[currentUser.id, currentUser], ...visible.map((m) => [m.id, m])]);
+    return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [members, isAdmin, forceSelfOnly, isSuperAdmin, currentUser?.pod_id]);
+
+  useEffect(() => {
+    if (!currentUser?.id) return;
+    if (!isAdmin || forceSelfOnly) {
+      setMemberId(currentUser.id);
+      return;
+    }
+    if (!memberId || (memberId !== currentUser.id && !selectableMembers.some((m) => m.id === memberId))) {
+      setMemberId(currentUser.id);
+    }
+  }, [currentUser?.id, isAdmin, forceSelfOnly, selectableMembers, memberId]);
+
+  const dates = useMemo(() => {
+    const end = new Date();
+    const start = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+    start.setDate(start.getDate() - (Number(range) - 1));
+    return { from: toDateKey(start), to: toDateKey(end) };
+  }, [range]);
+
+  const load = useCallback(async () => {
+    if (!memberId) return;
+    setError("");
+    try {
+      setData(await api.getInsights(memberId, dates.from, dates.to));
+    } catch (err) {
+      setError(err.message || "Could not load insights");
+      setData(null);
+    }
+  }, [memberId, dates.from, dates.to]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const changeText = (value) => {
+    if (value == null) return "No prior comparison";
+    if (Math.abs(value) < 0.05) return "No change vs previous period";
+    return `${value > 0 ? "↑" : "↓"} ${Math.abs(value).toFixed(0)}% vs previous period`;
+  };
+  const changeColor = (value) => value == null || Math.abs(value) < 0.05 ? "var(--muted)" : value > 0 ? "#168A45" : "#C23B3B";
+
+  const totalMix = (data?.work_mix || []).reduce((sum, row) => sum + Number(row.seconds || 0), 0);
+  const mixPalette = ["#2563D9", "#4EB68A", "#6E51C6", "#F28A49", "#8A98A8", "#3CA4D8", "#D06A8B", "#91A34E"];
+  const donutBackground = useMemo(() => {
+    if (!data?.work_mix?.length || totalMix <= 0) return "#edf1f5";
+    let at = 0;
+    const stops = data.work_mix.map((row, i) => {
+      const start = at;
+      at += (Number(row.seconds || 0) / totalMix) * 100;
+      return `${mixPalette[i % mixPalette.length]} ${start}% ${at}%`;
+    });
+    return `conic-gradient(${stops.join(", ")})`;
+  }, [data, totalMix]);
+
+  function SupportChart({ rows = [] }) {
+    if (!rows.length) return <div className="cb-empty">No support activity in this period.</div>;
+    const width = 720, height = 210, padL = 38, padR = 10, padT = 12, padB = 34;
+    const maxValue = Math.max(1, ...rows.flatMap((r) => [r.received_seconds || 0, r.helped_seconds || 0]));
+    const plotH = height - padT - padB;
+    const plotW = width - padL - padR;
+    const groupW = plotW / Math.max(rows.length, 1);
+    const barW = Math.min(18, Math.max(5, groupW * 0.28));
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 230, display: "block" }} role="img" aria-label="Support received and support given over time">
+        {[0, .25, .5, .75, 1].map((f) => {
+          const yy = padT + plotH - plotH * f;
+          return <g key={f}><line x1={padL} x2={width - padR} y1={yy} y2={yy} stroke="#E7ECF2" strokeWidth="1"/><text x={2} y={yy + 4} fontSize="10" fill="#6C7787">{formatHM(maxValue * f)}</text></g>;
+        })}
+        {rows.map((row, i) => {
+          const cx = padL + groupW * i + groupW / 2;
+          const receivedY = y(row.received_seconds);
+          const givenY = y(row.helped_seconds);
+          return <g key={row.week_start}>
+            <rect x={cx - barW - 2} y={receivedY} width={barW} height={padT + plotH - receivedY} rx="3" fill="#2867D5"/>
+            <rect x={cx + 2} y={givenY} width={barW} height={padT + plotH - givenY} rx="3" fill="#67AEEF"/>
+            <text x={cx} y={height - 10} textAnchor="middle" fontSize="9.5" fill="#6C7787">{new Date(`${row.week_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>
+          </g>;
+        })}
+      </svg>
+    );
+  }
+
+  function TrendChart({ rows = [] }) {
+    if (!rows.length) return <div className="cb-empty">No tracked work in this period.</div>;
+    const width = 300, height = 160, padL = 34, padR = 10, padT = 14, padB = 28;
+    const maxValue = Math.max(1, ...rows.map((r) => Number(r.seconds || 0)));
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    const points = rows.map((r, i) => `${x(i)},${y(r.seconds)}`).join(" ");
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 170, display: "block" }} role="img" aria-label="Tracked time over time">
+        {[0, .5, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="1" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
+        <polyline fill="none" stroke="#2467D7" strokeWidth="2.5" points={points}/>
+        {rows.map((r, i) => <g key={r.period_start}><circle cx={x(i)} cy={y(r.seconds)} r="3.5" fill="#2467D7"/><text x={x(i)} y={height-8} textAnchor="middle" fontSize="8.5" fill="#718096">{new Date(`${r.period_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: range === "365" ? undefined : "numeric" })}</text></g>)}
+      </svg>
+    );
+  }
+
+  const cardStyle = { border: "1px solid #DDE4EC", borderRadius: 10, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.02)" };
+  const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
+  const metricCards = data ? [
+    { label: "Tracked time", seconds: data.summary.tracked_seconds, change: data.summary.changes.tracked, icon: Clock, bg: "#EAF2FF", fg: "#2467D7" },
+    { label: "Focused work", seconds: data.summary.focused_seconds, change: data.summary.changes.focused, icon: ClipboardList, bg: "#EAF8EF", fg: "#168A45" },
+    { label: "Meeting time", seconds: data.summary.meeting_seconds, change: data.summary.changes.meeting, icon: Users, bg: "#EEF3FF", fg: "#2867D5" },
+    { label: "Support received", seconds: data.summary.support_received_seconds, change: data.summary.changes.support_received, icon: HeartHandshake, bg: "#ECFAF3", fg: "#169B62" },
+    { label: "Support given", seconds: data.summary.support_given_seconds, change: data.summary.changes.support_given, icon: HeartHandshake, bg: "#EDF9F1", fg: "#168A45" },
+  ] : [];
+
+  const supportChange = data?.summary?.changes?.support_received;
+  const supportCallout = supportChange == null
+    ? "There is not enough previous-period data yet to compare support received."
+    : Math.abs(supportChange) < 0.05
+      ? "Support received is broadly unchanged compared with the previous period."
+      : `Support received ${supportChange < 0 ? "reduced" : "increased"} by ${Math.abs(supportChange).toFixed(0)}% compared with the previous period.`;
+
+  return (
+    <div style={{ maxWidth: 1460, margin: "0 auto" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 20, alignItems: "flex-start", marginBottom: 18 }}>
+        <div>
+          <div className="cb-page-title cb-serif" style={{ fontSize: 30, lineHeight: 1.05 }}>Insights</div>
+          <div className="cb-page-sub" style={{ marginTop: 5 }}>A personal view of how you spend your time</div>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", justifyContent: "flex-end" }}>
+          {isAdmin && !forceSelfOnly && (
+            <div>
+              <div className="cb-label">Person</div>
+              <select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)} style={{ minWidth: 250 }}>
+                {selectableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === currentUser.id ? " (you)" : ""}</option>)}
+              </select>
+              <div className="cb-hint" style={{ marginTop: 4 }}>Admins can view insights for staff in their scope.</div>
+            </div>
+          )}
+          <div>
+            <div className="cb-label">Period</div>
+            <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ minWidth: 150 }}>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 3 months</option>
+              <option value="180">Last 6 months</option>
+              <option value="365">Last 12 months</option>
+            </select>
+          </div>
+          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36 }}><RotateCcw size={13} />Refresh</button>
+        </div>
+      </div>
+
+      {error && <div className="cb-error" style={{ marginBottom: 12 }}>{error}</div>}
+      {!data && !error && <TableSkeleton rows={6} />}
+      {data && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, marginBottom: 14 }}>
+            {metricCards.map(({ label, seconds, change, icon: Icon, bg, fg }) => (
+              <div key={label} style={{ ...cardStyle, padding: "14px 15px", display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 999, background: bg, color: fg, display: "grid", placeItems: "center", flex: "0 0 auto" }}><Icon size={20}/></div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-soft)" }}>{label}</div>
+                  <div className="cb-serif" style={{ fontSize: 23, fontWeight: 700, lineHeight: 1.2, marginTop: 2 }}>{formatHM(seconds || 0)}</div>
+                  <div style={{ fontSize: 10.5, marginTop: 3, color: changeColor(change), whiteSpace: "nowrap" }}>{changeText(change)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.45fr) minmax(330px, 1fr)", gap: 14, marginBottom: 14 }}>
+            <div style={panelStyle}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
+                <div className="cb-group-title" style={{ fontSize: 15 }}>Support over time</div>
+                <div style={{ display: "flex", gap: 12, fontSize: 10.5, color: "var(--ink-soft)" }}>
+                  <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: "#2867D5", marginRight: 5 }}/>Support received</span>
+                  <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: "#67AEEF", marginRight: 5 }}/>Support given</span>
+                </div>
+              </div>
+              <SupportChart rows={data.support_trend || []}/>
+            </div>
+
+            <div style={panelStyle}>
+              <div className="cb-group-title" style={{ fontSize: 15, marginBottom: 12 }}>Where my time went</div>
+              <div style={{ display: "grid", gridTemplateColumns: "190px 1fr", alignItems: "center", gap: 14 }}>
+                <div style={{ width: 170, height: 170, borderRadius: "50%", background: donutBackground, position: "relative", margin: "0 auto" }}>
+                  <div style={{ position: "absolute", inset: 34, background: "#fff", borderRadius: "50%", display: "grid", placeItems: "center", textAlign: "center", boxShadow: "inset 0 0 0 1px #EEF2F6" }}>
+                    <div><div className="cb-serif" style={{ fontWeight: 700, fontSize: 17 }}>{formatHM(data.summary.tracked_seconds || 0)}</div><div style={{ fontSize: 10, color: "var(--muted)" }}>Total</div></div>
+                  </div>
+                </div>
+                <div style={{ display: "grid", gap: 9 }}>
+                  {(data.work_mix || []).map((row, i) => <div key={row.label} style={{ display: "grid", gridTemplateColumns: "12px 1fr auto", gap: 8, alignItems: "center", fontSize: 11.5 }}>
+                    <span style={{ width: 10, height: 10, borderRadius: 999, background: mixPalette[i % mixPalette.length] }}/><span>{row.label}</span><strong>{totalMix > 0 ? `${Math.round((row.seconds / totalMix) * 100)}%` : "0%"}</strong>
+                  </div>)}
+                  {(data.work_mix || []).length === 0 && <div className="cb-empty">No completed work in this period.</div>}
+                </div>
+              </div>
+              <div className="cb-hint" style={{ marginTop: 10 }}>Broad categories come from the template Field (for example Tax, Bookkeeping or Payroll).</div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1.05fr .92fr 1.2fr 1.1fr", gap: 14, marginBottom: 14 }}>
+            <div style={panelStyle}>
+              <div className="cb-group-title" style={{ fontSize: 14 }}>Tracked time over time</div>
+              <TrendChart rows={data.tracked_trend || []}/>
+            </div>
+
+            <div style={panelStyle}>
+              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Compared with previous period</div>
+              <div style={{ display: "grid", gap: 9 }}>
+                {metricCards.map((m) => <div key={m.label} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11.5, borderBottom: "1px solid #EEF1F4", paddingBottom: 7 }}><span>{m.label}</span><strong style={{ color: changeColor(m.change) }}>{m.change == null ? "—" : `${m.change > 0 ? "↑" : m.change < 0 ? "↓" : ""} ${Math.abs(m.change).toFixed(0)}%`}</strong></div>)}
+              </div>
+            </div>
+
+            <div style={panelStyle}>
+              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Top clients</div>
+              <div style={{ display: "grid", gap: 9 }}>
+                {(data.top_clients || []).map((row) => {
+                  const max = Math.max(1, ...(data.top_clients || []).map((r) => r.seconds || 0));
+                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(90px, 1fr) 120px auto", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / max) * 100)}%`, background: "#67AEEF", borderRadius: 99 }}/></div><span className="cb-mono">{formatHM(row.seconds)}</span></div>;
+                })}
+                {(data.top_clients || []).length === 0 && <div className="cb-empty">No client work.</div>}
+              </div>
+            </div>
+
+            <div style={panelStyle}>
+              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Task type mix</div>
+              <div style={{ display: "grid", gap: 9 }}>
+                {(data.task_type_mix || []).slice(0, 6).map((row) => {
+                  const total = (data.task_type_mix || []).reduce((sum, r) => sum + Number(r.seconds || 0), 0) || 1;
+                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(100px, 1fr) 100px auto", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / total) * 100)}%`, background: "#2F86D8", borderRadius: 99 }}/></div><strong>{Math.round((row.seconds / total) * 100)}%</strong></div>;
+                })}
+                {(data.task_type_mix || []).length === 0 && <div className="cb-empty">No task-type data.</div>}
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: "grid", gridTemplateColumns: ".9fr .7fr 1.08fr 1.75fr", gap: 14, marginBottom: 14 }}>
+            <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Average task duration</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{formatHM(data.summary.average_task_seconds || 0)}</div></div>
+            <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Completed tasks</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{data.summary.completed_tasks}</div></div>
+            <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Tracking consistency</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{Math.round(data.tracking_consistency || 0)}%</div><div className="cb-hint">Tracked time on {data.tracked_working_days || 0} of {data.working_days || 0} working days</div></div>
+            <div style={{ ...panelStyle, padding: "13px 15px", background: "#F0FAF5", borderColor: "#D7EFE2" }}><div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Support trend</div><div className="cb-hint" style={{ color: "#46675A" }}>{supportCallout}</div></div>
+          </div>
+
+          {(data.delegation_candidates || []).length > 0 && (
+            <div style={{ ...panelStyle, marginBottom: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 11 }}>
+                <div>
+                  <div className="cb-group-title" style={{ fontSize: 14 }}>Delegation opportunities <span style={{ fontWeight: 500, color: "var(--muted)" }}>(Admin only)</span></div>
+                  <div className="cb-hint" style={{ marginTop: 3 }}>Tasks you worked on that have also been completed by staff. This is informational only; you decide whether delegation was appropriate.</div>
+                </div>
+                <div className="cb-hint" style={{ maxWidth: 330, textAlign: "right" }}>Based on historical task evidence. No delegation decision is stored.</div>
+              </div>
+              <div className="cb-table-wrap">
+                <table className="cb-table">
+                  <thead><tr><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Also completed by</th><th>Insight</th></tr></thead>
+                  <tbody>{data.delegation_candidates.map((row) => <tr key={row.task_key}>
+                    <td style={{ fontWeight: 650 }}>{row.template_name || "—"}</td>
+                    <td>{row.task}</td>
+                    <td>{row.task_type || "—"}</td>
+                    <td className="num cb-mono">{formatHM(row.seconds)}</td>
+                    <td>{row.staff_names.join(", ")}</td>
+                    <td><span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 6, background: "#EEF5FF", color: "#205EBA", fontSize: 10.5, fontWeight: 650 }}>Potential delegation</span></td>
+                  </tr>)}</tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -4436,8 +4730,8 @@ function InactivityAuditView({ members }) {
   return (
     <div>
       <div style={{ marginBottom: 4 }}>
-        <div className="cb-page-title cb-serif">Inactivity audit</div>
-        <div className="cb-page-sub">Super-admin audit of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
+        <div className="cb-page-title cb-serif">Audit</div>
+        <div className="cb-page-sub">Super-admin review of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 14, flexWrap: "nowrap" }}>
           <div style={{ flex: "0 0 150px" }}>
@@ -4469,13 +4763,13 @@ function InactivityAuditView({ members }) {
           <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", marginTop: 20, flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
         </div>
       </div>
-      {enabled === false && <div className="cb-notice">Inactivity audit recording is currently off. A super admin can turn it on from Settings.</div>}
-      {error && <div className="cb-empty">Could not load the inactivity audit.</div>}
+      {enabled === false && <div className="cb-notice">Audit recording is currently off. A super admin can turn it on from Settings.</div>}
+      {error && <div className="cb-empty">Could not load the audit.</div>}
       {enabled && events === null && <TableSkeleton rows={4} />}
       {enabled && events !== null && (
         <>
           <div className="cb-group-head" style={{ marginTop: 18 }}><div className="cb-group-title">Summary</div><div className="cb-group-count">{summary.length}</div></div>
-          {summary.length === 0 ? <div className="cb-empty">No inactivity events were recorded in this period.</div> : (
+          {summary.length === 0 ? <div className="cb-empty">No audit events were recorded in this period.</div> : (
             <div className="cb-table-wrap">
               <table className="cb-table"><thead><tr><th>Person</th><th className="num">Total detected</th><th className="num">Periods</th><th className="num">Longest</th></tr></thead>
               <tbody>{summary.map((r) => <tr key={r.member_id}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.seconds)}</td><td className="num cb-mono">{r.count}</td><td className="num cb-mono">{formatHM(r.longest)}</td></tr>)}</tbody></table>
@@ -4507,7 +4801,7 @@ function SuperAdminReportsView({ members }) {
     <div>
       <div className="cb-tabs cb-tabs-plain" style={{ marginBottom: 16, width: "fit-content" }}>
         <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
-        <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Inactivity audit</button>
+        <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Audit</button>
       </div>
       {mode === "help" ? <HelpReportView /> : <InactivityAuditView members={members} />}
     </div>
@@ -6396,6 +6690,12 @@ export default function App() {
             )}
             {view === "calendar" && (
               <CalendarPage onConnectCalendar={connectGoogleCalendar} onQuickMeeting={() => setShowQuickMeeting(true)} members={members} currentUser={effectiveCurrentUser} />
+            )}
+            {view === "insights" && (
+              <InsightsView
+                members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
+              />
             )}
             {view === "export" && (
               <ExportView

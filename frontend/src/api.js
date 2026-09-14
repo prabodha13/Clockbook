@@ -113,6 +113,13 @@ export const api = {
   deleteTemplateTask: (templateId, taskId) =>
     request(`/templates/${templateId}/tasks/${taskId}`, { method: "DELETE" }),
 
+  getInsights: (memberId = "", dateFrom = "", dateTo = "") => {
+    const q = new URLSearchParams();
+    if (memberId) q.set("member_id", memberId);
+    if (dateFrom) q.set("date_from", dateFrom);
+    if (dateTo) q.set("date_to", dateTo);
+    return request(`/insights${q.toString() ? `?${q.toString()}` : ""}`);
+  },
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
   startTask: (id, startCount, startAt) => {
