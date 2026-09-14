@@ -3490,6 +3490,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   const [memberId, setMemberId] = useState(currentUser?.id || "");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
   const [capacityView, setCapacityView] = useState("person");
 
   useEffect(() => {
@@ -3551,11 +3552,14 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   const load = useCallback(async () => {
     if (!memberId) return;
     setError("");
+    setIsLoading(true);
     try {
       setData(await api.getInsights(memberId, dates.from, dates.to));
     } catch (err) {
       setError(err.message || "Could not load insights");
       setData(null);
+    } finally {
+      setIsLoading(false);
     }
   }, [memberId, dates.from, dates.to]);
 
@@ -3759,7 +3763,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
             </div>
             <div>
               <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
-              <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />Refresh</button>
+              <button className="cb-btn cb-btn-sm" onClick={load} disabled={isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{isLoading ? "Refreshing…" : "Refresh"}</button>
             </div>
           </div>
           {range === "custom" && (
@@ -3893,9 +3897,12 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
                         <span className="cb-hint">{capacityLabel}</span><strong>{formatHM(capacityData.capacity_seconds || 0)}</strong>
                       </div>
                       {capacityView === "person" && (
-                        <div className="cb-hint" style={{ marginTop: 4 }}>
+                        <div
+                          className="cb-hint"
+                          style={{ marginTop: 4 }}
+                          title={capacityData.capacity_effective_from ? `Capacity is calculated from ${formatDate(capacityData.capacity_effective_from)}.` : undefined}
+                        >
                           Weekly capacity: {Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h
-                          {capacityData.capacity_effective_from ? ` · effective ${formatDate(capacityData.capacity_effective_from)}` : ""}
                         </div>
                       )}
                     </div>
