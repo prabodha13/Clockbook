@@ -101,8 +101,8 @@ export const api = {
   deleteTrackedMetric: (id) => request(`/tracked-metrics/${id}`, { method: "DELETE" }),
 
   getTemplates: () => request("/templates"),
-  createTemplate: (field, name) => request("/templates", { method: "POST", body: JSON.stringify({ field, name }) }),
-  updateTemplate: (id, field, name) => request(`/templates/${id}`, { method: "PATCH", body: JSON.stringify({ field, name }) }),
+  createTemplate: (field, name, category = "") => request("/templates", { method: "POST", body: JSON.stringify({ field, name, category: category || null }) }),
+  updateTemplate: (id, field, name, category = "") => request(`/templates/${id}`, { method: "PATCH", body: JSON.stringify({ field, name, category: category || null }) }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
   addTemplateTask: (templateId, task) =>
     request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify(task) }),

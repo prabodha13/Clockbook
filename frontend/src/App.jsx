@@ -598,6 +598,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
               source_calendar_event_id: row.suggestion.id,
               source_template_name: tpl ? tpl.name : null,
               source_template_field: tpl ? tpl.field : null,
+              source_template_category: tpl ? (tpl.category || null) : null,
             });
           }
         }
@@ -1147,6 +1148,18 @@ const PERIOD_TYPE_OPTIONS = [
   { value: "custom", label: "Custom range" },
 ];
 const GENERIC_PERIOD_TYPE_OPTIONS = PERIOD_TYPE_OPTIONS;
+const TEMPLATE_CATEGORY_OPTIONS = [
+  "Tax",
+  "Bookkeeping",
+  "Payroll",
+  "Year-End Accounts",
+  "Company Secretarial / CRO",
+  "Onboarding",
+  "Admin",
+  "Training",
+  "Meetings",
+  "Other",
+];
 
 function isBookkeepingWork(task, template = null) {
   const haystack = [
@@ -1456,6 +1469,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             period_end: periodByTaskId[t.id]?.end || null,
             source_template_name: selectedTemplate.name,
             source_template_field: selectedTemplate.field,
+            source_template_category: selectedTemplate.category || null,
           };
         });
       } else {
@@ -2187,12 +2201,14 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
   const [isEditingHeader, setIsEditingHeader] = useState(false);
   const [editedField, setEditedField] = useState(template.field);
   const [editedName, setEditedName] = useState(template.name);
+  const [editedCategory, setEditedCategory] = useState(template.category || "");
   const [renaming, setRenaming] = useState(false);
 
   function startEditingHeader(e) {
     e.stopPropagation();
     setEditedField(template.field);
     setEditedName(template.name);
+    setEditedCategory(template.category || "");
     setIsEditingHeader(true);
   }
 
@@ -2200,13 +2216,14 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     const field = editedField.trim();
     const name = editedName.trim();
     if (!field || !name) return;
-    if (field === template.field && name === template.name) {
+    const category = editedCategory.trim();
+    if (field === template.field && name === template.name && category === (template.category || "")) {
       setIsEditingHeader(false);
       return;
     }
     setRenaming(true);
     try {
-      await onRenameTemplate(template.id, field, name);
+      await onRenameTemplate(template.id, field, name, category);
       setIsEditingHeader(false);
     } finally {
       setRenaming(false);
@@ -2237,8 +2254,12 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     <div className="cb-tmpl-card">
       {isEditingHeader ? (
         <div className="cb-tmpl-head" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field / category" autoFocus />
+          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
           <input className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
+          <select className="cb-select" style={{ width: 210 }} value={editedCategory} onChange={(e) => setEditedCategory(e.target.value)}>
+            <option value="">No main category (use task type)</option>
+            {TEMPLATE_CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+          </select>
           <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={renaming} onClick={saveHeader}>Save</button>
           <button className="cb-btn cb-btn-sm cb-btn-ghost" disabled={renaming} onClick={() => setIsEditingHeader(false)}>Cancel</button>
         </div>
@@ -2258,6 +2279,9 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
               )}
             </div>
             <div className="cb-tmpl-name">{template.name}</div>
+            <div style={{ marginTop: 4, fontSize: 12, color: "var(--ink-soft)" }}>
+              Main category: <span style={{ fontWeight: 600 }}>{template.category || "Task type fallback"}</span>
+            </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <span style={{ fontSize: 12, color: "var(--ink-soft)" }}>{template.tasks.length} task{template.tasks.length === 1 ? "" : "s"}</span>
@@ -2676,12 +2700,13 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
   const [showNew, setShowNew] = useState(false);
   const [field, setField] = useState("");
   const [name, setName] = useState("");
+  const [category, setCategory] = useState("");
 
   async function submitNew(e) {
     e.preventDefault();
     if (!field.trim() || !name.trim()) return;
-    await onAddTemplate(field.trim(), name.trim());
-    setField(""); setName(""); setShowNew(false);
+    await onAddTemplate(field.trim(), name.trim(), category);
+    setField(""); setName(""); setCategory(""); setShowNew(false);
   }
 
   return (
@@ -2700,13 +2725,21 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
         <form className="cb-tmpl-card" onSubmit={submitNew} style={{ padding: 16 }}>
           <div className="cb-field-row">
             <div className="cb-field">
-              <label className="cb-label">Field / category</label>
-              <input className="cb-input" placeholder="e.g. Tax, Bookkeeping, Payroll" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
+              <label className="cb-label">Field</label>
+              <input className="cb-input" placeholder="e.g. Corporation Tax Return" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
             </div>
             <div className="cb-field">
               <label className="cb-label">Template name</label>
-              <input className="cb-input" placeholder="e.g. Fortnightly payroll run" value={name} onChange={(e) => setName(e.target.value)} />
+              <input className="cb-input" placeholder="e.g. CT1" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
+          </div>
+          <div className="cb-field" style={{ marginTop: 10 }}>
+            <label className="cb-label">Main category <span style={{ fontWeight: 400, color: "var(--ink-soft)" }}>(optional)</span></label>
+            <select className="cb-select" value={category} onChange={(e) => setCategory(e.target.value)} style={{ maxWidth: 320 }}>
+              <option value="">Use each task's Task Type</option>
+              {TEMPLATE_CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <div className="cb-hint" style={{ marginTop: 5 }}>Insights uses this category when selected. If left blank, it uses each task's Task Type.</div>
           </div>
           <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
             <button type="button" className="cb-btn cb-btn-ghost" onClick={() => setShowNew(false)}>Cancel</button>
@@ -6622,12 +6655,12 @@ export default function App() {
     setTemplates(t);
   }
 
-  async function addTemplate(field, name) {
-    await api.createTemplate(field, name);
+  async function addTemplate(field, name, category = "") {
+    await api.createTemplate(field, name, category);
     await refreshTemplates();
   }
-  async function renameTemplate(id, field, name) {
-    await api.updateTemplate(id, field, name);
+  async function renameTemplate(id, field, name, category = "") {
+    await api.updateTemplate(id, field, name, category);
     await refreshTemplates();
   }
   async function deleteTemplate(id) {
