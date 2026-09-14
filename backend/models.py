@@ -110,6 +110,7 @@ class TaskTypeOption(Base):
     __tablename__ = "task_type_options"
     id = Column(String, primary_key=True, default=lambda: gen_id("tto"))
     name = Column(String, nullable=False, unique=True)
+    is_billable = Column(Boolean, nullable=False, default=False)
 
 
 class TrackedMetric(Base):

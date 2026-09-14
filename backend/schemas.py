@@ -102,10 +102,16 @@ class TaskTypeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     name: str
+    is_billable: bool = False
 
 
 class TaskTypeCreate(BaseModel):
     name: str
+    is_billable: bool = False
+
+
+class TaskTypeBillingUpdate(BaseModel):
+    is_billable: bool
 
 
 class TrackedMetricOut(BaseModel):

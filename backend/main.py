@@ -93,6 +93,16 @@ def run_startup_migrations():
             if "code" not in existing_client_columns:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN code VARCHAR"))
 
+    if "task_type_options" in inspector.get_table_names():
+        existing_task_type_columns = {c["name"] for c in inspector.get_columns("task_type_options")}
+        with engine.begin() as conn:
+            if "is_billable" not in existing_task_type_columns:
+                conn.execute(text("ALTER TABLE task_type_options ADD COLUMN is_billable BOOLEAN DEFAULT FALSE"))
+                # Preserve the app's previous convention on upgrade, then let admins manage
+                # billing explicitly from Settings going forward.
+                conn.execute(text("UPDATE task_type_options SET is_billable = TRUE WHERE LOWER(name) LIKE 'billable:%'"))
+                conn.execute(text("UPDATE task_type_options SET is_billable = FALSE WHERE is_billable IS NULL"))
+
     if "templates" in inspector.get_table_names():
         existing_template_columns = {c["name"] for c in inspector.get_columns("templates")}
         with engine.begin() as conn:
@@ -1573,8 +1583,13 @@ def _insights_is_meeting(task: models.TaskInstance):
     return bool(task.source_calendar_event_id) or "meeting" in task_type or "meeting" in name
 
 
-def _insights_is_billable(task: models.TaskInstance):
-    return (task.task_type or "").strip().lower().startswith("billable:")
+def _insights_is_billable(task: models.TaskInstance, billing_by_type=None):
+    task_type = (task.task_type or "").strip()
+    if billing_by_type is not None and task_type in billing_by_type:
+        return bool(billing_by_type[task_type])
+    # Backwards-compatible fallback for historical/special task types that are not present
+    # in Settings. Configured task types use the explicit Settings toggle above.
+    return task_type.lower().startswith("billable:")
 
 
 def _insights_business_days(start_date, end_date):
@@ -1595,7 +1610,7 @@ def _insights_capacity_seconds(member: models.Member, start_date, end_date):
     return weekly_hours * 3600.0 * (business_days / 5.0)
 
 
-def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date):
+def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date, billing_by_type=None):
     buckets = {}
     first_week = start_date - timedelta(days=start_date.weekday())
     last_week = end_date - timedelta(days=end_date.weekday())
@@ -1622,7 +1637,7 @@ def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date)
             continue
         seconds = _insights_task_seconds(task)
         row["tracked_seconds"] += seconds
-        if _insights_is_billable(task):
+        if _insights_is_billable(task, billing_by_type):
             row["billable_seconds"] += seconds
     return [
         {**row, "tracked_seconds": round(row["tracked_seconds"], 1), "billable_seconds": round(row["billable_seconds"], 1)}
@@ -1683,6 +1698,11 @@ def get_insights(
     current_tasks = [t for t in all_tasks if in_range(t, start_date, end_date)]
     previous_tasks = [t for t in all_tasks if in_range(t, previous_start, previous_end)]
 
+    billing_by_type = {
+        row.name: bool(row.is_billable)
+        for row in db.query(models.TaskTypeOption).all()
+    }
+
     def task_totals(tasks):
         tracked = focused = meeting = 0.0
         completed = 0
@@ -1701,13 +1721,13 @@ def get_insights(
     current_totals = task_totals(current_tasks)
     previous_totals = task_totals(previous_tasks)
 
-    current_billable_seconds = sum(_insights_task_seconds(t) for t in current_tasks if _insights_is_billable(t))
-    previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t))
+    current_billable_seconds = sum(_insights_task_seconds(t) for t in current_tasks if _insights_is_billable(t, billing_by_type))
+    previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t, billing_by_type))
     capacity_seconds = _insights_capacity_seconds(target, start_date, end_date)
     previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end)
     overall_utilization = round((current_totals["tracked"] / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
     client_utilization = round((current_billable_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
-    capacity_trend = _insights_capacity_trend(target, current_tasks, start_date, end_date)
+    capacity_trend = _insights_capacity_trend(target, current_tasks, start_date, end_date, billing_by_type)
 
     current_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
@@ -1914,7 +1934,7 @@ def get_insights(
             for member in team_members:
                 member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and in_range(t, start_date, end_date)]
                 tracked = sum(_insights_task_seconds(t) for t in member_tasks)
-                billable = sum(_insights_task_seconds(t) for t in member_tasks if _insights_is_billable(t))
+                billable = sum(_insights_task_seconds(t) for t in member_tasks if _insights_is_billable(t, billing_by_type))
                 capacity = _insights_capacity_seconds(member, start_date, end_date)
                 total_capacity += capacity
                 total_tracked += tracked
@@ -2222,8 +2242,20 @@ def create_task_type(payload: schemas.TaskTypeCreate, current_member: models.Mem
     name = payload.name.strip()
     if db.query(models.TaskTypeOption).filter(models.TaskTypeOption.name == name).first():
         raise HTTPException(400, "That task type already exists")
-    task_type = models.TaskTypeOption(name=name)
+    task_type = models.TaskTypeOption(name=name, is_billable=bool(payload.is_billable))
     db.add(task_type)
+    db.commit()
+    db.refresh(task_type)
+    return task_type
+
+
+@app.patch("/api/task-types/{task_type_id}/billing", response_model=schemas.TaskTypeOut)
+def update_task_type_billing(task_type_id: str, payload: schemas.TaskTypeBillingUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    task_type = db.get(models.TaskTypeOption, task_type_id)
+    if not task_type:
+        raise HTTPException(404, "Task type not found")
+    task_type.is_billable = bool(payload.is_billable)
     db.commit()
     db.refresh(task_type)
     return task_type
