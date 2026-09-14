@@ -1539,7 +1539,9 @@ def _insights_is_support(task: models.TaskInstance):
 def _insights_is_meeting(task: models.TaskInstance):
     task_type = (task.task_type or "").lower()
     name = (task.name or "").lower()
-    return "meeting" in task_type or name.startswith("ad hoc meeting")
+    # Calendar-tracked meetings can have arbitrary event titles (for example an internal
+    # academy/session name), so source_calendar_event_id is the strongest signal.
+    return bool(task.source_calendar_event_id) or "meeting" in task_type or "meeting" in name
 
 
 def _insights_change(current_value, previous_value):
@@ -1743,9 +1745,15 @@ def get_insights(
                 (task.task_type or "").strip().lower(),
             ])
 
+        def eligible_for_delegation(task):
+            # Delegation insight is intended for repeatable staff work. Requiring a template
+            # excludes ad hoc/internal items, while the meeting/support checks exclude those
+            # categories even if someone later creates a template for them.
+            return bool((task.source_template_name or "").strip()) and not _insights_is_support(task) and not _insights_is_meeting(task)
+
         evidence = {}
         for task in staff_tasks:
-            if _insights_is_support(task) or _insights_is_meeting(task):
+            if not eligible_for_delegation(task):
                 continue
             key = task_key(task)
             row = evidence.setdefault(key, set())
@@ -1754,7 +1762,7 @@ def get_insights(
 
         own_by_key = {}
         for task in current_tasks:
-            if _insights_is_support(task) or _insights_is_meeting(task):
+            if not eligible_for_delegation(task):
                 continue
             key = task_key(task)
             if key not in evidence:
