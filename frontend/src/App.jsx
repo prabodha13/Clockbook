@@ -1215,6 +1215,24 @@ function taskDisplayHeading(task) {
   return taskHeading(taskName, task.bank_account_name, task.pay_period_type, task.pay_period_number);
 }
 
+function exportTaskText(row) {
+  return row.template_name ? `${row.template_name} - ${row.task}` : row.task;
+}
+
+function ExportTaskCell({ row, child = false }) {
+  const taskText = taskHeading(row.task, row.bank_account, row.pay_period_type, row.pay_period_number);
+  return (
+    <div style={{ minWidth: 0, paddingLeft: child ? 24 : 0 }}>
+      {row.template_name && (
+        <div style={{ fontWeight: 600, color: "var(--ink)", lineHeight: 1.25 }}>{row.template_name}</div>
+      )}
+      <div style={{ color: row.template_name || child ? "var(--ink-soft)" : "var(--ink)", lineHeight: 1.25, marginTop: row.template_name ? 2 : 0 }}>
+        {taskText}
+      </div>
+    </div>
+  );
+}
+
 function taskPeriodContext(task) {
   const type = task.period_type || (!task.period_type ? task.pay_period_type : null);
   const year = task.period_year;
@@ -3486,7 +3504,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
     const bankPart = r.bank_account ? ` | ${r.bank_account}` : "";
     const adjustedPart = r.adjusted ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
     const periodPart = r.period ? ` | Period: ${r.period}` : "";
-    const text = `${r.client}${bankPart}: ${r.task} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"}${periodPart} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
+    const text = `${r.client}${bankPart}: ${exportTaskText(r)} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"}${periodPart} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
       if (ok) { setCopiedId(r.id); setTimeout(() => setCopiedId(null), 1600); }
     });
@@ -3495,7 +3513,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   function copyGroup(g) {
     const totalHm = formatHM(g.totalSeconds);
     const totalDec = (g.totalSeconds / 3600).toFixed(2);
-    const breakdown = g.rows.map((r) => `${r.task}: ${formatHM(r.seconds)}`).join(", ");
+    const breakdown = g.rows.map((r) => `${exportTaskText(r)}: ${formatHM(r.seconds)}`).join(", ");
     const periodPart = g.period ? ` | Period: ${g.period}` : "";
     const text = `${g.client} | Role: ${g.role || "none"} | Task type: ${g.task_type || "none"}${periodPart} | ${totalHm} (${totalDec}h) total across ${g.count} tasks: ${breakdown}`;
     copyToClipboard(text).then((ok) => {
@@ -3616,7 +3634,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                   <tr key={r.id}>
                     <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
                     <td>{r.client}</td>
-                    <td>{taskHeading(r.task, r.bank_account, r.pay_period_type, r.pay_period_number)}</td>
+                    <td><ExportTaskCell row={r} /></td>
                     <td>{r.role || "none"}</td>
                     <td>{r.task_type || "none"}</td>
                     <td>{r.period || "none"}</td>
@@ -3682,7 +3700,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     <tr key={r.id} className="cb-export-group-child">
                       <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
                       <td></td>
-                      <td style={{ paddingLeft: 24, color: "var(--ink-soft)" }}>{taskHeading(r.task, r.bank_account, r.pay_period_type, r.pay_period_number)}</td>
+                      <td><ExportTaskCell row={r} child /></td>
                       <td>{r.role || "none"}</td>
                       <td>{r.task_type || "none"}</td>
                       <td>{r.period || "none"}</td>
