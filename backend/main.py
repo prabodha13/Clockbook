@@ -1054,7 +1054,10 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
     if value < 0 or value > 168:
         raise HTTPException(400, "Weekly capacity must be between 0 and 168 hours")
     member.weekly_capacity_hours = round(value, 2)
-    if payload.capacity_effective_from is not None:
+    # Treat an explicitly supplied null as a real update so admins can clear
+    # the effective date. A cleared date means capacity applies across the
+    # selected reporting period instead of being limited by a start date.
+    if "capacity_effective_from" in payload.model_fields_set:
         member.capacity_effective_from = payload.capacity_effective_from
     db.commit()
     db.refresh(member)
