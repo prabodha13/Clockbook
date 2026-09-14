@@ -3732,7 +3732,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
       <div style={{ display: "flex", justifyContent: "space-between", gap: 20, alignItems: "flex-start", marginBottom: 18 }}>
         <div>
           <div className="cb-page-title cb-serif" style={{ fontSize: 30, lineHeight: 1.05 }}>Insights</div>
-          <div className="cb-page-sub" style={{ marginTop: 5 }}>A personal view of how you spend your time</div>
+          <div className="cb-page-sub" style={{ marginTop: 5 }}>Personal time and workload analysis</div>
         </div>
         <div>
           <div style={{ display: "grid", gridTemplateColumns: isAdmin && !forceSelfOnly ? "250px 160px auto" : "160px auto", gap: 10, alignItems: "end", justifyContent: "end" }}>
@@ -3899,9 +3899,9 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
                       <span>Client (billable) time</span><strong>{formatHM(capacityData.billable_seconds || 0)}</strong><strong style={{ color: "#2467D7", textAlign: "right" }}>{capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`}</strong>
                     </div>
                     <div style={{ height: 9, borderRadius: 99, background: "#E8EDF5", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, Math.max(0, Number(capacityBillablePct || 0)))}%`, background: "#2467D7", borderRadius: 99 }}/></div>
-                    <div style={{ marginTop: 7, padding: "11px 12px", borderRadius: 8, background: "#EFFAF4", border: "1px solid #D4EFDF" }}>
-                      <div style={{ fontWeight: 700, fontSize: 12 }}>{capacityTrackedPct == null ? "No capacity has been set for this period." : `${Math.round(capacityTrackedPct)}% of available capacity was recorded.`}</div>
-                      <div className="cb-hint" style={{ marginTop: 3, color: "#46675A" }}>{formatHM(capacityData.available_seconds || 0)} available capacity remaining · {capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`} client work</div>
+                    <div style={{ marginTop: 7, padding: "11px 12px", borderRadius: 8, background: "#FAFBFC", border: "1px solid #E4E8EC" }}>
+                      <div style={{ fontWeight: 700, fontSize: 12 }}>{capacityTrackedPct == null ? "No capacity set for this period" : `Tracked ${Math.round(capacityTrackedPct)}% of available capacity`}</div>
+                      <div className="cb-hint" style={{ marginTop: 3 }}>{formatHM(capacityData.available_seconds || 0)} available · {capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`} client work</div>
                     </div>
                   </div>
                 </div>
@@ -3934,21 +3934,18 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
             <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Average task duration</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{formatHM(data.summary.average_task_seconds || 0)}</div></div>
             <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Completed tasks</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{data.summary.completed_tasks}</div></div>
             <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Tracking consistency</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{Math.round(data.tracking_consistency || 0)}%</div><div className="cb-hint">Tracked time on {data.tracked_working_days || 0} of {data.working_days || 0} working days</div></div>
-            <div style={{ ...panelStyle, padding: "13px 15px", background: "#F0FAF5", borderColor: "#D7EFE2" }}><div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Support trend</div><div className="cb-hint" style={{ color: "#46675A" }}>{supportCallout}</div></div>
+            <div style={{ ...panelStyle, padding: "13px 15px" }}><div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Support received</div><div className="cb-hint">{supportCallout}</div></div>
           </div>
 
           {(data.delegation_candidates || []).length > 0 && (
             <div style={{ ...panelStyle, marginBottom: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "flex-start", marginBottom: 11 }}>
-                <div>
-                  <div className="cb-group-title" style={{ fontSize: 14 }}>Delegation opportunities <span style={{ fontWeight: 500, color: "var(--muted)" }}>(Admin only)</span></div>
-                  <div className="cb-hint" style={{ marginTop: 3 }}>Tasks you worked on that have also been completed by staff. This is informational only; you decide whether delegation was appropriate.</div>
-                </div>
-                <div className="cb-hint" style={{ maxWidth: 330, textAlign: "right" }}>Based on historical task evidence. No delegation decision is stored.</div>
+              <div style={{ marginBottom: 11 }}>
+                <div className="cb-group-title" style={{ fontSize: 14 }}>Delegation opportunities</div>
+                <div className="cb-hint" style={{ marginTop: 3 }}>Tasks you worked on that have also been completed by staff.</div>
               </div>
               <div className="cb-table-wrap">
                 <table className="cb-table">
-                  <thead><tr><th>Client</th><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Also completed by</th><th>Insight</th></tr></thead>
+                  <thead><tr><th>Client</th><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Also completed by</th></tr></thead>
                   <tbody>{data.delegation_candidates.map((row) => <tr key={row.task_key}>
                     <td style={{ fontWeight: 650 }}>{row.client_name || "—"}</td>
                     <td style={{ fontWeight: 650 }}>{row.template_name || "—"}</td>
@@ -3956,7 +3953,6 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
                     <td>{row.task_type || "—"}</td>
                     <td className="num cb-mono">{formatHM(row.seconds)}</td>
                     <td>{row.staff_names.join(", ")}</td>
-                    <td><span style={{ display: "inline-block", padding: "4px 8px", borderRadius: 6, background: "#EEF5FF", color: "#205EBA", fontSize: 10.5, fontWeight: 650 }}>Potential delegation</span></td>
                   </tr>)}</tbody>
                 </table>
               </div>
