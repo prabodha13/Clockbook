@@ -95,7 +95,8 @@ export const api = {
   deleteRole: (id) => request(`/roles/${id}`, { method: "DELETE" }),
 
   getTaskTypes: () => request("/task-types"),
-  createTaskType: (name) => request("/task-types", { method: "POST", body: JSON.stringify({ name }) }),
+  createTaskType: (name, isBillable = false) => request("/task-types", { method: "POST", body: JSON.stringify({ name, is_billable: !!isBillable }) }),
+  updateTaskTypeBilling: (id, isBillable) => request(`/task-types/${id}/billing`, { method: "PATCH", body: JSON.stringify({ is_billable: !!isBillable }) }),
   deleteTaskType: (id) => request(`/task-types/${id}`, { method: "DELETE" }),
 
   getTrackedMetrics: () => request("/tracked-metrics"),

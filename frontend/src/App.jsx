@@ -2373,13 +2373,14 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
 }
 
 function SettingsView({
-  roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onDeleteTaskType,
+  roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
   const [newTaskType, setNewTaskType] = useState("");
+  const [newTaskTypeBillable, setNewTaskTypeBillable] = useState(false);
   const [newMetric, setNewMetric] = useState("");
   const [scanResults, setScanResults] = useState(null);
   const [scanning, setScanning] = useState(false);
@@ -2433,8 +2434,9 @@ function SettingsView({
     e.preventDefault();
     if (!newTaskType.trim()) return;
     try {
-      await onAddTaskType(newTaskType);
+      await onAddTaskType(newTaskType, newTaskTypeBillable);
       setNewTaskType("");
+      setNewTaskTypeBillable(false);
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
@@ -2558,16 +2560,34 @@ function SettingsView({
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Task types</div>
             {taskTypes.map((t) => (
-              <div key={t.id} className="cb-client-account-row">
-                <div style={{ fontSize: 13.5 }}>{t.name}</div>
+              <div key={t.id} className="cb-client-account-row" style={{ gap: 10 }}>
+                <div style={{ fontSize: 13.5, flex: 1, minWidth: 0 }}>{t.name}</div>
+                <button
+                  type="button"
+                  className="cb-btn cb-btn-sm"
+                  onClick={() => onUpdateTaskTypeBilling(t.id, !t.is_billable)}
+                  style={{ minWidth: 92, justifyContent: "center", color: t.is_billable ? "#168A45" : "var(--ink-soft)", background: t.is_billable ? "#EAF8EF" : "#F5F6F7" }}
+                  title="Used by Capacity & Utilization"
+                >
+                  {t.is_billable ? "Billable" : "Non-billable"}
+                </button>
                 <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTaskType(t.id)}><Trash2 size={13} /></button>
               </div>
             ))}
             {taskTypes.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No task types added yet.</div>}
-            <form onSubmit={submitTaskType} style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <form onSubmit={submitTaskType} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 8, marginTop: 8, alignItems: "center" }}>
               <input className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
+              <button
+                type="button"
+                className="cb-btn cb-btn-sm"
+                onClick={() => setNewTaskTypeBillable((v) => !v)}
+                style={{ minWidth: 92, justifyContent: "center", color: newTaskTypeBillable ? "#168A45" : "var(--ink-soft)", background: newTaskTypeBillable ? "#EAF8EF" : "#F5F6F7" }}
+              >
+                {newTaskTypeBillable ? "Billable" : "Non-billable"}
+              </button>
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
+            <div className="cb-hint" style={{ marginTop: 6 }}>Billable status is used by Capacity &amp; Utilization; task type names no longer need a “Billable:” prefix.</div>
           </div>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Tracked numbers</div>
@@ -3459,6 +3479,14 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
     return `${y}-${m}-${day}`;
   };
   const [range, setRange] = useState("90");
+  const [customFrom, setCustomFrom] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+  });
+  const [customTo, setCustomTo] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [memberId, setMemberId] = useState(currentUser?.id || "");
   const [data, setData] = useState(null);
   const [error, setError] = useState("");
@@ -3503,10 +3531,22 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
       lastWeekStart.setDate(lastWeekEnd.getDate() - 6);
       return { from: toDateKey(lastWeekStart), to: toDateKey(lastWeekEnd) };
     }
+    if (range === "this_month") {
+      return { from: toDateKey(new Date(end.getFullYear(), end.getMonth(), 1)), to: toDateKey(end) };
+    }
+    if (range === "last_month") {
+      return {
+        from: toDateKey(new Date(end.getFullYear(), end.getMonth() - 1, 1)),
+        to: toDateKey(new Date(end.getFullYear(), end.getMonth(), 0)),
+      };
+    }
+    if (range === "custom") {
+      return { from: customFrom, to: customTo };
+    }
     const start = new Date(end);
     start.setDate(start.getDate() - (Number(range) - 1));
     return { from: toDateKey(start), to: toDateKey(end) };
-  }, [range]);
+  }, [range, customFrom, customTo]);
 
   const load = useCallback(async () => {
     if (!memberId) return;
@@ -3523,6 +3563,12 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
   const comparisonPeriodLabel = range === "last_week"
     ? "previous week"
+    : range === "this_month"
+      ? "previous equivalent period"
+      : range === "last_month"
+        ? "previous period"
+        : range === "custom"
+          ? "previous equivalent period"
     : range === "30"
       ? "previous 30 days"
       : range === "90"
@@ -3702,10 +3748,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               <div className="cb-label">Period</div>
               <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
                 <option value="last_week">Last week</option>
+                <option value="this_month">This month</option>
+                <option value="last_month">Last month</option>
                 <option value="30">Last 30 days</option>
                 <option value="90">Last 3 months</option>
                 <option value="180">Last 6 months</option>
                 <option value="365">Last 12 months</option>
+                <option value="custom">Custom</option>
               </select>
             </div>
             <div>
@@ -3713,6 +3762,14 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
               <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />Refresh</button>
             </div>
           </div>
+          {range === "custom" && (
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8, alignItems: "center" }}>
+              <span className="cb-hint">From</span>
+              <input type="date" className="cb-input" style={{ width: 145 }} value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+              <span className="cb-hint">To</span>
+              <input type="date" className="cb-input" style={{ width: 145 }} value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+            </div>
+          )}
           {isAdmin && !forceSelfOnly && <div className="cb-hint" style={{ marginTop: 4, textAlign: "right" }}>Admins can view insights for staff in their scope.</div>}
         </div>
       </div>
@@ -6690,9 +6747,14 @@ export default function App() {
     setRoles((prev) => prev.filter((r) => r.id !== id));
   }
 
-  async function addTaskType(name) {
-    const taskType = await api.createTaskType(name.trim());
+  async function addTaskType(name, isBillable = false) {
+    const taskType = await api.createTaskType(name.trim(), isBillable);
     setTaskTypes((prev) => [...prev, taskType]);
+  }
+
+  async function updateTaskTypeBilling(id, isBillable) {
+    const updated = await api.updateTaskTypeBilling(id, isBillable);
+    setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
 
   async function deleteTaskType(id) {
@@ -6952,7 +7014,7 @@ export default function App() {
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
-                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onDeleteTaskType={deleteTaskType}
+                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onUpdateTaskTypeBilling={updateTaskTypeBilling} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
