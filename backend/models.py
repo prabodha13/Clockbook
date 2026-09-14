@@ -121,6 +121,7 @@ class Template(Base):
     __tablename__ = "templates"
     id = Column(String, primary_key=True, default=lambda: gen_id("tpl"))
     field = Column(String, nullable=False)
+    category = Column(String, nullable=True)  # optional broad category for Insights; falls back to task type when blank
     name = Column(String, nullable=False)
     tasks = relationship(
         "TemplateTask",
@@ -180,7 +181,8 @@ class TaskInstance(Base):
     period_end = Column(String, nullable=True)  # YYYY-MM-DD for custom periods
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
     source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed
-    source_template_field = Column(String, nullable=True)  # broad template field/category (e.g. Tax, Bookkeeping, Payroll) copied for reliable historical insights
+    source_template_field = Column(String, nullable=True)  # legacy template field copied for compatibility
+    source_template_category = Column(String, nullable=True)  # optional broad Insights category copied from the template
     last_heartbeat_at = Column(DateTime, nullable=True)  # updated periodically while running, a stale value means the browser tracking it is gone (closed, crashed, or the machine shut down)
 
 

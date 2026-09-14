@@ -90,6 +90,12 @@ def run_startup_migrations():
             if "code" not in existing_client_columns:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN code VARCHAR"))
 
+    if "templates" in inspector.get_table_names():
+        existing_template_columns = {c["name"] for c in inspector.get_columns("templates")}
+        with engine.begin() as conn:
+            if "category" not in existing_template_columns:
+                conn.execute(text("ALTER TABLE templates ADD COLUMN category VARCHAR"))
+
     if "template_tasks" in inspector.get_table_names():
         existing_tt_columns = {c["name"] for c in inspector.get_columns("template_tasks")}
         with engine.begin() as conn:
@@ -157,6 +163,8 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
             if "source_template_field" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_field VARCHAR"))
+            if "source_template_category" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_category VARCHAR"))
             if "last_heartbeat_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
     # Normalize the old payroll-only requirement into the generic Work period model.
@@ -1667,10 +1675,11 @@ def get_insights(
             category_label = "Meetings"
             task_type_label = "Meetings"
         else:
-            # Template.field is the broad category admins already maintain (Tax, Bookkeeping, Payroll, etc.).
-            # A copy is stored on the task so historical insights remain stable even if templates later change.
-            category_label = (getattr(task, "source_template_field", None) or "Other").strip() or "Other"
+            # Prefer the optional template-level broad category. If none was selected,
+            # fall back to the task type so custom tasks and uncategorised templates
+            # still land in a meaningful Insights bucket without forcing extra input.
             task_type_label = (task.task_type or task.name or "Other").strip() or "Other"
+            category_label = (getattr(task, "source_template_category", None) or task_type_label).strip() or "Other"
         work_mix_map[category_label] = work_mix_map.get(category_label, 0.0) + seconds
         task_type_mix_map[task_type_label] = task_type_mix_map.get(task_type_label, 0.0) + seconds
         if task.client_name and task.client_name != "Internal Support":
@@ -2119,7 +2128,7 @@ def list_templates(current_member: models.Member = Depends(get_current_member), 
 @app.post("/api/templates", response_model=schemas.TemplateOut, status_code=201)
 def create_template(payload: schemas.TemplateCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
-    tpl = models.Template(field=payload.field.strip(), name=payload.name.strip())
+    tpl = models.Template(field=payload.field.strip(), category=(payload.category or "").strip() or None, name=payload.name.strip())
     db.add(tpl)
     db.commit()
     db.refresh(tpl)
@@ -2133,16 +2142,19 @@ def update_template(template_id: str, payload: schemas.TemplateCreate, current_m
     if not tpl:
         raise HTTPException(404, "Template not found")
     field = payload.field.strip()
+    category = (payload.category or "").strip() or None
     name = payload.name.strip()
     if not field or not name:
         raise HTTPException(400, "Enter both a field and a template name")
     old_name = tpl.name
     old_field = tpl.field
+    old_category = getattr(tpl, "category", None)
     tpl.field = field
+    tpl.category = category
     tpl.name = name
-    if old_name != name or old_field != field:
+    if old_name != name or old_field != field or old_category != category:
         db.query(models.TaskInstance).filter(models.TaskInstance.source_template_name == old_name).update(
-            {"source_template_name": name, "source_template_field": field}, synchronize_session=False
+            {"source_template_name": name, "source_template_field": field, "source_template_category": category}, synchronize_session=False
         )
     db.commit()
     db.refresh(tpl)
@@ -2295,6 +2307,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         source_calendar_event_id=payload.source_calendar_event_id,
         source_template_name=payload.source_template_name,
         source_template_field=payload.source_template_field,
+        source_template_category=payload.source_template_category,
     )
     db.add(task)
     db.commit()

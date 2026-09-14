@@ -158,12 +158,14 @@ class TemplateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
     field: str
+    category: Optional[str] = None
     name: str
     tasks: List[TemplateTaskOut] = []
 
 
 class TemplateCreate(BaseModel):
     field: str
+    category: Optional[str] = None
     name: str
 
 
@@ -202,6 +204,7 @@ class TaskOut(BaseModel):
     source_calendar_event_id: Optional[str] = None
     source_template_name: Optional[str] = None
     source_template_field: Optional[str] = None
+    source_template_category: Optional[str] = None
     last_heartbeat_at: Optional[datetime] = None
 
     @field_serializer("created_at", "submitted_at", "last_heartbeat_at")
@@ -236,6 +239,7 @@ class TaskCreate(BaseModel):
     source_calendar_event_id: Optional[str] = None
     source_template_name: Optional[str] = None
     source_template_field: Optional[str] = None
+    source_template_category: Optional[str] = None
 
 
 class TaskPause(BaseModel):
