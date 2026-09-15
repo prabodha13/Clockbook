@@ -1798,6 +1798,16 @@ def get_insights(
     current_totals = task_totals(current_tasks)
     previous_totals = task_totals(previous_tasks)
 
+    # Client/billable time for the selected reporting period is independent of
+    # capacity effective dates. Capacity-scoped billable time is calculated
+    # separately below for utilisation.
+    current_billable_total_seconds = sum(
+        _insights_task_seconds(t) for t in current_tasks if _insights_is_billable(t, billing_by_type)
+    )
+    previous_billable_total_seconds = sum(
+        _insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t, billing_by_type)
+    )
+
     current_capacity_tasks = _insights_capacity_tasks(target, current_tasks, start_date, end_date)
     previous_capacity_tasks = _insights_capacity_tasks(target, previous_tasks, previous_start, previous_end)
     current_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks)
@@ -1897,8 +1907,19 @@ def get_insights(
             key = d.replace(day=1).isoformat()
         else:
             key = (d - timedelta(days=d.weekday())).isoformat()
-        trend_map[key] = trend_map.get(key, 0.0) + _insights_task_seconds(task)
-    tracked_trend = [{"period_start": key, "seconds": round(trend_map[key], 1)} for key in sorted(trend_map)]
+        row = trend_map.setdefault(key, {"seconds": 0.0, "billable_seconds": 0.0})
+        seconds = _insights_task_seconds(task)
+        row["seconds"] += seconds
+        if _insights_is_billable(task, billing_by_type):
+            row["billable_seconds"] += seconds
+    tracked_trend = [
+        {
+            "period_start": key,
+            "seconds": round(trend_map[key]["seconds"], 1),
+            "billable_seconds": round(trend_map[key]["billable_seconds"], 1),
+        }
+        for key in sorted(trend_map)
+    ]
 
     tracked_work_dates = {
         _insights_task_work_date(task).date()
@@ -2057,6 +2078,7 @@ def get_insights(
         "summary": {
             "tracked_seconds": round(current_totals["tracked"], 1),
             "focused_seconds": round(current_totals["focused"], 1),
+            "billable_seconds": round(current_billable_total_seconds, 1),
             "meeting_seconds": round(current_totals["meeting"], 1),
             "support_given_seconds": round(helped_seconds, 1),
             "support_received_seconds": round(received_seconds, 1),
@@ -2065,6 +2087,7 @@ def get_insights(
             "changes": {
                 "tracked": _insights_change(current_totals["tracked"], previous_totals["tracked"]),
                 "focused": _insights_change(current_totals["focused"], previous_totals["focused"]),
+                "billable": _insights_change(current_billable_total_seconds, previous_billable_total_seconds),
                 "meeting": _insights_change(current_totals["meeting"], previous_totals["meeting"]),
                 "support_given": _insights_change(helped_seconds, prev_helped_seconds),
                 "support_received": _insights_change(received_seconds, prev_received_seconds),
@@ -2072,6 +2095,7 @@ def get_insights(
             "previous": {
                 "tracked_seconds": round(previous_totals["tracked"], 1),
                 "focused_seconds": round(previous_totals["focused"], 1),
+                "billable_seconds": round(previous_billable_total_seconds, 1),
                 "meeting_seconds": round(previous_totals["meeting"], 1),
                 "support_given_seconds": round(prev_helped_seconds, 1),
                 "support_received_seconds": round(prev_received_seconds, 1),
@@ -2096,6 +2120,11 @@ def get_insights(
         "work_mix": work_mix,
         "task_type_mix": task_type_mix,
         "top_clients": top_clients,
+        "distribution_totals": {
+            "work_mix_seconds": round(sum(work_mix_map.values()), 1),
+            "task_type_seconds": round(sum(task_type_mix_map.values()), 1),
+            "client_seconds": round(sum(top_client_map.values()), 1),
+        },
         "tracking_consistency": tracking_consistency,
         "tracked_working_days": tracked_working_days,
         "working_days": working_days,
