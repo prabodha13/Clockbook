@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import bcrypt
 import httpx
+import time
 from urllib.parse import urlencode
 from io import StringIO
 from datetime import datetime, timezone, timedelta
@@ -1661,13 +1662,23 @@ def _insights_capacity_effective_start(member: models.Member, start_date):
     return max(start_date, effective_from) if effective_from else start_date
 
 
-def _insights_capacity_seconds(member: models.Member, start_date, end_date):
+def _insights_capacity_seconds(member: models.Member, start_date, end_date, unavailable_by_date=None):
     effective_start = _insights_capacity_effective_start(member, start_date)
     if effective_start > end_date:
         return 0.0
     weekly_hours = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0)
     business_days = _insights_business_days(effective_start, end_date)
-    return weekly_hours * 3600.0 * (business_days / 5.0)
+    base_seconds = weekly_hours * 3600.0 * (business_days / 5.0)
+    if not unavailable_by_date:
+        return base_seconds
+    adjustment = 0.0
+    cursor = effective_start
+    daily_capacity = weekly_hours * 3600.0 / 5.0
+    while cursor <= end_date:
+        if cursor.weekday() < 5:
+            adjustment += min(max(float(unavailable_by_date.get(cursor.isoformat(), 0.0) or 0.0), 0.0), daily_capacity)
+        cursor += timedelta(days=1)
+    return max(base_seconds - adjustment, 0.0)
 
 
 def _insights_capacity_tasks(member: models.Member, tasks, start_date, end_date):
@@ -1682,7 +1693,7 @@ def _insights_capacity_tasks(member: models.Member, tasks, start_date, end_date)
     return rows
 
 
-def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date, billing_by_type=None):
+def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date, billing_by_type=None, unavailable_by_date=None):
     effective_start = _insights_capacity_effective_start(member, start_date)
     if effective_start > end_date:
         return []
@@ -1696,7 +1707,7 @@ def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date,
         while cursor <= end_date:
             buckets[cursor.isoformat()] = {
                 "period_start": cursor.isoformat(),
-                "capacity_seconds": round(_insights_capacity_seconds(member, cursor, cursor), 1),
+                "capacity_seconds": round(_insights_capacity_seconds(member, cursor, cursor, unavailable_by_date), 1),
                 "tracked_seconds": 0.0,
                 "billable_seconds": 0.0,
             }
@@ -1711,7 +1722,7 @@ def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date,
             overlap_end = min(week_end, end_date)
             buckets[cursor.isoformat()] = {
                 "period_start": cursor.isoformat(),
-                "capacity_seconds": round(_insights_capacity_seconds(member, overlap_start, overlap_end), 1),
+                "capacity_seconds": round(_insights_capacity_seconds(member, overlap_start, overlap_end, unavailable_by_date), 1),
                 "tracked_seconds": 0.0,
                 "billable_seconds": 0.0,
             }
@@ -1753,6 +1764,7 @@ def get_insights(
     member_id: str = None,
     date_from: str = None,
     date_to: str = None,
+    capacity_pod_id: str = None,
     current_member: models.Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ):
@@ -1824,17 +1836,21 @@ def get_insights(
         _insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t, billing_by_type)
     )
 
+    individual_calamari_maps, individual_calamari_meta = _calamari_daily_adjustments(db, [target], start_date, end_date)
+    target_unavailable = individual_calamari_maps.get(target.id, {})
+    previous_calamari_maps, _previous_calamari_meta = _calamari_daily_adjustments(db, [target], previous_start, previous_end)
+    target_previous_unavailable = previous_calamari_maps.get(target.id, {})
     current_capacity_tasks = _insights_capacity_tasks(target, current_tasks, start_date, end_date)
     previous_capacity_tasks = _insights_capacity_tasks(target, previous_tasks, previous_start, previous_end)
     current_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks)
     previous_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in previous_capacity_tasks)
     current_billable_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks if _insights_is_billable(t, billing_by_type))
     previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_capacity_tasks if _insights_is_billable(t, billing_by_type))
-    capacity_seconds = _insights_capacity_seconds(target, start_date, end_date)
-    previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end)
+    capacity_seconds = _insights_capacity_seconds(target, start_date, end_date, target_unavailable)
+    previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end, target_previous_unavailable)
     overall_utilization = round((current_capacity_tracked_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
     client_utilization = round((current_billable_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
-    capacity_trend = _insights_capacity_trend(target, current_capacity_tasks, start_date, end_date, billing_by_type)
+    capacity_trend = _insights_capacity_trend(target, current_capacity_tasks, start_date, end_date, billing_by_type, target_unavailable)
 
     current_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
@@ -2037,6 +2053,14 @@ def get_insights(
     team_capacity = None
     if current_member.role in ("admin", "super_admin"):
         team_query = db.query(models.Member).filter(models.Member.id.in_(allowed_ids))
+        selected_capacity_pod = None
+        if capacity_pod_id:
+            if current_member.role != "super_admin":
+                raise HTTPException(403, "Only super admins can view capacity by pod")
+            selected_capacity_pod = db.get(models.Pod, capacity_pod_id)
+            if not selected_capacity_pod:
+                raise HTTPException(404, "Pod not found")
+            team_query = team_query.filter(models.Member.pod_id == capacity_pod_id)
         if current_member.role != "super_admin":
             # Regular admins can see members and admins in their permitted scope,
             # but never super admins. _insights_allowed_member_ids already applies
@@ -2052,12 +2076,14 @@ def get_insights(
             member_rows = []
             aggregate_week = {}
             total_capacity = total_tracked = total_billable = 0.0
+            team_calamari_maps, team_calamari_meta = _calamari_daily_adjustments(db, team_members, start_date, end_date)
             for member in team_members:
                 member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and in_range(t, start_date, end_date)]
                 capacity_tasks = _insights_capacity_tasks(member, member_tasks, start_date, end_date)
                 tracked = sum(_insights_task_seconds(t) for t in capacity_tasks)
                 billable = sum(_insights_task_seconds(t) for t in capacity_tasks if _insights_is_billable(t, billing_by_type))
-                capacity = _insights_capacity_seconds(member, start_date, end_date)
+                member_unavailable = team_calamari_maps.get(member.id, {})
+                capacity = _insights_capacity_seconds(member, start_date, end_date, member_unavailable)
                 total_capacity += capacity
                 total_tracked += tracked
                 total_billable += billable
@@ -2070,8 +2096,9 @@ def get_insights(
                     "overall_utilization": round((tracked / capacity) * 100, 1) if capacity > 0 else None,
                     "client_utilization": round((billable / capacity) * 100, 1) if capacity > 0 else None,
                     "available_seconds": round(max(capacity - tracked, 0.0), 1),
+                    "calamari_adjustment_seconds": round(sum(member_unavailable.values()), 1),
                 })
-                for row in _insights_capacity_trend(member, capacity_tasks, start_date, end_date, billing_by_type):
+                for row in _insights_capacity_trend(member, capacity_tasks, start_date, end_date, billing_by_type, member_unavailable):
                     agg = aggregate_week.setdefault(row["period_start"], {"period_start": row["period_start"], "capacity_seconds": 0.0, "tracked_seconds": 0.0, "billable_seconds": 0.0})
                     agg["capacity_seconds"] += row["capacity_seconds"]
                     agg["tracked_seconds"] += row["tracked_seconds"]
@@ -2089,6 +2116,9 @@ def get_insights(
                     for _, row in sorted(aggregate_week.items())
                 ],
                 "members": member_rows,
+                "pod_id": selected_capacity_pod.id if selected_capacity_pod else None,
+                "pod_name": selected_capacity_pod.name if selected_capacity_pod else None,
+                "calamari": team_calamari_meta,
             }
 
     return {
@@ -2134,6 +2164,8 @@ def get_insights(
             "previous_billable_seconds": round(previous_billable_seconds, 1),
             "trend_granularity": "daily" if (end_date - start_date).days <= 6 else "weekly",
             "trend": capacity_trend,
+            "calamari_adjustment_seconds": round(sum(target_unavailable.values()), 1),
+            "calamari": individual_calamari_meta,
         },
         "team_capacity": team_capacity,
         "support_trend": support_trend,
@@ -2987,6 +3019,195 @@ def repair_task_segments(task_id: str, current_member: models.Member = Depends(g
 # Karbon reconciliation + daily audit activity
 # ---------------------------------------------------------------
 
+
+
+def _normalise_calamari_tenant(value: str) -> str:
+    value = (value or "").strip().lower()
+    value = value.replace("https://", "").replace("http://", "").strip("/")
+    if value.endswith(".calamari.io"):
+        value = value[:-len(".calamari.io")]
+    if "/" in value:
+        value = value.split("/", 1)[0]
+    if not value or any(ch not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for ch in value):
+        raise HTTPException(400, "Enter the Calamari workspace name, for example aroundfinance")
+    return value
+
+
+def _calamari_credentials(db: Session):
+    tenant = _setting_value(db, "calamari_tenant").strip()
+    key_enc = _setting_value(db, "calamari_api_key_encrypted")
+    mode = _setting_value(db, "calamari_config_mode").strip().lower()
+    if mode == "disabled" or not tenant or not key_enc:
+        return None
+    try:
+        return tenant, _decrypt_secret(key_enc)
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Stored Calamari credentials could not be decrypted")
+
+
+def _calamari_post(tenant: str, api_key: str, path: str, payload=None):
+    url = f"https://{tenant}.calamari.io/api/{path.lstrip('/')}"
+    try:
+        # Calamari documents a 10 requests/second limit. Keep this integration below
+        # that ceiling even when a team capacity report needs several holiday calendars.
+        time.sleep(0.12)
+        with httpx.Client(timeout=25.0, auth=("calamari", api_key)) as client:
+            response = client.post(url, json=payload or {})
+        if response.status_code == 401:
+            raise HTTPException(502, "Calamari rejected the configured API key")
+        if response.status_code == 403:
+            raise HTTPException(502, "Calamari denied this request. Check that the API key includes Absence Requests and Holidays scopes.")
+        if response.status_code == 429:
+            raise HTTPException(502, "Calamari API rate limit reached. Try again shortly.")
+        if response.status_code >= 400:
+            detail = ""
+            try:
+                body = response.json()
+                detail = body.get("code") or body.get("message") or body.get("error") or ""
+            except Exception:
+                pass
+            suffix = f" ({detail})" if detail else ""
+            raise HTTPException(502, f"Calamari API returned {response.status_code}{suffix}")
+        if response.status_code == 204 or not response.content:
+            return None
+        return response.json()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"Could not reach Calamari: {str(exc)}")
+
+
+def _calamari_daily_adjustments(db: Session, members, start_date, end_date):
+    """Return per-member unavailable seconds without exposing absence reasons/types.
+
+    Approved/accepted TIMEOFF reduces capacity. WORK-category requests (for example remote
+    work) do not. Public holidays reduce capacity as full or half days. Combined reductions
+    are capped at that member's scheduled daily capacity, so leave on a public holiday is
+    never double-counted.
+    """
+    result = {m.id: {} for m in members}
+    meta = {"connected": False, "adjustment_seconds": 0.0, "warnings": []}
+    creds = _calamari_credentials(db)
+    if not creds or not members:
+        return result, meta
+    tenant, api_key = creds
+    meta["connected"] = True
+    emails = {(m.email or "").strip().lower(): m for m in members if (m.email or "").strip()}
+    if not emails:
+        meta["warnings"].append("No ClockBook email addresses are available for Calamari matching.")
+        return result, meta
+
+    # One organisation-level request for absences avoids one API call per employee.
+    try:
+        absence_rows = _calamari_post(tenant, api_key, "leave/request/v1/find-advanced", {
+            "from": start_date.isoformat(),
+            "to": end_date.isoformat(),
+        }) or []
+    except HTTPException as exc:
+        meta["warnings"].append(str(exc.detail))
+        absence_rows = []
+
+    for row in absence_rows if isinstance(absence_rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status") or "").upper()
+        if status not in ("ACCEPTED", "APPROVED"):
+            continue
+        if str(row.get("absenceCategory") or "").upper() != "TIMEOFF":
+            continue
+        email = str(row.get("employeeEmail") or "").strip().lower()
+        member = emails.get(email)
+        if not member:
+            continue
+        try:
+            row_start = datetime.strptime(str(row.get("from"))[:10], "%Y-%m-%d").date()
+            row_end = datetime.strptime(str(row.get("to"))[:10], "%Y-%m-%d").date()
+        except Exception:
+            continue
+        row_start = max(row_start, start_date)
+        row_end = min(row_end, end_date)
+        if row_end < row_start:
+            continue
+        daily_hours = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0) / 5.0
+        daily_seconds = daily_hours * 3600.0
+        unit = str(row.get("entitlementAmountUnit") or "DAYS").upper()
+        cursor = row_start
+        business_dates = []
+        while cursor <= row_end:
+            if cursor.weekday() < 5:
+                business_dates.append(cursor)
+            cursor += timedelta(days=1)
+        if not business_dates:
+            continue
+        first_amount = float(row.get("amountFirstDay") or 0.0)
+        last_amount = float(row.get("amountLastDay") or 0.0)
+        total_amount = float(row.get("entitlementAmount") or 0.0)
+        for i, day in enumerate(business_dates):
+            if unit == "HOURS":
+                if len(business_dates) == 1:
+                    hours = total_amount or first_amount or last_amount
+                elif i == 0:
+                    hours = first_amount or min(total_amount, daily_hours)
+                elif i == len(business_dates) - 1:
+                    hours = last_amount or min(total_amount, daily_hours)
+                else:
+                    hours = daily_hours
+                seconds = min(max(hours, 0.0) * 3600.0, daily_seconds)
+            else:
+                if len(business_dates) == 1:
+                    fraction = first_amount or last_amount or total_amount or 1.0
+                elif i == 0:
+                    fraction = first_amount or 1.0
+                elif i == len(business_dates) - 1:
+                    fraction = last_amount or 1.0
+                else:
+                    fraction = 1.0
+                seconds = min(max(fraction, 0.0), 1.0) * daily_seconds
+            key = day.isoformat()
+            result[member.id][key] = min(result[member.id].get(key, 0.0) + seconds, daily_seconds)
+
+    # Holiday calendars are employee-specific, so Calamari exposes them per employee.
+    # A failure for one email is surfaced as a warning instead of silently reducing everyone.
+    for email, member in emails.items():
+        daily_hours = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0) / 5.0
+        daily_seconds = daily_hours * 3600.0
+        try:
+            holiday_rows = _calamari_post(tenant, api_key, "holiday/v1/find", {
+                "employee": email,
+                "from": start_date.isoformat(),
+                "to": end_date.isoformat(),
+            }) or []
+        except HTTPException as exc:
+            msg = str(exc.detail)
+            if "400" in msg and "INVALID_EMPLOYEE" in msg:
+                meta["warnings"].append(f"{member.name} could not be matched to Calamari by email.")
+            else:
+                meta["warnings"].append(f"{member.name}: {msg}")
+            continue
+        for row in holiday_rows if isinstance(holiday_rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            try:
+                h_start = datetime.strptime(str(row.get("start"))[:10], "%Y-%m-%d").date()
+                h_end = datetime.strptime(str(row.get("end"))[:10], "%Y-%m-%d").date()
+            except Exception:
+                continue
+            cursor = max(h_start, start_date)
+            h_end = min(h_end, end_date)
+            while cursor <= h_end:
+                if cursor.weekday() < 5:
+                    seconds = daily_seconds * (0.5 if bool(row.get("halfDay")) else 1.0)
+                    key = cursor.isoformat()
+                    result[member.id][key] = min(result[member.id].get(key, 0.0) + seconds, daily_seconds)
+                cursor += timedelta(days=1)
+
+    meta["adjustment_seconds"] = round(sum(sum(v.values()) for v in result.values()), 1)
+    # Avoid repeating identical API errors once per member in the UI.
+    meta["warnings"] = list(dict.fromkeys(meta["warnings"]))[:8]
+    return result, meta
+
 def _member_zone(member):
     try:
         return ZoneInfo((getattr(member, "timezone_name", None) or "Asia/Colombo").strip())
@@ -3060,7 +3281,7 @@ def _decrypt_secret(token: str) -> str:
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(500, "Stored Karbon credentials could not be decrypted")
+        raise HTTPException(500, "Stored integration credentials could not be decrypted")
 
 
 def _karbon_credentials(db: Session):
@@ -3167,6 +3388,81 @@ def disconnect_karbon_integration(current_member: models.Member = Depends(get_cu
     db.commit()
     return {"connected": False, "source": "settings"}
 
+
+
+
+@app.get("/api/integrations/calamari")
+def get_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    tenant = _setting_value(db, "calamari_tenant").strip()
+    key_enc = _setting_value(db, "calamari_api_key_encrypted")
+    mode = _setting_value(db, "calamari_config_mode").strip().lower()
+    if mode != "disabled" and tenant and key_enc:
+        try:
+            key = _decrypt_secret(key_enc)
+            return {"connected": True, "tenant": tenant, "api_key_hint": key[-4:] if key else ""}
+        except HTTPException as exc:
+            return {"connected": False, "tenant": tenant, "error": exc.detail}
+    return {"connected": False, "tenant": tenant}
+
+
+def _test_calamari_credentials(tenant: str, api_key: str):
+    today = datetime.now(timezone.utc).date().isoformat()
+    # This endpoint verifies the key plus the Absence Requests scope without depending
+    # on any particular employee being present in Calamari.
+    _calamari_post(tenant, api_key, "leave/request/v1/find-advanced", {"from": today, "to": today})
+    return True
+
+
+@app.put("/api/integrations/calamari")
+def save_calamari_integration(payload: schemas.CalamariIntegrationSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    tenant = _normalise_calamari_tenant(payload.tenant)
+    api_key = payload.api_key.strip()
+    if not api_key:
+        raise HTTPException(400, "Calamari API key is required")
+    _test_calamari_credentials(tenant, api_key)
+    _set_setting_value(db, "calamari_tenant", tenant)
+    _set_setting_value(db, "calamari_api_key_encrypted", _encrypt_secret(api_key))
+    _set_setting_value(db, "calamari_config_mode", "settings")
+    db.commit()
+    return {"connected": True, "tenant": tenant, "api_key_hint": api_key[-4:]}
+
+
+@app.post("/api/integrations/calamari/test")
+def test_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    creds = _calamari_credentials(db)
+    if not creds:
+        raise HTTPException(503, "Calamari is not connected")
+    tenant, api_key = creds
+    _test_calamari_credentials(tenant, api_key)
+    # Verify Holidays scope too when there is an email we can test against. INVALID_EMPLOYEE
+    # means the auth/scope call succeeded but this particular ClockBook email is not in Calamari.
+    sample = db.query(models.Member).filter(models.Member.email.isnot(None)).order_by(models.Member.name).first()
+    holiday_scope_verified = False
+    if sample and sample.email:
+        try:
+            today = datetime.now(timezone.utc).date().isoformat()
+            _calamari_post(tenant, api_key, "holiday/v1/find", {"employee": sample.email, "from": today, "to": today})
+            holiday_scope_verified = True
+        except HTTPException as exc:
+            if "INVALID_EMPLOYEE" not in str(exc.detail):
+                raise
+    return {"ok": True, "holiday_scope_verified": holiday_scope_verified}
+
+
+@app.delete("/api/integrations/calamari")
+def disconnect_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _set_setting_value(db, "calamari_api_key_encrypted", "")
+    _set_setting_value(db, "calamari_config_mode", "disabled")
+    db.commit()
+    return {"connected": False, "tenant": _setting_value(db, "calamari_tenant").strip()}
 
 @app.get("/api/karbon/reconciliation")
 def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):

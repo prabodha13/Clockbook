@@ -48,6 +48,11 @@ class KarbonIntegrationSave(BaseModel):
     access_key: str
 
 
+class CalamariIntegrationSave(BaseModel):
+    tenant: str
+    api_key: str
+
+
 class KarbonReconciliationNoteSave(BaseModel):
     member_id: str
     date: date
