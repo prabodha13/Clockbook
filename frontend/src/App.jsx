@@ -332,6 +332,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     { id: "calendar", label: "Calendar", icon: CalendarIcon },
     { id: "insights", label: "Insights", icon: LayoutDashboard },
     { id: "export", label: "Export", icon: FileSpreadsheet },
+    { id: "reconcile", label: "Karbon Check", icon: CheckCircle2 },
     { id: "staff", label: "Staff", icon: Users },
     ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
     ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
@@ -3979,6 +3980,81 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   );
 }
 
+
+function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
+  const localDate = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+  const [memberId, setMemberId] = useState(currentUser?.id || "");
+  const [preset, setPreset] = useState("this_week");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
+  const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
+  useEffect(() => { if ((!isAdmin || forceSelfOnly) && currentUser?.id) setMemberId(currentUser.id); }, [isAdmin, forceSelfOnly, currentUser?.id]);
+
+  const range = useMemo(() => {
+    if (preset === "custom") return customFrom && customTo ? { from: customFrom, to: customTo } : null;
+    const r = dateRangeForPreset(preset);
+    if (!r) return null;
+    return { from: localDate(new Date(r.fromIso)), to: localDate(new Date(r.toIso)) };
+  }, [preset, customFrom, customTo]);
+
+  async function compare() {
+    if (!effectiveMemberId || !range) return;
+    setBusy(true); setError("");
+    try { setData(await api.getKarbonReconciliation(effectiveMemberId, range.from, range.to)); }
+    catch (err) { setData(null); setError(err.message || "Could not compare with Karbon"); }
+    finally { setBusy(false); }
+  }
+
+  const signed = (minutes) => {
+    const n = Math.round(minutes || 0);
+    if (n === 0) return "0m";
+    return `${n > 0 ? "+" : "−"}${formatHM(Math.abs(n) * 60)}`;
+  };
+  const status = data ? (Math.abs(data.difference_minutes || 0) <= 5 ? "Matched" : "Review") : "";
+
+  return <div>
+    <div className="cb-page-head">
+      <div>
+        <div className="cb-page-title cb-serif">Karbon Check</div>
+        <div className="cb-page-sub">Compare submitted ClockBook time with time recorded in Karbon. Staff see their own time; admins can review people in their scope.</div>
+      </div>
+    </div>
+    <div className="cb-toolbar" style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
+      {isAdmin && !forceSelfOnly && <div style={{ width: 230 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+      <div><div className="cb-label">Period</div><div className="cb-tabs">
+        <button className={`cb-tab ${preset === "this_week" ? "active" : ""}`} onClick={() => setPreset("this_week")}>This week</button>
+        <button className={`cb-tab ${preset === "last_week" ? "active" : ""}`} onClick={() => setPreset("last_week")}>Last week</button>
+        <button className={`cb-tab ${preset === "custom" ? "active" : ""}`} onClick={() => setPreset("custom")}>Custom</button>
+      </div></div>
+      {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
+      <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !effectiveMemberId || !range}>{busy ? "Comparing..." : "Compare with Karbon"}</button>
+    </div>
+    {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
+    {!data && !error && <div className="cb-empty">Choose a period and compare when you are ready.</div>}
+    {data && <>
+      <div className="cb-kpi-grid" style={{ marginBottom: 16 }}>
+        <div className="cb-kpi"><div className="cb-kpi-label">ClockBook</div><div className="cb-kpi-value">{formatHM(data.clockbook_minutes * 60)}</div></div>
+        <div className="cb-kpi"><div className="cb-kpi-label">Karbon</div><div className="cb-kpi-value">{formatHM(data.karbon_minutes * 60)}</div></div>
+        <div className="cb-kpi"><div className="cb-kpi-label">Difference</div><div className="cb-kpi-value">{signed(data.difference_minutes)}</div><div className="cb-kpi-sub">{status} · 5m tolerance</div></div>
+      </div>
+      <div className="cb-group-head"><div className="cb-group-title">Daily comparison</div><div className="cb-group-count">{data.member_name}</div></div>
+      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th></tr></thead><tbody>
+        {(data.rows || []).map((r) => { const ok = Math.abs(r.difference_minutes || 0) <= 5; return <tr key={r.date}><td>{formatDate(`${r.date}T12:00:00`)}</td><td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td><td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td><td className="num cb-mono">{signed(r.difference_minutes)}</td><td>{ok ? "Matched" : "Review"}</td></tr>; })}
+      </tbody></table></div>
+      <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-faint)" }}>ClockBook uses the final submitted duration, including manual adjustments. Karbon users are matched by email.</div>
+    </>}
+  </div>;
+}
+
 function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
@@ -4538,11 +4614,17 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
   const settingUpMember = members.find((m) => m.id === settingUpId);
+  const timezoneOptions = useMemo(() => {
+    let zones = [];
+    try { zones = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []; } catch (_) {}
+    if (!zones.length) zones = ["Asia/Colombo", "Europe/Dublin", "Europe/London", "America/New_York", "America/Toronto", "America/Vancouver", "Australia/Sydney", "Asia/Dubai"];
+    return zones.map((z) => ({ id: z, name: z.replace(/_/g, " ") }));
+  }, []);
 
   async function handleDelete(m) {
     if (!window.confirm(`Delete ${m.name}? This cannot be undone.`)) return;
@@ -4614,6 +4696,17 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                       aria-label={`Capacity effective from for ${m.name}`}
                     />
                   </label>
+                </div>
+              )}
+              {isAdmin && (
+                <div style={{ width: 180, minWidth: 180 }}>
+                  <SearchableSelect
+                    options={timezoneOptions}
+                    value={m.timezone_name || "Asia/Colombo"}
+                    onChange={(value) => value && value !== (m.timezone_name || "Asia/Colombo") && onChangeTimezone(m.id, value)}
+                    placeholder="Search time zones..."
+                    getLabel={(z) => z.name}
+                  />
                 </div>
               )}
               {currentUser.role === "super_admin" && pods.length > 0 && (
@@ -5014,25 +5107,31 @@ function InactivityAuditView({ members }) {
   }, [dateMode, dateFrom, dateTo, todayKey]);
   const [enabled, setEnabled] = useState(null);
   const [events, setEvents] = useState(null);
+  const [activityRows, setActivityRows] = useState(null);
   const [personId, setPersonId] = useState("");
   const [error, setError] = useState(false);
 
   const load = useCallback(async () => {
     setError(false);
     try {
-      const status = await api.getInactivityAuditStatus();
+      const [status, activity] = await Promise.all([
+        api.getInactivityAuditStatus(),
+        api.getAuditActivitySummary(auditDateRange.from, auditDateRange.to),
+      ]);
       setEnabled(!!status.enabled);
-      if (!status.enabled) {
-        setEvents([]);
-        return;
-      }
-      setEvents(await api.getInactivityEvents(auditDateRange.from, auditDateRange.to));
+      setActivityRows(activity);
+      setEvents(status.enabled ? await api.getInactivityEvents(auditDateRange.from, auditDateRange.to) : []);
     } catch (err) {
       setError(true);
     }
   }, [auditDateRange]);
 
   useEffect(() => { load(); }, [load]);
+
+  const filteredActivityRows = useMemo(() => {
+    const rows = activityRows || [];
+    return personId ? rows.filter((r) => r.member_id === personId) : rows;
+  }, [activityRows, personId]);
 
   const filteredEvents = useMemo(() => {
     const rows = events || [];
@@ -5057,7 +5156,7 @@ function InactivityAuditView({ members }) {
     <div>
       <div style={{ marginBottom: 4 }}>
         <div className="cb-page-title cb-serif">Audit</div>
-        <div className="cb-page-sub">Super-admin review of Clockbook-detected lock, sleep, and offline gaps. Use as an operational signal, not as proof of work by itself.</div>
+        <div className="cb-page-sub">Super-admin review of daily start activity plus Clockbook-detected lock, sleep, and offline gaps. Times use each person’s configured time zone.</div>
 
         <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 14, flexWrap: "nowrap" }}>
           <div style={{ flex: "0 0 150px" }}>
@@ -5089,6 +5188,13 @@ function InactivityAuditView({ members }) {
           <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", marginTop: 20, flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
         </div>
       </div>
+      <div className="cb-group-head" style={{ marginTop: 18 }}><div className="cb-group-title">Daily start activity</div><div className="cb-group-count">{filteredActivityRows.length}</div></div>
+      {activityRows === null ? <TableSkeleton rows={3} /> : filteredActivityRows.length === 0 ? <div className="cb-empty">No login or clock-start activity was recorded in this period.</div> : (
+        <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
+          <table className="cb-table"><thead><tr><th>Person</th><th>Date</th><th>Time zone</th><th>First login</th><th>First clock started</th></tr></thead>
+          <tbody>{filteredActivityRows.map((r) => <tr key={`${r.member_id}-${r.date}`}><td>{r.member_name}</td><td>{formatDate(`${r.date}T12:00:00`)}</td><td>{r.timezone_name}</td><td className="cb-mono">{r.first_login_at ? new Date(r.first_login_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="cb-mono">{r.first_clock_at ? new Date(r.first_clock_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td></tr>)}</tbody></table>
+        </div>
+      )}
       {enabled === false && <div className="cb-notice">Audit recording is currently off. A super admin can turn it on from Settings.</div>}
       {error && <div className="cb-empty">Could not load the audit.</div>}
       {enabled && events === null && <TableSkeleton rows={4} />}
@@ -6596,6 +6702,17 @@ export default function App() {
     }
   }
 
+  async function changeMemberTimezone(memberId, timezoneName) {
+    try {
+      const updated = await api.updateMemberTimezone(memberId, timezoneName);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      if (updated.id === currentUser.id) setCurrentUser(updated);
+      showToast(`Time zone updated: ${updated.timezone_name}`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
   async function addPod(name) {
     try {
       const pod = await api.createPod(name.trim());
@@ -7047,11 +7164,18 @@ export default function App() {
                 onTogglePushed={togglePushed} onDeleteTask={deleteTask}
               />
             )}
+            {view === "reconcile" && (
+              <KarbonReconciliationView
+                members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
+              />
+            )}
             {view === "staff" && (
               <StaffView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
+                onChangeTimezone={changeMemberTimezone}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
                 pods={pods} onAssignPod={assignMemberPod}

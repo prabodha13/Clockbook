@@ -42,6 +42,7 @@ export const api = {
   createPod: (name) => request("/pods", { method: "POST", body: JSON.stringify({ name }) }),
   deletePod: (id) => request(`/pods/${id}`, { method: "DELETE" }),
   updateMemberPod: (memberId, podId) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId }) }),
+  updateMemberTimezone: (memberId, timezoneName) => request(`/members/${memberId}/timezone`, { method: "PATCH", body: JSON.stringify({ timezone_name: timezoneName }) }),
   disconnectGoogleCalendar: () => request("/auth/google/disconnect", { method: "POST" }),
   connectSlack: (memberId, slackEmail) => request(`/members/${memberId}/slack`, { method: "PATCH", body: JSON.stringify({ slack_email: slackEmail }) }),
   disconnectSlack: (memberId) => request(`/members/${memberId}/slack/disconnect`, { method: "POST" }),
@@ -142,6 +143,8 @@ export const api = {
   createInactivityEvent: (kind, startedAt, endedAt, taskId = null) =>
     request("/inactivity-events", { method: "POST", body: JSON.stringify({ kind, started_at: startedAt, ended_at: endedAt, task_id: taskId }) }),
   getInactivityAuditStatus: () => request("/inactivity-events/status"),
+  getAuditActivitySummary: (dateFrom = "", dateTo = "") => { const q = new URLSearchParams(); if (dateFrom) q.set("date_from", dateFrom); if (dateTo) q.set("date_to", dateTo); return request(`/audit/activity-summary${q.toString() ? `?${q.toString()}` : ""}`); },
+  getKarbonReconciliation: (memberId, dateFrom, dateTo) => { const q = new URLSearchParams(); if (memberId) q.set("member_id", memberId); if (dateFrom) q.set("date_from", dateFrom); if (dateTo) q.set("date_to", dateTo); return request(`/karbon/reconciliation?${q.toString()}`); },
   setInactivityAuditStatus: (enabled) => request("/inactivity-events/status", { method: "PUT", body: JSON.stringify({ enabled }) }),
   getInactivityEvents: (dateFrom = "", dateTo = "") => {
     const params = new URLSearchParams();
