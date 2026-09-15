@@ -2736,18 +2736,20 @@ function SettingsView({
             ) : (
               <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
             )}
-            <form onSubmit={saveKarbonIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(220px,1fr) auto", gap: 8, alignItems: "end", maxWidth: 900 }}>
-              <div className="cb-field">
-                <label className="cb-label">Application ID</label>
+            <form onSubmit={saveKarbonIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(220px,1fr) auto", gap: 10, alignItems: "start", maxWidth: 900 }}>
+              <div>
+                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Application ID</label>
                 <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Application ID" value={karbonApplicationId} onChange={(e) => setKarbonApplicationId(e.target.value)} />
               </div>
-              <div className="cb-field">
-                <label className="cb-label">Access Key</label>
+              <div>
+                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Access Key</label>
                 <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Access Key" value={karbonAccessKey} onChange={(e) => setKarbonAccessKey(e.target.value)} />
               </div>
-              <button type="submit" className="cb-btn cb-btn-primary" disabled={savingKarbon || !karbonApplicationId.trim() || !karbonAccessKey.trim()}>
-                {savingKarbon ? "Connecting..." : karbonIntegration?.connected ? "Replace" : "Connect Karbon"}
-              </button>
+              <div style={{ paddingTop: 25 }}>
+                <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={savingKarbon || !karbonApplicationId.trim() || !karbonAccessKey.trim()}>
+                  {savingKarbon ? "Connecting..." : karbonIntegration?.connected ? "Replace" : "Connect Karbon"}
+                </button>
+              </div>
             </form>
             <div className="cb-hint" style={{ marginTop: 8 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
             {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
@@ -4095,6 +4097,47 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 }
 
 
+function KarbonReconciliationNoteModal({ row, memberName, onClose, onSave }) {
+  const [note, setNote] = useState(row?.note || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  if (!row) return null;
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 520 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Reconciliation note</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-hint" style={{ marginBottom: 12 }}>{memberName} · {formatDate(`${row.date}T12:00:00`)}</div>
+          <div className="cb-field">
+            <label className="cb-label">Reason for difference</label>
+            <textarea
+              className="cb-input"
+              rows={5}
+              autoFocus
+              placeholder="Optional note for this day's reconciliation"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              style={{ resize: "vertical", minHeight: 110 }}
+            />
+          </div>
+          {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button className="cb-btn cb-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => {
+            setBusy(true); setError("");
+            try { await onSave(note); }
+            catch (err) { setError(err.message || "Could not save note"); setBusy(false); }
+          }}>{busy ? "Saving..." : "Save note"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
   const DEFAULT_TOLERANCE_MINUTES = 10;
   const localDate = (d) => {
@@ -4110,6 +4153,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [noteRow, setNoteRow] = useState(null);
   const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
   const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
   useEffect(() => { if ((!isAdmin || forceSelfOnly) && currentUser?.id) setMemberId(currentUser.id); }, [isAdmin, forceSelfOnly, currentUser?.id]);
@@ -4141,21 +4185,20 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const rangeLabel = range ? `${formatDate(`${range.from}T12:00:00`)} – ${formatDate(`${range.to}T12:00:00`)}` : "";
 
   const styles = {
-    controlPanel: { background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "16px 18px", marginBottom: 18 },
-    summaryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 },
-    summaryCard: { background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "16px 18px", minHeight: 94 },
-    summaryLabel: { fontSize: 11, fontWeight: 750, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--ink-faint)", marginBottom: 8 },
-    summaryValue: { fontSize: 25, lineHeight: 1.1, fontWeight: 720, letterSpacing: "-.02em", color: "var(--ink)" },
-    summaryMeta: { fontSize: 12, color: "var(--ink-faint)", marginTop: 8 },
+    controlPanel: { background: "#fff", border: "1px solid var(--line)", borderRadius: 10, padding: "15px 16px", marginBottom: 16 },
+    summaryBar: { background: "#fff", border: "1px solid var(--line)", borderRadius: 10, display: "flex", alignItems: "stretch", flexWrap: "wrap", marginBottom: 18, overflow: "hidden" },
+    summaryItem: { minWidth: 170, flex: "1 1 180px", padding: "13px 16px", borderRight: "1px solid var(--line)" },
+    summaryLabel: { fontSize: 10.5, fontWeight: 750, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--ink-faint)", marginBottom: 5 },
+    summaryValue: { fontSize: 18, lineHeight: 1.15, fontWeight: 700, color: "var(--ink)" },
+    summaryStatus: (ok) => ({ minWidth: 190, flex: "0 1 230px", padding: "13px 16px", background: ok ? "#f8fcf9" : "#fffaf0" }),
     sectionMeta: { display: "flex", alignItems: "center", gap: 8, color: "var(--ink-faint)", fontSize: 12 },
     statusPill: (ok) => ({
-      display: "inline-flex", alignItems: "center", gap: 6, minWidth: 72, justifyContent: "center",
-      padding: "4px 9px", borderRadius: 999, fontSize: 12, fontWeight: 700,
-      color: ok ? "#166534" : "#92400e",
-      background: ok ? "#ecfdf3" : "#fffbeb",
+      display: "inline-flex", alignItems: "center", gap: 6, minWidth: 68, justifyContent: "center",
+      padding: "3px 8px", borderRadius: 999, fontSize: 11.5, fontWeight: 700,
+      color: ok ? "#166534" : "#92400e", background: ok ? "#f0fdf4" : "#fffbeb",
       border: `1px solid ${ok ? "#bbf7d0" : "#fde68a"}`,
     }),
-    statusDot: (ok) => ({ width: 6, height: 6, borderRadius: "50%", background: ok ? "#16a34a" : "#d97706", flex: "0 0 auto" }),
+    statusDot: (ok) => ({ width: 5, height: 5, borderRadius: "50%", background: ok ? "#16a34a" : "#d97706", flex: "0 0 auto" }),
     reviewRow: { background: "#fffdf5" },
     differenceGood: { color: "#166534", fontWeight: 650 },
     differenceReview: { color: "#92400e", fontWeight: 700 },
@@ -4185,24 +4228,25 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
     {!data && !error && <div className="cb-empty">Select a period to run a reconciliation.</div>}
     {data && <>
-      <div style={styles.summaryGrid} className="cb-karbon-summary-grid">
-        <div style={styles.summaryCard}>
+      <div style={styles.summaryBar}>
+        <div style={styles.summaryItem}>
           <div style={styles.summaryLabel}>ClockBook</div>
           <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.clockbook_minutes * 60)}</div>
-          <div style={styles.summaryMeta}>Submitted time</div>
         </div>
-        <div style={styles.summaryCard}>
+        <div style={styles.summaryItem}>
           <div style={styles.summaryLabel}>Karbon</div>
           <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.karbon_minutes * 60)}</div>
-          <div style={styles.summaryMeta}>Recorded time</div>
         </div>
-        <div style={{ ...styles.summaryCard, borderColor: status === "Matched" ? "#bbf7d0" : "#fde68a" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-            <div style={styles.summaryLabel}>Difference</div>
-            <span style={styles.statusPill(status === "Matched")}><span style={styles.statusDot(status === "Matched")} />{status}</span>
-          </div>
+        <div style={styles.summaryItem}>
+          <div style={styles.summaryLabel}>Difference</div>
           <div className="cb-mono" style={{ ...styles.summaryValue, color: status === "Matched" ? "#166534" : "#92400e" }}>{signed(data.difference_minutes)}</div>
-          <div style={styles.summaryMeta}>Tolerance ±{toleranceMinutes}m{reviewCount ? ` · ${reviewCount} day${reviewCount === 1 ? "" : "s"} to review` : ""}</div>
+        </div>
+        <div style={styles.summaryStatus(status === "Matched")}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "space-between" }}>
+            <span style={styles.statusPill(status === "Matched")}><span style={styles.statusDot(status === "Matched")} />{status}</span>
+            <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>±{toleranceMinutes}m tolerance</span>
+          </div>
+          {reviewCount > 0 && <div style={{ fontSize: 11.5, color: "#92400e", marginTop: 6 }}>{reviewCount} day{reviewCount === 1 ? "" : "s"} to review</div>}
         </div>
       </div>
 
@@ -4213,7 +4257,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div>
       </div>
 
-      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th></tr></thead><tbody>
+      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
         {(data.rows || []).map((r) => {
           const ok = isMatched(r.difference_minutes);
           return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
@@ -4222,11 +4266,27 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
             <td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td>
             <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
             <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
+            <td>
+              <button type="button" className="cb-btn cb-btn-sm" title={r.note || "Add reconciliation note"} onClick={() => setNoteRow(r)} style={{ minWidth: 66, justifyContent: "center" }}>
+                <StickyNote size={13} />{r.note ? "View" : "Note"}
+              </button>
+            </td>
           </tr>;
         })}
       </tbody></table></div>
       <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-faint)" }}>ClockBook uses final submitted duration, including manual adjustments. Differences within ±{toleranceMinutes} minutes are treated as matched.</div>
     </>}
+
+    {noteRow && <KarbonReconciliationNoteModal
+      row={noteRow}
+      memberName={data?.member_name || ""}
+      onClose={() => setNoteRow(null)}
+      onSave={async (note) => {
+        const saved = await api.saveKarbonReconciliationNote(effectiveMemberId, noteRow.date, note);
+        setData((prev) => prev ? { ...prev, rows: (prev.rows || []).map((r) => r.date === noteRow.date ? { ...r, note: saved.note || "" } : r) } : prev);
+        setNoteRow(null);
+      }}
+    />}
   </div>;
 }
 
