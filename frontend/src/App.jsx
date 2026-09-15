@@ -4096,7 +4096,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
 
 function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
-  const DEFAULT_TOLERANCE_MINUTES = 15;
+  const DEFAULT_TOLERANCE_MINUTES = 10;
   const localDate = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
