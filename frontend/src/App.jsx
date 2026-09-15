@@ -3767,7 +3767,10 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
       return { from: toDateKey(lastWeekStart), to: toDateKey(lastWeekEnd) };
     }
     if (range === "this_month") {
-      return { from: toDateKey(new Date(end.getFullYear(), end.getMonth(), 1)), to: toDateKey(end) };
+      // Insights uses the full calendar month for planned leave/capacity.
+      // Actual metrics (tracked time/utilisation) are capped at today by the backend.
+      const monthEnd = new Date(end.getFullYear(), end.getMonth() + 1, 0);
+      return { from: toDateKey(new Date(end.getFullYear(), end.getMonth(), 1)), to: toDateKey(monthEnd) };
     }
     if (range === "last_month") {
       return {
@@ -4091,7 +4094,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                 ["Tracked time", formatHM(data.summary.tracked_seconds || 0), comparisonInfo(data.summary.tracked_seconds, data.summary.previous?.tracked_seconds, data.summary.changes?.tracked).detail],
                 ["Client time", formatHM(clientSeconds), `${Math.round(clientShare)}% of submitted time`],
                 ["Meeting time", formatHM(data.summary.meeting_seconds || 0), `${trackedSeconds > 0 ? Math.round((Number(data.summary.meeting_seconds || 0) / trackedSeconds) * 100) : 0}% of submitted time`],
-                ...(personCapacity ? [["Capacity utilisation", personCapacity.overall_utilization == null ? "—" : `${Math.round(personCapacity.overall_utilization)}%`, `${formatHM(personCapacity.tracked_seconds || 0)} of ${formatHM(personCapacity.capacity_seconds || 0)}`]] : []),
+                ...(personCapacity ? [["Capacity utilisation", personCapacity.overall_utilization == null ? "—" : `${Math.round(personCapacity.overall_utilization)}%`, `${formatHM(personCapacity.tracked_seconds || 0)} of ${formatHM(personCapacity.utilization_capacity_seconds ?? personCapacity.capacity_seconds ?? 0)}${data.actual_date_to && data.actual_date_to !== data.date_to ? " to date" : ""}`]] : []),
               ].map(([label, value, detail], i, rows) => <div key={label} style={{ padding: "15px 18px", borderRight: i < rows.length - 1 ? "1px solid #E7ECF0" : "none" }}>
                 <div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div>
                 <div className="cb-serif" style={{ fontSize: 25, fontWeight: 700, lineHeight: 1.15, marginTop: 4 }}>{value}</div>
@@ -4174,10 +4177,10 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, .75fr) minmax(520px, 1.65fr)", gap: 22 }}>
                 <div style={{ borderRight: "1px solid #E8ECEF", paddingRight: 22 }}>
                   {[
-                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h` : capacityView === "pod" && capacityData.pod_name ? `${capacityData.pod_name} · selected period` : "Selected period"],
-                    ["Tracked", formatHM(capacityData.tracked_seconds || 0), capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}% utilisation`],
-                    ["Client", formatHM(capacityData.billable_seconds || 0), capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}% of capacity`],
-                    ["Available", formatHM(capacityData.available_seconds || 0), "Remaining capacity"],
+                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h · ${data.actual_date_to && data.actual_date_to !== data.date_to ? "full period" : "selected period"}` : capacityView === "pod" && capacityData.pod_name ? `${capacityData.pod_name} · ${data.actual_date_to && data.actual_date_to !== data.date_to ? "full period" : "selected period"}` : (data.actual_date_to && data.actual_date_to !== data.date_to ? "Full selected period" : "Selected period")],
+                    ["Tracked", formatHM(capacityData.tracked_seconds || 0), capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}% utilisation${data.actual_date_to && data.actual_date_to !== data.date_to ? " to date" : ""}`],
+                    ["Client", formatHM(capacityData.billable_seconds || 0), capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}% of capacity${data.actual_date_to && data.actual_date_to !== data.date_to ? " to date" : ""}`],
+                    ["Available", formatHM(capacityData.available_seconds || 0), data.actual_date_to && data.actual_date_to !== data.date_to ? "Remaining capacity in full period" : "Remaining capacity"],
                   ].map(([label,value,detail], i) => <div key={label} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, padding: "10px 0", borderTop: i ? "1px solid #EEF1F4" : "none" }}><div><div style={{ fontSize: 11.5 }}>{label}</div><div className="cb-hint" style={{ marginTop: 2 }}>{detail}</div></div><strong className="cb-mono" style={{ fontSize: 13 }}>{value}</strong></div>)}
                 </div>
                 <div style={{ minWidth: 0 }}>
