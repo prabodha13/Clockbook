@@ -3929,6 +3929,29 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     );
   }
 
+  function LeaveTrendChart({ rows = [] }) {
+    if (!rows.length) return <div className="cb-empty">No approved leave in this period.</div>;
+    const width = 720, height = 190, padL = 42, padR = 16, padT = 20, padB = 34;
+    const maxValue = Math.max(1, ...rows.map((r) => Number(r.leave_seconds || 0)));
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const groupW = plotW / Math.max(rows.length, 1);
+    const barW = Math.min(34, Math.max(5, groupW * 0.58));
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 205, display: "block" }} role="img" aria-label="Approved leave trend">
+        {[0, .25, .5, .75, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="2" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
+        {rows.map((r, i) => {
+          const cx = padL + groupW * i + groupW / 2;
+          const yy = y(r.leave_seconds);
+          return <g key={r.period_start}>
+            <rect x={cx - barW / 2} y={yy} width={barW} height={Math.max(0, padT + plotH - yy)} rx="4" fill="#4EB68A"/>
+            <text x={cx} y={height-10} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: rows.length > 12 ? undefined : "numeric" })}</text>
+          </g>;
+        })}
+      </svg>
+    );
+  }
+
   const cardStyle = { border: "1px solid #DDE4EC", borderRadius: 10, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.02)" };
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
 
@@ -3937,6 +3960,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const capacityLabel = capacityView === "pod" ? "Pod capacity" : capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
+  const personLeaveTrends = data?.leave_trends;
+  const leaveData = (capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends;
   const clientSeconds = Number(data?.summary?.billable_seconds || 0);
   const trackedSeconds = Number(data?.summary?.tracked_seconds || 0);
   const clientShare = trackedSeconds > 0 ? (clientSeconds / trackedSeconds) * 100 : 0;
@@ -4093,6 +4118,39 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ paddingLeft: 20 }}><div style={{ fontSize: 12, fontWeight: 700, marginBottom: 11 }}>Task types</div><DistributionList rows={data.task_type_mix || []} total={data.distribution_totals?.task_type_seconds || 0} color="#6B7C93" empty="No task-type data." /></div>
             </div>
           </div>
+
+          {leaveData && (
+            <div style={{ ...panelStyle, marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+                <div>
+                  <div className="cb-group-title" style={{ fontSize: 15 }}>Leave trends</div>
+                  <div className="cb-hint" style={{ marginTop: 3 }}>Approved leave from Calamari. Public holidays and remote-work requests are not counted here.</div>
+                </div>
+                {isAdmin && !forceSelfOnly && data.team_leave_trends && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{[...pods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
+                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => { if (!capacityPodId && pods.length) setCapacityPodId([...pods].sort((a,b) => a.name.localeCompare(b.name))[0].id); setCapacityView("pod"); }}>Pod</button>}</div>
+                </div>}
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .72fr) minmax(520px, 1.7fr)", gap: 22 }}>
+                <div style={{ borderRight: "1px solid #E8ECEF", paddingRight: 22 }}>
+                  {[
+                    ["Approved leave", formatHM(leaveData.leave_seconds || 0), capacityView === "person" ? "Selected person" : capacityView === "pod" && leaveData.pod_name ? leaveData.pod_name : "Selected team scope"],
+                    ["Equivalent workdays", Number(leaveData.equivalent_days || 0).toFixed(1).replace(/\.0$/, ""), "Based on each person's configured daily capacity"],
+                    [capacityView === "person" ? "Dates affected" : "People with leave", capacityView === "person" ? String(leaveData.dates_affected || 0) : String(leaveData.people_with_leave || 0), "Approved leave in selected period"],
+                    ["Peak period", leaveData.peak_period_start ? new Date(`${leaveData.peak_period_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: leaveData.trend_granularity === "monthly" ? undefined : "numeric", year: leaveData.trend_granularity === "monthly" ? "numeric" : undefined }) : "—", leaveData.peak_leave_seconds ? formatHM(leaveData.peak_leave_seconds) : "No approved leave"],
+                  ].map(([label,value,detail], i) => <div key={label} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, padding: "10px 0", borderTop: i ? "1px solid #EEF1F4" : "none" }}><div><div style={{ fontSize: 11.5 }}>{label}</div><div className="cb-hint" style={{ marginTop: 2 }}>{detail}</div></div><strong className="cb-mono" style={{ fontSize: 13 }}>{value}</strong></div>)}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 12.5 }}>{leaveData.trend_granularity === "daily" ? "Daily leave" : leaveData.trend_granularity === "monthly" ? "Monthly leave" : "Weekly leave"}</div>
+                  <LeaveTrendChart rows={leaveData.trend || []}/>
+                </div>
+              </div>
+              {(capacityView === "team" || capacityView === "pod") && (leaveData.members || []).length > 0 && (
+                <div className="cb-table-wrap" style={{ marginTop: 14 }}><table className="cb-table"><thead><tr><th>Person</th><th className="num">Approved leave</th><th className="num">Equivalent days</th><th className="num">Dates affected</th></tr></thead><tbody>{leaveData.members.map((row) => <tr key={row.member_id}><td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.leave_seconds)}</td><td className="num">{Number(row.equivalent_days || 0).toFixed(1).replace(/\.0$/, "")}</td><td className="num">{row.dates_affected || 0}</td></tr>)}</tbody></table></div>
+              )}
+              {leaveData.leave_seconds <= 0 && <div className="cb-hint" style={{ marginTop: 8 }}>No approved leave was found for this scope and period.</div>}
+            </div>
+          )}
 
           {capacityData && (
             <div style={{ ...panelStyle, marginBottom: 14 }}>
