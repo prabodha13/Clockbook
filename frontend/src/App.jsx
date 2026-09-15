@@ -3822,31 +3822,60 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
   const cardStyle = { border: "1px solid #DDE4EC", borderRadius: 10, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.02)" };
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
-  const metricCards = data ? [
-    { label: "Tracked time", seconds: data.summary.tracked_seconds, previousSeconds: data.summary.previous?.tracked_seconds, change: data.summary.changes.tracked, icon: Clock, bg: "#EAF2FF", fg: "#2467D7" },
-    { label: "Focused work", seconds: data.summary.focused_seconds, previousSeconds: data.summary.previous?.focused_seconds, change: data.summary.changes.focused, icon: ClipboardList, bg: "#EAF8EF", fg: "#168A45" },
-    { label: "Meeting time", seconds: data.summary.meeting_seconds, previousSeconds: data.summary.previous?.meeting_seconds, change: data.summary.changes.meeting, icon: Users, bg: "#EEF3FF", fg: "#2867D5" },
-    { label: "Support received", seconds: data.summary.support_received_seconds, previousSeconds: data.summary.previous?.support_received_seconds, change: data.summary.changes.support_received, icon: HeartHandshake, bg: "#ECFAF3", fg: "#169B62" },
-    { label: "Support given", seconds: data.summary.support_given_seconds, previousSeconds: data.summary.previous?.support_given_seconds, change: data.summary.changes.support_given, icon: HeartHandshake, bg: "#EDF9F1", fg: "#168A45" },
-  ] : [];
 
-  const capacityData = capacityView === "team" && data?.team_capacity ? data.team_capacity : data?.capacity;
-  const capacityLabel = capacityView === "team" ? "Team capacity for period" : "Available capacity for period";
+  const personCapacity = data?.capacity;
+  const capacityData = capacityView === "team" && data?.team_capacity ? data.team_capacity : personCapacity;
+  const capacityLabel = capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
+  const clientSeconds = Number(data?.summary?.billable_seconds || 0);
+  const trackedSeconds = Number(data?.summary?.tracked_seconds || 0);
+  const clientShare = trackedSeconds > 0 ? (clientSeconds / trackedSeconds) * 100 : 0;
 
-  const supportCurrent = Number(data?.summary?.support_received_seconds || 0);
-  const supportPrevious = Number(data?.summary?.previous?.support_received_seconds || 0);
-  const supportChange = data?.summary?.changes?.support_received;
-  const supportCallout = supportPrevious <= 0 && supportCurrent <= 0
-    ? "No support received was recorded in either period."
-    : supportPrevious <= 0 && supportCurrent > 0
-      ? `Support received is new in this period (${formatHM(supportCurrent)}).`
-      : Math.abs(Number(supportChange || 0)) < 0.05
-        ? "Support received is broadly unchanged compared with the previous period."
-        : Number(supportChange) >= 200
-          ? `Support received increased by ${formatHM(Math.max(0, supportCurrent - supportPrevious))} (${(supportCurrent / supportPrevious).toFixed(1)}× the previous period).`
-          : `Support received ${supportChange < 0 ? "reduced" : "increased"} by ${Math.abs(supportChange).toFixed(0)}% compared with the previous period.`;
+  const comparisonRows = data ? [
+    { label: "Tracked", current: data.summary.tracked_seconds, previous: data.summary.previous?.tracked_seconds, change: data.summary.changes?.tracked },
+    { label: "Client time", current: data.summary.billable_seconds, previous: data.summary.previous?.billable_seconds, change: data.summary.changes?.billable },
+    { label: "Meetings", current: data.summary.meeting_seconds, previous: data.summary.previous?.meeting_seconds, change: data.summary.changes?.meeting },
+    { label: "Support received", current: data.summary.support_received_seconds, previous: data.summary.previous?.support_received_seconds, change: data.summary.changes?.support_received },
+  ] : [];
+
+  function TimeTrendChart({ rows = [] }) {
+    if (!rows.length) return <div className="cb-empty">No submitted time in this period.</div>;
+    const width = 720, height = 210, padL = 44, padR = 16, padT = 18, padB = 34;
+    const maxValue = Math.max(1, ...rows.flatMap((r) => [Number(r.seconds || 0), Number(r.billable_seconds || 0)]));
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    const points = (key) => rows.map((r, i) => `${x(i)},${y(r[key])}`).join(" ");
+    return (
+      <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label="Submitted and client time over time">
+        {[0, .25, .5, .75, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="2" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
+        <polyline fill="none" stroke="#243B53" strokeWidth="2.5" points={points("seconds")}/>
+        <polyline fill="none" stroke="#2467D7" strokeWidth="2.5" points={points("billable_seconds")}/>
+        {rows.map((r, i) => <g key={r.period_start}>
+          <circle cx={x(i)} cy={y(r.seconds)} r="3" fill="#243B53"/>
+          <circle cx={x(i)} cy={y(r.billable_seconds)} r="3" fill="#2467D7"/>
+          <text x={x(i)} y={height-10} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: range === "365" ? undefined : "numeric" })}</text>
+        </g>)}
+      </svg>
+    );
+  }
+
+  function DistributionList({ rows = [], total = 0, color = "#2467D7", limit = 5, empty = "No data." }) {
+    const shown = rows.slice(0, limit);
+    const safeTotal = Number(total || shown.reduce((sum, r) => sum + Number(r.seconds || 0), 0)) || 1;
+    if (!shown.length) return <div className="cb-empty">{empty}</div>;
+    return <div style={{ display: "grid", gap: 11 }}>{shown.map((row) => {
+      const pct = (Number(row.seconds || 0) / safeTotal) * 100;
+      return <div key={row.label}>
+        <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 10, alignItems: "baseline", fontSize: 11.5 }}>
+          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span>
+          <span style={{ whiteSpace: "nowrap", color: "var(--ink-soft)" }}><span className="cb-mono">{formatHM(row.seconds)}</span> · {Math.round(pct)}%</span>
+        </div>
+        <div style={{ height: 5, background: "#EDF1F5", borderRadius: 99, overflow: "hidden", marginTop: 5 }}><div style={{ height: "100%", width: `${Math.max(2, Math.min(100, pct))}%`, background: color, borderRadius: 99 }}/></div>
+      </div>;
+    })}</div>;
+  }
 
   return (
     <div style={{ maxWidth: 1460, margin: "0 auto" }}>
@@ -3899,195 +3928,87 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
       {!data && !error && <TableSkeleton rows={6} />}
       {data && (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 12, marginBottom: 14 }}>
-            {metricCards.map(({ label, seconds, previousSeconds, change, icon: Icon, bg, fg }) => {
-              const comparison = comparisonInfo(seconds, previousSeconds, change);
-              return (
-              <div key={label} style={{ ...cardStyle, padding: "14px 15px", display: "flex", gap: 12, alignItems: "center", minWidth: 0 }}>
-                <div style={{ width: 40, height: 40, borderRadius: 999, background: bg, color: fg, display: "grid", placeItems: "center", flex: "0 0 auto" }}><Icon size={20}/></div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 12, fontWeight: 650, color: "var(--ink-soft)" }}>{label}</div>
-                  <div className="cb-serif" style={{ fontSize: 23, fontWeight: 700, lineHeight: 1.2, marginTop: 2 }}>{formatHM(seconds || 0)}</div>
-                  <div style={{ fontSize: 10.5, marginTop: 3, color: comparison.color, whiteSpace: "nowrap" }}>{comparison.detail}</div>
-                </div>
-              </div>
-            );})}
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.45fr) minmax(330px, 1fr)", gap: 14, marginBottom: 14 }}>
-            <div style={panelStyle}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 2 }}>
-                <div className="cb-group-title" style={{ fontSize: 15 }}>Support over time</div>
-                <div style={{ display: "flex", gap: 12, fontSize: 10.5, color: "var(--ink-soft)" }}>
-                  <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: "#2867D5", marginRight: 5 }}/>Support received</span>
-                  <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 2, background: "#67AEEF", marginRight: 5 }}/>Support given</span>
-                </div>
-              </div>
-              <SupportChart rows={data.support_trend || []}/>
-            </div>
-
-            <div style={panelStyle}>
-              <div className="cb-group-title" style={{ fontSize: 15, marginBottom: 12 }}>Where my time went</div>
-              <div style={{ display: "grid", gridTemplateColumns: "190px 1fr", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 170, height: 170, borderRadius: "50%", background: donutBackground, position: "relative", margin: "0 auto" }}>
-                  <div style={{ position: "absolute", inset: 34, background: "#fff", borderRadius: "50%", display: "grid", placeItems: "center", textAlign: "center", boxShadow: "inset 0 0 0 1px #EEF2F6" }}>
-                    <div><div className="cb-serif" style={{ fontWeight: 700, fontSize: 17 }}>{formatHM(data.summary.tracked_seconds || 0)}</div><div style={{ fontSize: 10, color: "var(--muted)" }}>Total</div></div>
-                  </div>
-                </div>
-                <div style={{ display: "grid", gap: 9 }}>
-                  {(data.work_mix || []).map((row, i) => <div key={row.label} style={{ display: "grid", gridTemplateColumns: "12px 1fr auto", gap: 8, alignItems: "center", fontSize: 11.5 }}>
-                    <span style={{ width: 10, height: 10, borderRadius: 999, background: mixPalette[i % mixPalette.length] }}/><span>{row.label}</span><strong>{totalMix > 0 ? `${Math.round((row.seconds / totalMix) * 100)}%` : "0%"}</strong>
-                  </div>)}
-                  {(data.work_mix || []).length === 0 && <div className="cb-empty">No completed work in this period.</div>}
-                </div>
-              </div>
-              <div className="cb-hint" style={{ marginTop: 10 }}>Broad categories come from the template Field (for example Tax, Bookkeeping or Payroll).</div>
+          <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+              {[
+                ["Tracked time", formatHM(data.summary.tracked_seconds || 0), comparisonInfo(data.summary.tracked_seconds, data.summary.previous?.tracked_seconds, data.summary.changes?.tracked).detail],
+                ["Client time", formatHM(clientSeconds), `${Math.round(clientShare)}% of submitted time`],
+                ["Meeting time", formatHM(data.summary.meeting_seconds || 0), `${trackedSeconds > 0 ? Math.round((Number(data.summary.meeting_seconds || 0) / trackedSeconds) * 100) : 0}% of submitted time`],
+                ["Capacity utilisation", personCapacity?.overall_utilization == null ? "—" : `${Math.round(personCapacity.overall_utilization)}%`, personCapacity ? `${formatHM(personCapacity.tracked_seconds || 0)} of ${formatHM(personCapacity.capacity_seconds || 0)}` : "No capacity set"],
+              ].map(([label, value, detail], i) => <div key={label} style={{ padding: "15px 18px", borderRight: i < 3 ? "1px solid #E7ECF0" : "none" }}>
+                <div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div>
+                <div className="cb-serif" style={{ fontSize: 25, fontWeight: 700, lineHeight: 1.15, marginTop: 4 }}>{value}</div>
+                <div className="cb-hint" style={{ marginTop: 5 }}>{detail}</div>
+              </div>)}
             </div>
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "1.05fr .92fr 1.2fr 1.1fr", gap: 14, marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1.75fr) minmax(320px, .8fr)", gap: 14, marginBottom: 14 }}>
             <div style={panelStyle}>
-              <div className="cb-group-title" style={{ fontSize: 14 }}>Tracked time over time</div>
-              <TrendChart rows={data.tracked_trend || []}/>
-            </div>
-
-            <div style={panelStyle}>
-              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>{comparisonHeading}</div>
-              <div style={{ display: "grid", gap: 9 }}>
-                {metricCards.map((m) => {
-                  const comparison = comparisonInfo(m.seconds, m.previousSeconds, m.change);
-                  return (
-                    <div key={m.label} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) auto", gap: 12, alignItems: "start", fontSize: 11.5, borderBottom: "1px solid #EEF1F4", paddingBottom: 7 }}>
-                      <span>{m.label}</span>
-                      <div style={{ textAlign: "right", minWidth: 0 }}>
-                        <div style={{ color: comparison.color, fontWeight: 700, whiteSpace: "nowrap" }}>{comparison.primary}</div>
-                        <div style={{ marginTop: 2, fontSize: 9.5, color: "var(--muted)", whiteSpace: "nowrap" }}>{comparison.secondary}</div>
-                      </div>
-                    </div>
-                  );
-                })}
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 4 }}>
+                <div className="cb-group-title" style={{ fontSize: 15 }}>Time trend</div>
+                <div style={{ display: "flex", gap: 14, fontSize: 10.5, color: "var(--ink-soft)" }}>
+                  <span><span style={{ display: "inline-block", width: 14, borderTop: "2px solid #243B53", marginRight: 5, verticalAlign: "middle" }}/>Submitted</span>
+                  <span><span style={{ display: "inline-block", width: 14, borderTop: "2px solid #2467D7", marginRight: 5, verticalAlign: "middle" }}/>Client</span>
+                </div>
               </div>
+              <TimeTrendChart rows={data.tracked_trend || []}/>
             </div>
-
             <div style={panelStyle}>
-              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Top clients</div>
-              <div style={{ display: "grid", gap: 9 }}>
-                {(data.top_clients || []).map((row) => {
-                  const max = Math.max(1, ...(data.top_clients || []).map((r) => r.seconds || 0));
-                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 120px 58px", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / max) * 100)}%`, background: "#67AEEF", borderRadius: 99 }}/></div><span className="cb-mono" style={{ textAlign: "right", whiteSpace: "nowrap" }}>{formatHM(row.seconds)}</span></div>;
-                })}
-                {(data.top_clients || []).length === 0 && <div className="cb-empty">No client work.</div>}
-              </div>
+              <div className="cb-group-title" style={{ fontSize: 15, marginBottom: 10 }}>{comparisonHeading}</div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11.5 }}>
+                <thead><tr style={{ color: "var(--muted)", textAlign: "left" }}><th style={{ padding: "0 0 7px" }}>Metric</th><th style={{ padding: "0 0 7px", textAlign: "right" }}>Current</th><th style={{ padding: "0 0 7px", textAlign: "right" }}>Previous</th><th style={{ padding: "0 0 7px", textAlign: "right" }}>Change</th></tr></thead>
+                <tbody>{comparisonRows.map((row) => { const info = comparisonInfo(row.current, row.previous, row.change); return <tr key={row.label} style={{ borderTop: "1px solid #EEF1F4" }}><td style={{ padding: "9px 0" }}>{row.label}</td><td className="cb-mono" style={{ padding: "9px 0", textAlign: "right" }}>{formatHM(row.current || 0)}</td><td className="cb-mono" style={{ padding: "9px 0", textAlign: "right", color: "var(--ink-soft)" }}>{Number(row.previous || 0) > 0 ? formatHM(row.previous) : "—"}</td><td style={{ padding: "9px 0", textAlign: "right", color: info.color, fontWeight: 650 }}>{info.compact}</td></tr>; })}</tbody>
+              </table>
             </div>
+          </div>
 
-            <div style={panelStyle}>
-              <div className="cb-group-title" style={{ fontSize: 14, marginBottom: 10 }}>Task type mix</div>
-              <div style={{ display: "grid", gap: 9 }}>
-                {(data.task_type_mix || []).slice(0, 6).map((row) => {
-                  const total = (data.task_type_mix || []).reduce((sum, r) => sum + Number(r.seconds || 0), 0) || 1;
-                  return <div key={row.label} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 100px 42px", gap: 8, alignItems: "center", fontSize: 10.5 }}><span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{row.label}</span><div style={{ height: 8, background: "#E9EEF5", borderRadius: 99, overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.max(3, (row.seconds / total) * 100)}%`, background: "#2F86D8", borderRadius: 99 }}/></div><strong style={{ textAlign: "right", whiteSpace: "nowrap" }}>{Math.round((row.seconds / total) * 100)}%</strong></div>;
-                })}
-                {(data.task_type_mix || []).length === 0 && <div className="cb-empty">No task-type data.</div>}
-              </div>
+          <div style={{ ...panelStyle, marginBottom: 14 }}>
+            <div className="cb-group-title" style={{ fontSize: 15, marginBottom: 13 }}>Work distribution</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr 1fr", gap: 0 }}>
+              <div style={{ paddingRight: 20 }}><div style={{ fontSize: 12, fontWeight: 700, marginBottom: 11 }}>Main categories</div><DistributionList rows={data.work_mix || []} total={data.distribution_totals?.work_mix_seconds || totalMix} color="#4B6B88" limit={6} empty="No completed work." /></div>
+              <div style={{ padding: "0 20px", borderLeft: "1px solid #E8ECEF", borderRight: "1px solid #E8ECEF" }}><div style={{ fontSize: 12, fontWeight: 700, marginBottom: 11 }}>Top clients</div><DistributionList rows={data.top_clients || []} total={data.distribution_totals?.client_seconds || 0} color="#4F8FD8" empty="No client work." /></div>
+              <div style={{ paddingLeft: 20 }}><div style={{ fontSize: 12, fontWeight: 700, marginBottom: 11 }}>Task types</div><DistributionList rows={data.task_type_mix || []} total={data.distribution_totals?.task_type_seconds || 0} color="#6B7C93" empty="No task-type data." /></div>
             </div>
           </div>
 
           {capacityData && (
-            <div style={{ ...panelStyle, marginBottom: 14, borderColor: "#BFE6CE", boxShadow: "0 0 0 1px rgba(22,138,69,.08)" }}>
+            <div style={{ ...panelStyle, marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
-                <div>
-                  <div className="cb-group-title" style={{ fontSize: 15 }}>Capacity & utilization</div>
-                  <div className="cb-hint" style={{ marginTop: 3 }}>Capacity is a planning baseline, not a performance score.</div>
-                </div>
-                {isAdmin && !forceSelfOnly && data.team_capacity && (
-                  <div className="cb-tabs" style={{ flexShrink: 0 }}>
-                    <button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button>
-                    <button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>
-                  </div>
-                )}
+                <div><div className="cb-group-title" style={{ fontSize: 15 }}>Capacity & utilisation</div></div>
+                {isAdmin && !forceSelfOnly && data.team_capacity && <div className="cb-tabs" style={{ flexShrink: 0 }}><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button></div>}
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .8fr) minmax(520px, 1.7fr)", gap: 18, alignItems: "stretch" }}>
-                <div style={{ borderRight: "1px solid #E6ECE9", paddingRight: 18 }}>
-                  <div style={{ display: "grid", gap: 11 }}>
-                    <div style={{ paddingBottom: 9, borderBottom: "1px solid #EEF2F0" }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, alignItems: "center" }}>
-                        <span className="cb-hint">{capacityLabel}</span><strong>{formatHM(capacityData.capacity_seconds || 0)}</strong>
-                      </div>
-                      {capacityView === "person" && (
-                        <div
-                          className="cb-hint"
-                          style={{ marginTop: 4 }}
-                          title={capacityData.capacity_effective_from ? `Capacity is calculated from ${formatDate(capacityData.capacity_effective_from)}.` : undefined}
-                        >
-                          Weekly capacity: {Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h
-                        </div>
-                      )}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 56px", gap: 10, alignItems: "center" }}>
-                      <span>Tracked time</span><strong>{formatHM(capacityData.tracked_seconds || 0)}</strong><strong style={{ color: "#168A45", textAlign: "right" }}>{capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}%`}</strong>
-                    </div>
-                    <div style={{ height: 9, borderRadius: 99, background: "#E8EEE9", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, Math.max(0, Number(capacityTrackedPct || 0)))}%`, background: "#16A05D", borderRadius: 99 }}/></div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr auto 56px", gap: 10, alignItems: "center", marginTop: 2 }}>
-                      <span>Client (billable) time</span><strong>{formatHM(capacityData.billable_seconds || 0)}</strong><strong style={{ color: "#2467D7", textAlign: "right" }}>{capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`}</strong>
-                    </div>
-                    <div style={{ height: 9, borderRadius: 99, background: "#E8EDF5", overflow: "hidden" }}><div style={{ height: "100%", width: `${Math.min(100, Math.max(0, Number(capacityBillablePct || 0)))}%`, background: "#2467D7", borderRadius: 99 }}/></div>
-                    <div style={{ marginTop: 7, padding: "11px 12px", borderRadius: 8, background: "#FAFBFC", border: "1px solid #E4E8EC" }}>
-                      <div style={{ fontWeight: 700, fontSize: 12 }}>{capacityTrackedPct == null ? "No capacity set for this period" : `Tracked ${Math.round(capacityTrackedPct)}% of available capacity`}</div>
-                      <div className="cb-hint" style={{ marginTop: 3 }}>{formatHM(capacityData.available_seconds || 0)} available · {capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}%`} client work</div>
-                    </div>
-                  </div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, .75fr) minmax(520px, 1.65fr)", gap: 22 }}>
+                <div style={{ borderRight: "1px solid #E8ECEF", paddingRight: 22 }}>
+                  {[
+                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h` : "Selected period"],
+                    ["Tracked", formatHM(capacityData.tracked_seconds || 0), capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}% utilisation`],
+                    ["Client", formatHM(capacityData.billable_seconds || 0), capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}% of capacity`],
+                    ["Available", formatHM(capacityData.available_seconds || 0), "Remaining capacity"],
+                  ].map(([label,value,detail], i) => <div key={label} style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 12, padding: "10px 0", borderTop: i ? "1px solid #EEF1F4" : "none" }}><div><div style={{ fontSize: 11.5 }}>{label}</div><div className="cb-hint" style={{ marginTop: 2 }}>{detail}</div></div><strong className="cb-mono" style={{ fontSize: 13 }}>{value}</strong></div>)}
                 </div>
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginBottom: 2 }}>
-                    <div style={{ fontWeight: 700, fontSize: 12.5 }}>Weekly trend</div>
-                    <div style={{ display: "flex", gap: 13, fontSize: 10.5, color: "var(--ink-soft)", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                      <span><span style={{ display: "inline-block", width: 13, borderTop: "2px dashed #16A05D", marginRight: 5, verticalAlign: "middle" }}/>Capacity</span>
-                      <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "#168A45", marginRight: 5 }}/>Tracked</span>
-                      <span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "#2467D7", marginRight: 5 }}/>Client work</span>
-                    </div>
-                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}><div style={{ fontWeight: 700, fontSize: 12.5 }}>Weekly trend</div><div style={{ display: "flex", gap: 13, fontSize: 10.5, color: "var(--ink-soft)", flexWrap: "wrap" }}><span><span style={{ display: "inline-block", width: 13, borderTop: "2px dashed #16A05D", marginRight: 5, verticalAlign: "middle" }}/>Capacity</span><span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "#168A45", marginRight: 5 }}/>Tracked</span><span><span style={{ display: "inline-block", width: 9, height: 9, borderRadius: 99, background: "#2467D7", marginRight: 5 }}/>Client</span></div></div>
                   <CapacityTrendChart rows={capacityData.trend || []}/>
                 </div>
               </div>
-              {capacityView === "team" && (capacityData.members || []).length > 0 && (
-                <div className="cb-table-wrap" style={{ marginTop: 14 }}>
-                  <table className="cb-table">
-                    <thead><tr><th>Person</th><th className="num">Capacity</th><th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client work</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead>
-                    <tbody>{capacityData.members.map((row) => <tr key={row.member_id}>
-                      <td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td><td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td>
-                    </tr>)}</tbody>
-                  </table>
-                </div>
-              )}
+              {capacityView === "team" && (capacityData.members || []).length > 0 && <div className="cb-table-wrap" style={{ marginTop: 14 }}><table className="cb-table"><thead><tr><th>Person</th><th className="num">Capacity</th><th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead><tbody>{capacityData.members.map((row) => <tr key={row.member_id}><td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td><td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td></tr>)}</tbody></table></div>}
             </div>
           )}
 
-          <div style={{ display: "grid", gridTemplateColumns: ".9fr .7fr 1.08fr 1.75fr", gap: 14, marginBottom: 14 }}>
-            <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Average task duration</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{formatHM(data.summary.average_task_seconds || 0)}</div></div>
-            <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Completed tasks</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{data.summary.completed_tasks}</div></div>
-            <div style={{ ...panelStyle, padding: "13px 15px" }}><div className="cb-hint">Tracking consistency</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700 }}>{Math.round(data.tracking_consistency || 0)}%</div><div className="cb-hint">Tracked time on {data.tracked_working_days || 0} of {data.working_days || 0} working days</div></div>
-            <div style={{ ...panelStyle, padding: "13px 15px" }}><div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>Support received</div><div className="cb-hint">{supportCallout}</div></div>
+          <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+              <div style={{ padding: "14px 16px", borderRight: "1px solid #E8ECEF" }}><div className="cb-hint">Average task duration</div><div style={{ fontSize: 18, fontWeight: 700, marginTop: 3 }}>{formatHM(data.summary.average_task_seconds || 0)}</div></div>
+              <div style={{ padding: "14px 16px", borderRight: "1px solid #E8ECEF" }}><div className="cb-hint">Completed tasks</div><div style={{ fontSize: 18, fontWeight: 700, marginTop: 3 }}>{data.summary.completed_tasks}</div></div>
+              <div style={{ padding: "14px 16px", borderRight: "1px solid #E8ECEF" }}><div className="cb-hint">Days with submitted time</div><div style={{ fontSize: 18, fontWeight: 700, marginTop: 3 }}>{data.tracked_working_days || 0} of {data.working_days || 0}</div><div className="cb-hint" style={{ marginTop: 2 }}>Working days in period</div></div>
+              <div style={{ padding: "14px 16px" }}><div className="cb-hint">Collaboration</div><div style={{ display: "flex", gap: 16, marginTop: 5, fontSize: 12 }}><span>Received <strong className="cb-mono">{formatHM(data.summary.support_received_seconds || 0)}</strong></span><span>Given <strong className="cb-mono">{formatHM(data.summary.support_given_seconds || 0)}</strong></span></div></div>
+            </div>
           </div>
 
           {(data.delegation_candidates || []).length > 0 && (
             <div style={{ ...panelStyle, marginBottom: 18 }}>
-              <div style={{ marginBottom: 11 }}>
-                <div className="cb-group-title" style={{ fontSize: 14 }}>Delegation opportunities</div>
-                <div className="cb-hint" style={{ marginTop: 3 }}>Tasks you worked on that have also been completed by staff.</div>
-              </div>
-              <div className="cb-table-wrap">
-                <table className="cb-table">
-                  <thead><tr><th>Client</th><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Also completed by</th></tr></thead>
-                  <tbody>{data.delegation_candidates.map((row) => <tr key={row.task_key}>
-                    <td style={{ fontWeight: 650 }}>{row.client_name || "—"}</td>
-                    <td style={{ fontWeight: 650 }}>{row.template_name || "—"}</td>
-                    <td>{row.task}</td>
-                    <td>{row.task_type || "—"}</td>
-                    <td className="num cb-mono">{formatHM(row.seconds)}</td>
-                    <td>{row.staff_names.join(", ")}</td>
-                  </tr>)}</tbody>
-                </table>
-              </div>
+              <div style={{ marginBottom: 11 }}><div className="cb-group-title" style={{ fontSize: 14 }}>Delegation evidence</div><div className="cb-hint" style={{ marginTop: 3 }}>Work you completed that has also been completed by staff.</div></div>
+              <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Client</th><th>Template</th><th>Task</th><th>Task type</th><th className="num">Your time</th><th>Previously completed by</th></tr></thead><tbody>{data.delegation_candidates.map((row) => <tr key={row.task_key}><td style={{ fontWeight: 650 }}>{row.client_name || "—"}</td><td style={{ fontWeight: 650 }}>{row.template_name || "—"}</td><td>{row.task}</td><td>{row.task_type || "—"}</td><td className="num cb-mono">{formatHM(row.seconds)}</td><td>{row.staff_names.join(", ")}</td></tr>)}</tbody></table></div>
             </div>
           )}
         </>
