@@ -23,6 +23,7 @@ class MemberOut(BaseModel):
     weekly_capacity_hours: float = 40.0
     capacity_effective_from: Optional[date] = None
     timezone_name: str = "Asia/Colombo"
+    can_view_leave_capacity_insights: bool = False
 
 
 class PodOut(BaseModel):
@@ -80,6 +81,10 @@ class MemberCapacityUpdate(BaseModel):
 
 class MemberTimezoneUpdate(BaseModel):
     timezone_name: str
+
+
+class MemberInsightsPermissionUpdate(BaseModel):
+    enabled: bool
 
 
 class LoginRequest(BaseModel):

@@ -100,6 +100,9 @@ def run_startup_migrations():
             if "timezone_name" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN timezone_name VARCHAR DEFAULT 'Asia/Colombo'"))
                 conn.execute(text("UPDATE members SET timezone_name = 'Asia/Colombo' WHERE timezone_name IS NULL OR timezone_name = ''"))
+            if "can_view_leave_capacity_insights" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN can_view_leave_capacity_insights BOOLEAN DEFAULT FALSE"))
+                conn.execute(text("UPDATE members SET can_view_leave_capacity_insights = FALSE WHERE can_view_leave_capacity_insights IS NULL"))
 
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
@@ -1069,6 +1072,21 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
     # selected reporting period instead of being limited by a start date.
     if "capacity_effective_from" in payload.model_fields_set:
         member.capacity_effective_from = payload.capacity_effective_from
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@app.patch("/api/members/{member_id}/insights-permission", response_model=schemas.MemberOut)
+def update_member_insights_permission(member_id: str, payload: schemas.MemberInsightsPermissionUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can manage leave and capacity insights access")
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    if member.role != "admin":
+        raise HTTPException(400, "Leave and capacity insights access can only be assigned to admins")
+    member.can_view_leave_capacity_insights = bool(payload.enabled)
     db.commit()
     db.refresh(member)
     return member
@@ -2151,7 +2169,7 @@ def get_insights(
                 "support_received_seconds": round(prev_received_seconds, 1),
             },
         },
-        "capacity": {
+        "capacity": ({
             "weekly_capacity_hours": round(float(getattr(target, "weekly_capacity_hours", 40.0) or 0.0), 2),
             "capacity_effective_from": target.capacity_effective_from.isoformat() if getattr(target, "capacity_effective_from", None) else None,
             "capacity_seconds": round(capacity_seconds, 1),
@@ -2166,8 +2184,8 @@ def get_insights(
             "trend": capacity_trend,
             "calamari_adjustment_seconds": round(sum(target_unavailable.values()), 1),
             "calamari": individual_calamari_meta,
-        },
-        "team_capacity": team_capacity,
+        } if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
+        "team_capacity": (team_capacity if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
         "support_trend": support_trend,
         "tracked_trend": tracked_trend,
         "work_mix": work_mix,
