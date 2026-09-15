@@ -5530,7 +5530,7 @@ function InactivityAuditView({ members }) {
         <div className="cb-page-title cb-serif">Audit</div>
         <div className="cb-page-sub">Super-admin review of daily start activity plus Clockbook-detected lock, sleep, and offline gaps. Times use each person’s configured time zone.</div>
 
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start", marginTop: 14, flexWrap: "nowrap" }}>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap" }}>
           <div style={{ flex: "0 0 150px" }}>
             <div className="cb-label">Person</div>
             <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ width: 150, minWidth: 150 }}>
@@ -5551,20 +5551,20 @@ function InactivityAuditView({ members }) {
             </div>
           </div>
 
-          <div style={{ display: "flex", alignItems: "flex-end", gap: 6, flex: "0 0 333px", visibility: dateMode === "custom" ? "visible" : "hidden", pointerEvents: dateMode === "custom" ? "auto" : "none" }}>
+          {dateMode === "custom" && <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flex: "0 0 auto" }}>
             <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 145 }} /></div>
             <span style={{ color: "var(--ink-faint)", paddingBottom: 10 }}>to</span>
             <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
-          </div>
+          </div>}
 
-          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", marginTop: 20, flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
+          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
         </div>
       </div>
-      <div className="cb-group-head" style={{ marginTop: 18 }}><div className="cb-group-title">Daily start activity</div><div className="cb-group-count">{filteredActivityRows.length}</div></div>
+      <div className="cb-group-head" style={{ marginTop: 18, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Daily start activity</div><div className="cb-group-count">{filteredActivityRows.length}</div></div>
       {activityRows === null ? <TableSkeleton rows={3} /> : filteredActivityRows.length === 0 ? <div className="cb-empty">No login or clock-start activity was recorded in this period.</div> : (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
-          <table className="cb-table"><thead><tr><th>Person</th><th>Date</th><th>Time zone</th><th>First login</th><th>First clock started</th></tr></thead>
-          <tbody>{filteredActivityRows.map((r) => <tr key={`${r.member_id}-${r.date}`}><td>{r.member_name}</td><td>{formatDate(`${r.date}T12:00:00`)}</td><td>{r.timezone_name}</td><td className="cb-mono">{r.first_login_at ? new Date(r.first_login_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="cb-mono">{r.first_clock_at ? new Date(r.first_clock_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td></tr>)}</tbody></table>
+          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "25%" }} /><col style={{ width: "17%" }} /><col style={{ width: "18%" }} /><col style={{ width: "15%" }} /><col style={{ width: "25%" }} /></colgroup><thead><tr><th>Person</th><th>Date</th><th>Time zone</th><th className="num">First login</th><th className="num">First clock started</th></tr></thead>
+          <tbody>{filteredActivityRows.map((r) => <tr key={`${r.member_id}-${r.date}`}><td>{r.member_name}</td><td>{formatDate(`${r.date}T12:00:00`)}</td><td>{r.timezone_name}</td><td className="num cb-mono">{r.first_login_at ? new Date(r.first_login_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.first_clock_at ? new Date(r.first_clock_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td></tr>)}</tbody></table>
         </div>
       )}
       {enabled === false && <div className="cb-notice">Audit recording is currently off. A super admin can turn it on from Settings.</div>}
@@ -5572,17 +5572,17 @@ function InactivityAuditView({ members }) {
       {enabled && events === null && <TableSkeleton rows={4} />}
       {enabled && events !== null && (
         <>
-          <div className="cb-group-head" style={{ marginTop: 18 }}><div className="cb-group-title">Summary</div><div className="cb-group-count">{summary.length}</div></div>
+          <div className="cb-group-head" style={{ marginTop: 18, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Summary</div><div className="cb-group-count">{summary.length}</div></div>
           {summary.length === 0 ? <div className="cb-empty">No audit events were recorded in this period.</div> : (
             <div className="cb-table-wrap">
-              <table className="cb-table"><thead><tr><th>Person</th><th className="num">Total detected</th><th className="num">Periods</th><th className="num">Longest</th></tr></thead>
+              <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "46%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /></colgroup><thead><tr><th>Person</th><th className="num">Total detected</th><th className="num">Periods</th><th className="num">Longest</th></tr></thead>
               <tbody>{summary.map((r) => <tr key={r.member_id}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.seconds)}</td><td className="num cb-mono">{r.count}</td><td className="num cb-mono">{formatHM(r.longest)}</td></tr>)}</tbody></table>
             </div>
           )}
-          <div className="cb-group-head" style={{ marginTop: 28 }}><div className="cb-group-title">Individual periods</div><div className="cb-group-count">{filteredEvents.length}</div></div>
+          <div className="cb-group-head" style={{ marginTop: 28, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Individual periods</div><div className="cb-group-count">{filteredEvents.length}</div></div>
           {filteredEvents.length > 0 && (
             <div className="cb-table-wrap">
-              <table className="cb-table"><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Detected</th><th className="num">Help explained</th><th className="num">Unexplained</th></tr></thead>
+              <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "16%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "20%" }} /><col style={{ width: "9%" }} /><col style={{ width: "10%" }} /><col style={{ width: "9%" }} /></colgroup><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Detected</th><th className="num">Help explained</th><th className="num">Unexplained</th></tr></thead>
               <tbody>{filteredEvents.map((e) => <tr key={e.id}>
                 <td>{e.member_name}</td><td>{kindLabel(e.kind)}</td>
                 <td>{formatDate(e.started_at)}, {new Date(e.started_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
