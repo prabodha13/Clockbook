@@ -2411,6 +2411,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
 function SettingsView({
   roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
+  members = [], onChangeInsightsPermission,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
 }) {
   const [newRole, setNewRole] = useState("");
@@ -2686,6 +2687,49 @@ function SettingsView({
                   {label}
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {realIsSuperAdmin && viewMode === "super_admin" && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Permissions</div>
+              <div className="cb-tmpl-name">Leave &amp; capacity insights</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 12 }}>
+              Choose who can view Leave Trends and Capacity &amp; Utilisation in Insights. Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
+            </div>
+            <div style={{ display: "grid", gap: 0, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+              {members.map((m, index) => {
+                const alwaysAllowed = m.role === "super_admin";
+                return (
+                  <label
+                    key={m.id}
+                    style={{
+                      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                      padding: "10px 12px", cursor: alwaysAllowed ? "default" : "pointer",
+                      borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
+                    }}
+                  >
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
+                      <div className="cb-hint">{roleLabel(m.role)}{alwaysAllowed ? " · Always enabled" : ""}</div>
+                    </div>
+                    <input
+                      type="checkbox"
+                      checked={alwaysAllowed || !!m.can_view_leave_capacity_insights}
+                      disabled={alwaysAllowed}
+                      onChange={(e) => onChangeInsightsPermission && onChangeInsightsPermission(m.id, e.target.checked)}
+                      aria-label={`Leave and capacity insights access for ${m.name}`}
+                    />
+                  </label>
+                );
+              })}
             </div>
           </div>
         </div>
@@ -5036,7 +5080,7 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onChangeTimezone, onChangeInsightsPermission, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
@@ -5130,16 +5174,6 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                     getLabel={(z) => z.name}
                   />
                 </div>
-              )}
-              {currentUser.role === "super_admin" && m.role === "admin" && (
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Allow this admin to view Leave Trends and Capacity Impact in Insights">
-                  <input
-                    type="checkbox"
-                    checked={!!m.can_view_leave_capacity_insights}
-                    onChange={(e) => onChangeInsightsPermission(m.id, e.target.checked)}
-                  />
-                  Leave &amp; capacity insights
-                </label>
               )}
               {currentUser.role === "super_admin" && pods.length > 0 && (
                 <select
@@ -7630,7 +7664,6 @@ export default function App() {
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
                 onChangeTimezone={changeMemberTimezone}
-                onChangeInsightsPermission={changeMemberInsightsPermission}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
                 pods={pods} onAssignPod={assignMemberPod}
@@ -7645,6 +7678,7 @@ export default function App() {
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onUpdateTaskTypeBilling={updateTaskTypeBilling} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
+                members={members} onChangeInsightsPermission={changeMemberInsightsPermission}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
                 effectiveIsAdmin={isAdmin}
               />
