@@ -3992,18 +3992,15 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   const [loadError, setLoadError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
+  // Export lists can become large, so keep the client/staff pickers searchable and
+  // deterministic. The pseudo "all" option stays at the top; real names are A-Z.
   const exportClientOptions = useMemo(() => [
     { id: "all", name: "All clients" },
-    ...[...clients]
-      .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }))
-      .map((c) => ({ ...c, id: String(c.id) })),
+    ...[...clients].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
   ], [clients]);
-
   const exportStaffOptions = useMemo(() => [
     { id: "all", name: "All staff" },
-    ...[...members]
-      .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }))
-      .map((m) => ({ ...m, id: String(m.id) })),
+    ...[...members].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
   ], [members]);
 
   const dateRange = useMemo(() => {
@@ -4176,23 +4173,23 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           <button className={`cb-tab ${pushFilter === "pushed" ? "active" : ""}`} onClick={() => setPushFilter("pushed")}>Pushed</button>
           <button className={`cb-tab ${pushFilter === "all" ? "active" : ""}`} onClick={() => setPushFilter("all")}>All</button>
         </div>
-        <div style={{ width: 220 }}>
+        <div style={{ width: 220, minWidth: 220 }}>
           <SearchableSelect
             options={exportClientOptions}
-            value={String(clientFilter)}
-            onChange={(id) => setClientFilter(String(id))}
-            placeholder="Search clients"
-            getLabel={(c) => c.name || "Unnamed client"}
+            value={clientFilter}
+            onChange={setClientFilter}
+            placeholder="Search clients..."
+            getLabel={(c) => c.name}
           />
         </div>
         {isAdmin && !forceSelfOnly && (
-          <div style={{ width: 220 }}>
+          <div style={{ width: 220, minWidth: 220 }}>
             <SearchableSelect
               options={exportStaffOptions}
-              value={String(staffFilter)}
-              onChange={(id) => setStaffFilter(String(id))}
-              placeholder="Search staff"
-              getLabel={(m) => m.name || "Unnamed staff"}
+              value={staffFilter}
+              onChange={setStaffFilter}
+              placeholder="Search staff..."
+              getLabel={(m) => m.name}
             />
           </div>
         )}
