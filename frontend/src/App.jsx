@@ -4,7 +4,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
-  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake, Search,
+  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake, Search, HelpCircle,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -345,7 +345,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
       </div>
       <div className="cb-nav">
         {items.map((it) => (
-          <button key={it.id} className={`cb-nav-item ${view === it.id ? "active" : ""}`} onClick={() => setView(it.id)}>
+          <button key={it.id} data-tour-nav={it.id} className={`cb-nav-item ${view === it.id ? "active" : ""}`} onClick={() => setView(it.id)}>
             <it.icon size={16} />
             {it.label}
           </button>
@@ -356,7 +356,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour }) {
   const isAdmin = isAdminRole(currentUser.role);
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
@@ -386,6 +386,11 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <button className="cb-btn cb-btn-sm" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
           <Video size={13} />Meeting
         </button>
+        {currentUser.role === "member" && onStartTour && (
+          <button className="cb-btn cb-btn-sm" onClick={onStartTour} title="Replay the ClockBook guided tour">
+            <HelpCircle size={13} />Tour
+          </button>
+        )}
         <div className="cb-user-btn" style={{ cursor: "default" }}>
           <Avatar member={currentUser} />
           {currentUser.name}
@@ -1027,7 +1032,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
             </div>
           )}
           <button className="cb-btn" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
-          <button className="cb-btn" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
+          <button className="cb-btn" data-tour="helper" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
           <button className="cb-btn cb-btn-primary" onClick={onNewTask}><Plus size={15} />New task</button>
         </div>
       </div>
@@ -1107,7 +1112,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         )}
       </div>
 
-      <div style={{ margin: "0 0 14px", maxWidth: 460 }}>
+      <div data-tour="task-search" style={{ margin: "0 0 14px", maxWidth: 460 }}>
         <div style={{ position: "relative" }}>
           <Search size={16} aria-hidden="true" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
           <input
@@ -1133,7 +1138,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         </div>
       </div>
 
-      <div className="cb-group">
+      <div className="cb-group" data-tour="task-list">
         <div className="cb-group-head">
           <div className="cb-group-title">In progress</div>
           <div className="cb-group-count">{normalizedTaskSearch ? `${filteredInProgress.length} of ${inProgress.length}` : inProgress.length}</div>
@@ -6452,6 +6457,130 @@ function savePromptedMeetingIds(set) {
   }
 }
 
+
+function GuidedTour({ onClose }) {
+  const steps = [
+    {
+      title: "Welcome to ClockBook",
+      body: "This short tour shows the main places you will use to find work, track time, record help and review your own insights.",
+      target: null,
+    },
+    {
+      title: "Find a client or task quickly",
+      body: "Search by client name or task name. Matching tasks stay grouped under their client so you can get to the right timer faster.",
+      target: '[data-tour="task-search"]',
+    },
+    {
+      title: "Your work and timers",
+      body: "Your active and paused work sits in In progress. Queued work is under To do. Use the play button to start or resume a task, then pause or complete it when needed.",
+      target: '[data-tour="task-list"]',
+    },
+    {
+      title: "Record colleague help",
+      body: "Use Helper when you help a colleague or receive help. That keeps collaboration time separate from normal client work.",
+      target: '[data-tour="helper"]',
+    },
+    {
+      title: "Review your insights",
+      body: "Insights shows your tracked work and personal reporting. If you have leave and capacity access, those personal metrics appear there too.",
+      target: '[data-tour-nav="insights"]',
+    },
+    {
+      title: "You are ready",
+      body: "You can replay this tour at any time using the Tour button in the top bar.",
+      target: null,
+    },
+  ];
+  const [stepIndex, setStepIndex] = useState(0);
+  const [targetRect, setTargetRect] = useState(null);
+  const step = steps[stepIndex];
+
+  useLayoutEffect(() => {
+    if (!step.target) {
+      setTargetRect(null);
+      return;
+    }
+    const el = document.querySelector(step.target);
+    if (!el) {
+      setTargetRect(null);
+      return;
+    }
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setTargetRect({ left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom, right: r.right });
+    };
+    const timer = window.setTimeout(update, 260);
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    update();
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
+  }, [stepIndex, step.target]);
+
+  const isLast = stepIndex === steps.length - 1;
+  const tooltipWidth = Math.min(390, Math.max(280, window.innerWidth - 32));
+  let tooltipStyle = {
+    position: "fixed", zIndex: 10002, width: tooltipWidth, maxWidth: "calc(100vw - 32px)",
+    background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", border: "1px solid var(--line, #d8ded9)",
+    borderRadius: 14, padding: 18, boxShadow: "0 16px 48px rgba(20, 32, 25, .22)",
+  };
+  if (targetRect) {
+    const gap = 14;
+    const left = Math.min(Math.max(16, targetRect.left), Math.max(16, window.innerWidth - tooltipWidth - 16));
+    const roomBelow = window.innerHeight - targetRect.bottom;
+    const top = roomBelow > 240
+      ? Math.min(window.innerHeight - 210, targetRect.bottom + gap)
+      : Math.max(16, targetRect.top - 210 - gap);
+    tooltipStyle = { ...tooltipStyle, left, top };
+  } else {
+    tooltipStyle = { ...tooltipStyle, left: "50%", top: "50%", transform: "translate(-50%, -50%)" };
+  }
+
+  return createPortal(
+    <>
+      <div aria-hidden="true" style={{ position: "fixed", inset: 0, zIndex: 10000, background: "transparent" }} />
+      {targetRect ? (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "fixed", zIndex: 10001, pointerEvents: "none",
+            left: Math.max(6, targetRect.left - 6), top: Math.max(6, targetRect.top - 6),
+            width: targetRect.width + 12, height: targetRect.height + 12,
+            borderRadius: 12, border: "2px solid var(--green, #245c43)",
+            boxShadow: "0 0 0 9999px rgba(18, 28, 22, .52)",
+          }}
+        />
+      ) : (
+        <div aria-hidden="true" style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(18, 28, 22, .52)", pointerEvents: "none" }} />
+      )}
+      <div role="dialog" aria-modal="true" aria-label="ClockBook guided tour" style={tooltipStyle}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".08em", textTransform: "uppercase", color: "var(--ink-soft, #68736c)" }}>
+            Step {stepIndex + 1} of {steps.length}
+          </div>
+          <button type="button" className="cb-icon-btn" onClick={onClose} aria-label="Skip guided tour" title="Skip tour"><X size={15} /></button>
+        </div>
+        <div className="cb-serif" style={{ fontSize: 21, fontWeight: 700, marginBottom: 8 }}>{step.title}</div>
+        <div style={{ fontSize: 14, lineHeight: 1.55, color: "var(--ink-soft, #58635d)", marginBottom: 18 }}>{step.body}</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Skip tour</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            {stepIndex > 0 && <button type="button" className="cb-btn" onClick={() => setStepIndex((i) => i - 1)}>Back</button>}
+            <button type="button" className="cb-btn cb-btn-primary" onClick={() => isLast ? onClose() : setStepIndex((i) => i + 1)}>
+              {isLast ? "Finish" : <>Next <ChevronRight size={14} /></>}
+            </button>
+          </div>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+}
+
 export default function App() {
   const [authState, setAuthState] = useState("loading"); // loading | claim | login | ready
   const [unclaimedMembers, setUnclaimedMembers] = useState([]);
@@ -6489,6 +6618,8 @@ export default function App() {
   const [meetingAlert, setMeetingAlert] = useState(null);
   const [meetingTrackPrompt, setMeetingTrackPrompt] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
+  const [showGuidedTour, setShowGuidedTour] = useState(false);
+  const tourAutoOpenedForRef = useRef(null);
 
   // Every timestamp actually saved comes from the server, so what gets recorded is always
   // accurate regardless of this computer's own clock. But the live ticking display for a
@@ -6516,6 +6647,32 @@ export default function App() {
     const iv = setInterval(() => setNow(Date.now() + clockOffsetRef.current), 1000);
     return () => clearInterval(iv);
   }, []);
+
+  useEffect(() => {
+    if (authState !== "ready" || dataLoading || !currentUser || currentUser.role !== "member") return;
+    if (currentUser.staff_tour_completed) return;
+    if (tourAutoOpenedForRef.current === currentUser.id) return;
+    tourAutoOpenedForRef.current = currentUser.id;
+    setView("dashboard");
+    setShowGuidedTour(true);
+  }, [authState, dataLoading, currentUser]);
+
+  async function closeGuidedTour() {
+    setShowGuidedTour(false);
+    if (!currentUser || currentUser.staff_tour_completed) return;
+    try {
+      const updated = await api.setStaffTourCompleted(true);
+      setCurrentUser(updated);
+      setMembers((prev) => prev.map((m) => m.id === updated.id ? updated : m));
+    } catch (err) {
+      showToast("Tour closed, but ClockBook could not save that preference. It may appear again next login.", true);
+    }
+  }
+
+  function restartGuidedTour() {
+    setView("dashboard");
+    setShowGuidedTour(true);
+  }
 
   // Ctrl+Shift+M opens the same Quick Meeting creator that is available in the top bar
   // and Calendar page. It is ignored while typing, just like the existing Ctrl+M shortcut.
@@ -7686,6 +7843,7 @@ export default function App() {
             onResume={() => myPinnedTask && requestStart(myPinnedTask)}
             onComplete={() => myPinnedTask && setCompletingTask(myPinnedTask)}
             onQuickMeeting={() => setShowQuickMeeting(true)}
+            onStartTour={effectiveCurrentUser.role === "member" ? restartGuidedTour : null}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -7767,6 +7925,10 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {showGuidedTour && effectiveCurrentUser?.role === "member" && (
+        <GuidedTour onClose={closeGuidedTour} />
+      )}
 
       {showQuickMeeting && (
         <QuickMeetingModal

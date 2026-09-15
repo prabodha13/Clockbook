@@ -69,6 +69,7 @@ export const api = {
   login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request("/auth/logout", { method: "POST" }),
   getMe: () => request("/auth/me"),
+  setStaffTourCompleted: (completed = true) => request("/auth/tour", { method: "PATCH", body: JSON.stringify({ completed: !!completed }) }),
 
   getMembers: () => request("/members"),
   createMember: (name, email, password) =>
