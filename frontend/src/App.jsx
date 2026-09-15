@@ -383,7 +383,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
       <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <button className="cb-btn cb-btn-sm" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
+        <button className="cb-btn cb-btn-sm" data-tour="global-meeting" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
           <Video size={13} />Meeting
         </button>
         {onStartTour && (
@@ -1031,7 +1031,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
               )}
             </div>
           )}
-          <button className="cb-btn" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
+          <button className="cb-btn" data-tour="ad-hoc-meeting" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
           <button className="cb-btn" data-tour="helper" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
           <button className="cb-btn cb-btn-primary" data-tour="new-task-button" onClick={onNewTask}><Plus size={15} />New task</button>
         </div>
@@ -6458,7 +6458,12 @@ function savePromptedMeetingIds(set) {
 }
 
 
-function GuidedTour({ onClose, onSetNewTaskOpen }) {
+function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCalendar, onRequestNotifications }) {
+  const [notificationPermission, setNotificationPermission] = useState(() => {
+    if (!("Notification" in window)) return "unsupported";
+    return Notification.permission;
+  });
+
   const steps = [
     {
       title: "Welcome to ClockBook",
@@ -6487,6 +6492,38 @@ function GuidedTour({ onClose, onSetNewTaskOpen }) {
       openNewTask: true,
     },
     {
+      title: "Track an ad hoc meeting",
+      body: "Use Ad hoc meeting for an unscheduled discussion or quick collaboration with a colleague. ClockBook starts a dedicated meeting timer so it stays separate from normal client work.",
+      target: '[data-tour="ad-hoc-meeting"]',
+    },
+    {
+      title: "Create a meeting from anywhere",
+      body: "The Meeting button in the top bar is available throughout ClockBook. Once Google Calendar is connected, it can create the calendar meeting and start tracking it without returning to the dashboard.",
+      target: '[data-tour="global-meeting"]',
+    },
+    {
+      title: "Connect Google Calendar",
+      body: calendarConnected
+        ? "Your Google Calendar is already connected. ClockBook can use it for calendar meetings and meeting reminders."
+        : "Connect Google Calendar so ClockBook can create meetings, show your calendar and recognise meetings that are starting.",
+      target: '[data-tour-nav="calendar"]',
+      actionLabel: calendarConnected ? null : "Connect Google Calendar",
+      actionKind: "calendar",
+    },
+    {
+      title: "Allow notifications",
+      body: notificationPermission === "granted"
+        ? "Browser notifications are already allowed. ClockBook can show meeting and tracking reminders when they are relevant."
+        : notificationPermission === "denied"
+          ? "Browser notifications are currently blocked. You can enable them later from your browser's site settings."
+          : notificationPermission === "unsupported"
+            ? "This browser does not expose browser notifications to ClockBook."
+            : "Allow browser notifications so ClockBook can show useful meeting and tracking reminders even when you are working in another tab.",
+      target: null,
+      actionLabel: notificationPermission === "default" ? "Allow notifications" : null,
+      actionKind: "notifications",
+    },
+    {
       title: "Record colleague help",
       body: "Use Helper when you help a colleague or receive help. That keeps collaboration time separate from normal client work.",
       target: '[data-tour="helper"]',
@@ -6502,7 +6539,15 @@ function GuidedTour({ onClose, onSetNewTaskOpen }) {
       target: null,
     },
   ];
-  const [stepIndex, setStepIndex] = useState(0);
+  const [stepIndex, setStepIndex] = useState(() => {
+    try {
+      const saved = Number(sessionStorage.getItem("clockbook_guided_tour_resume_step"));
+      sessionStorage.removeItem("clockbook_guided_tour_resume_step");
+      return Number.isInteger(saved) && saved >= 0 ? Math.min(saved, steps.length - 1) : 0;
+    } catch (err) {
+      return 0;
+    }
+  });
   const [targetRect, setTargetRect] = useState(null);
   const step = steps[stepIndex];
 
@@ -6553,6 +6598,23 @@ function GuidedTour({ onClose, onSetNewTaskOpen }) {
   }, [stepIndex, step.target]);
 
   const isLast = stepIndex === steps.length - 1;
+
+  async function runStepAction() {
+    if (step.actionKind === "calendar" && onConnectCalendar) {
+      try {
+        sessionStorage.setItem("clockbook_guided_tour_resume_step", String(Math.min(stepIndex + 1, steps.length - 1)));
+      } catch (err) {
+        // If session storage is unavailable the tour simply restarts after the OAuth redirect.
+      }
+      onConnectCalendar();
+      return;
+    }
+    if (step.actionKind === "notifications" && onRequestNotifications) {
+      const permission = await onRequestNotifications();
+      if (permission) setNotificationPermission(permission);
+    }
+  }
+
   const tooltipWidth = Math.min(390, Math.max(280, window.innerWidth - 32));
   let tooltipStyle = {
     position: "fixed", zIndex: 10002, width: tooltipWidth, maxWidth: "calc(100vw - 32px)",
@@ -6608,7 +6670,20 @@ function GuidedTour({ onClose, onSetNewTaskOpen }) {
           >
             Skip tour
           </button>
-          <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+          <div style={{ display: "flex", gap: 8, marginLeft: "auto", flexWrap: "wrap", justifyContent: "flex-end" }}>
+            {step.actionLabel && (
+              <button
+                type="button"
+                onClick={runStepAction}
+                style={{
+                  minHeight: 36, padding: "8px 13px", borderRadius: 8, border: "1px solid var(--green, #245c43)",
+                  background: "var(--surface, #fff)", color: "var(--green, #245c43)", font: "inherit", fontSize: 13,
+                  fontWeight: 700, cursor: "pointer",
+                }}
+              >
+                {step.actionLabel}
+              </button>
+            )}
             {stepIndex > 0 && (
               <button
                 type="button"
@@ -7142,6 +7217,29 @@ export default function App() {
       console.warn("[idle-detection] Could not start; will retry on the next user action.", err);
     } finally {
       idleDetectorStartingRef.current = false;
+    }
+  }
+
+  async function requestBrowserNotifications() {
+    if (!("Notification" in window)) {
+      showToast("Browser notifications are not supported here", true);
+      return "unsupported";
+    }
+    if (Notification.permission === "granted") return "granted";
+    if (Notification.permission === "denied") {
+      showToast("Notifications are blocked in your browser. Enable them from this site's browser settings.", true);
+      return "denied";
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission === "granted") {
+        showToast("ClockBook notifications enabled");
+        setAlertsBannerDismissed(true);
+      }
+      return permission;
+    } catch (err) {
+      showToast("Could not request notification permission", true);
+      return Notification.permission || "default";
     }
   }
 
@@ -7989,7 +8087,13 @@ export default function App() {
       </div>
 
       {showGuidedTour && (
-        <GuidedTour onClose={closeGuidedTour} onSetNewTaskOpen={setShowNewTask} />
+        <GuidedTour
+          onClose={closeGuidedTour}
+          onSetNewTaskOpen={setShowNewTask}
+          calendarConnected={!!currentUser.google_calendar_connected}
+          onConnectCalendar={connectGoogleCalendar}
+          onRequestNotifications={requestBrowserNotifications}
+        />
       )}
 
       {showQuickMeeting && (
