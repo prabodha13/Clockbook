@@ -6493,12 +6493,12 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
     },
     {
       title: "Track an ad hoc meeting",
-      body: "Use Ad hoc meeting for an unscheduled discussion or quick collaboration with a colleague. ClockBook starts a dedicated meeting timer so it stays separate from normal client work.",
+      body: "Use Ad hoc meeting for an unscheduled discussion or quick collaboration with a colleague. ClockBook starts a dedicated meeting timer so it stays separate from normal client work. Shortcut: Ctrl+M.",
       target: '[data-tour="ad-hoc-meeting"]',
     },
     {
       title: "Create a meeting from anywhere",
-      body: "The Meeting button in the top bar is available throughout ClockBook. Once Google Calendar is connected, it can create the calendar meeting and start tracking it without returning to the dashboard.",
+      body: "The Meeting button in the top bar is available throughout ClockBook. Once Google Calendar is connected, it can create the calendar meeting and start tracking it without returning to the dashboard. Shortcut: Ctrl+Shift+M.",
       target: '[data-tour="global-meeting"]',
     },
     {
