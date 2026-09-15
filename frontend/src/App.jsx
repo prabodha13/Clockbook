@@ -3766,6 +3766,19 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
       lastWeekStart.setDate(lastWeekEnd.getDate() - 6);
       return { from: toDateKey(lastWeekStart), to: toDateKey(lastWeekEnd) };
     }
+    if (range === "week_to_date") {
+      const day = end.getDay();
+      const daysSinceMonday = (day + 6) % 7;
+      const weekStart = new Date(end);
+      weekStart.setDate(end.getDate() - daysSinceMonday);
+      return { from: toDateKey(weekStart), to: toDateKey(end) };
+    }
+    if (range === "month_to_date") {
+      return { from: toDateKey(new Date(end.getFullYear(), end.getMonth(), 1)), to: toDateKey(end) };
+    }
+    if (range === "year_to_date") {
+      return { from: toDateKey(new Date(end.getFullYear(), 0, 1)), to: toDateKey(end) };
+    }
     if (range === "this_month") {
       // Insights uses the full calendar month for planned leave/capacity.
       // Actual metrics (tracked time/utilisation) are capped at today by the backend.
@@ -3806,8 +3819,14 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
 
   const comparisonPeriodLabel = range === "last_week"
     ? "previous week"
-    : range === "this_month"
+    : range === "week_to_date"
       ? "previous equivalent period"
+      : range === "month_to_date"
+        ? "previous equivalent period"
+        : range === "year_to_date"
+          ? "previous equivalent period"
+          : range === "this_month"
+            ? "previous equivalent period"
       : range === "last_month"
         ? "previous period"
         : range === "custom"
@@ -4052,6 +4071,9 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
           <div style={{ width: 145 }}>
             <div className="cb-label">Period</div>
             <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
+              <option value="week_to_date">Week to date</option>
+              <option value="month_to_date">Month to date</option>
+              <option value="year_to_date">Year to date</option>
               <option value="last_week">Last week</option>
               <option value="this_month">This month</option>
               <option value="last_month">Last month</option>
