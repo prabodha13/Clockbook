@@ -1854,7 +1854,7 @@ def get_insights(
         _insights_task_seconds(t) for t in previous_tasks if _insights_is_billable(t, billing_by_type)
     )
 
-    individual_calamari_maps, individual_calamari_meta = _calamari_daily_adjustments(db, [target], start_date, end_date)
+    individual_calamari_maps, individual_calamari_meta = _calamari_daily_adjustments(db, [target], start_date, end_date, include_leave_breakdown=True)
     target_unavailable = individual_calamari_maps.get(target.id, {})
     previous_calamari_maps, _previous_calamari_meta = _calamari_daily_adjustments(db, [target], previous_start, previous_end)
     target_previous_unavailable = previous_calamari_maps.get(target.id, {})
@@ -1869,6 +1869,7 @@ def get_insights(
     overall_utilization = round((current_capacity_tracked_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
     client_utilization = round((current_billable_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
     capacity_trend = _insights_capacity_trend(target, current_capacity_tasks, start_date, end_date, billing_by_type, target_unavailable)
+    leave_trends = _insights_leave_summary([target], individual_calamari_meta.get("_leave_by_member", {}), start_date, end_date)
 
     current_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
@@ -2069,6 +2070,7 @@ def get_insights(
         delegation_candidates = delegation_candidates[:12]
 
     team_capacity = None
+    team_leave_trends = None
     if current_member.role in ("admin", "super_admin"):
         team_query = db.query(models.Member).filter(models.Member.id.in_(allowed_ids))
         selected_capacity_pod = None
@@ -2094,7 +2096,7 @@ def get_insights(
             member_rows = []
             aggregate_week = {}
             total_capacity = total_tracked = total_billable = 0.0
-            team_calamari_maps, team_calamari_meta = _calamari_daily_adjustments(db, team_members, start_date, end_date)
+            team_calamari_maps, team_calamari_meta = _calamari_daily_adjustments(db, team_members, start_date, end_date, include_leave_breakdown=True)
             for member in team_members:
                 member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and in_range(t, start_date, end_date)]
                 capacity_tasks = _insights_capacity_tasks(member, member_tasks, start_date, end_date)
@@ -2121,6 +2123,13 @@ def get_insights(
                     agg["capacity_seconds"] += row["capacity_seconds"]
                     agg["tracked_seconds"] += row["tracked_seconds"]
                     agg["billable_seconds"] += row["billable_seconds"]
+            team_leave_trends = _insights_leave_summary(
+                team_members,
+                team_calamari_meta.get("_leave_by_member", {}),
+                start_date,
+                end_date,
+                selected_capacity_pod.name if selected_capacity_pod else None,
+            )
             team_capacity = {
                 "capacity_seconds": round(total_capacity, 1),
                 "tracked_seconds": round(total_tracked, 1),
@@ -2136,7 +2145,7 @@ def get_insights(
                 "members": member_rows,
                 "pod_id": selected_capacity_pod.id if selected_capacity_pod else None,
                 "pod_name": selected_capacity_pod.name if selected_capacity_pod else None,
-                "calamari": team_calamari_meta,
+                "calamari": _calamari_public_meta(team_calamari_meta),
             }
 
     return {
@@ -2183,9 +2192,11 @@ def get_insights(
             "trend_granularity": "daily" if (end_date - start_date).days <= 6 else "weekly",
             "trend": capacity_trend,
             "calamari_adjustment_seconds": round(sum(target_unavailable.values()), 1),
-            "calamari": individual_calamari_meta,
+            "calamari": _calamari_public_meta(individual_calamari_meta),
         } if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
         "team_capacity": (team_capacity if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
+        "leave_trends": (leave_trends if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
+        "team_leave_trends": (team_leave_trends if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
         "support_trend": support_trend,
         "tracked_trend": tracked_trend,
         "work_mix": work_mix,
@@ -3097,7 +3108,7 @@ def _calamari_post(tenant: str, api_key: str, path: str, payload=None):
         raise HTTPException(502, f"Could not reach Calamari: {str(exc)}")
 
 
-def _calamari_daily_adjustments(db: Session, members, start_date, end_date):
+def _calamari_daily_adjustments(db: Session, members, start_date, end_date, include_leave_breakdown: bool = False):
     """Return per-member unavailable seconds without exposing absence reasons/types.
 
     Approved/accepted TIMEOFF reduces capacity. WORK-category requests (for example remote
@@ -3106,6 +3117,7 @@ def _calamari_daily_adjustments(db: Session, members, start_date, end_date):
     never double-counted.
     """
     result = {m.id: {} for m in members}
+    leave_result = {m.id: {} for m in members} if include_leave_breakdown else None
     meta = {"connected": False, "adjustment_seconds": 0.0, "warnings": []}
     creds = _calamari_credentials(db)
     if not creds or not members:
@@ -3185,6 +3197,8 @@ def _calamari_daily_adjustments(db: Session, members, start_date, end_date):
                 seconds = min(max(fraction, 0.0), 1.0) * daily_seconds
             key = day.isoformat()
             result[member.id][key] = min(result[member.id].get(key, 0.0) + seconds, daily_seconds)
+            if leave_result is not None:
+                leave_result[member.id][key] = min(leave_result[member.id].get(key, 0.0) + seconds, daily_seconds)
 
     # Holiday calendars are employee-specific, so Calamari exposes them per employee.
     # A failure for one email is surfaced as a warning instead of silently reducing everyone.
@@ -3222,9 +3236,93 @@ def _calamari_daily_adjustments(db: Session, members, start_date, end_date):
                 cursor += timedelta(days=1)
 
     meta["adjustment_seconds"] = round(sum(sum(v.values()) for v in result.values()), 1)
+    if leave_result is not None:
+        # Internal-only aggregate used by Insights. No leave reason/type is retained or exposed.
+        meta["_leave_by_member"] = leave_result
     # Avoid repeating identical API errors once per member in the UI.
     meta["warnings"] = list(dict.fromkeys(meta["warnings"]))[:8]
     return result, meta
+
+
+def _calamari_public_meta(meta):
+    """Return Calamari status metadata without internal reporting aggregates."""
+    return {k: v for k, v in (meta or {}).items() if not str(k).startswith("_")}
+
+
+def _insights_leave_summary(members, leave_by_member, start_date, end_date, pod_name=None):
+    """Aggregate approved Calamari TIMEOFF for Insights without exposing leave reasons."""
+    members = list(members or [])
+    leave_by_member = leave_by_member or {}
+    days = (end_date - start_date).days + 1
+    granularity = "daily" if days <= 14 else ("weekly" if days <= 120 else "monthly")
+
+    def bucket_start(day):
+        if granularity == "daily":
+            return day
+        if granularity == "weekly":
+            return day - timedelta(days=day.weekday())
+        return day.replace(day=1)
+
+    trend = {}
+    cursor = start_date
+    while cursor <= end_date:
+        key = bucket_start(cursor).isoformat()
+        trend.setdefault(key, {"period_start": key, "leave_seconds": 0.0})
+        cursor += timedelta(days=1)
+
+    total_seconds = 0.0
+    equivalent_days = 0.0
+    impacted_dates = set()
+    member_rows = []
+    for member in members:
+        daily_seconds = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0) / 5.0 * 3600.0
+        member_seconds = 0.0
+        member_dates = set()
+        for day_key, seconds_raw in (leave_by_member.get(member.id, {}) or {}).items():
+            try:
+                day = datetime.strptime(day_key, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if not (start_date <= day <= end_date):
+                continue
+            seconds = max(float(seconds_raw or 0.0), 0.0)
+            if seconds <= 0:
+                continue
+            member_seconds += seconds
+            member_dates.add(day_key)
+            impacted_dates.add(day_key)
+            key = bucket_start(day).isoformat()
+            row = trend.setdefault(key, {"period_start": key, "leave_seconds": 0.0})
+            row["leave_seconds"] += seconds
+        member_days = (member_seconds / daily_seconds) if daily_seconds > 0 else 0.0
+        total_seconds += member_seconds
+        equivalent_days += member_days
+        if member_seconds > 0:
+            member_rows.append({
+                "member_id": member.id,
+                "name": member.name,
+                "leave_seconds": round(member_seconds, 1),
+                "equivalent_days": round(member_days, 2),
+                "dates_affected": len(member_dates),
+            })
+
+    trend_rows = []
+    for _, row in sorted(trend.items()):
+        trend_rows.append({"period_start": row["period_start"], "leave_seconds": round(row["leave_seconds"], 1)})
+    peak = max(trend_rows, key=lambda r: r["leave_seconds"], default=None)
+    member_rows.sort(key=lambda r: (-r["leave_seconds"], r["name"].lower()))
+    return {
+        "leave_seconds": round(total_seconds, 1),
+        "equivalent_days": round(equivalent_days, 2),
+        "dates_affected": len(impacted_dates),
+        "people_with_leave": len(member_rows),
+        "trend_granularity": granularity,
+        "trend": trend_rows,
+        "peak_period_start": peak["period_start"] if peak and peak["leave_seconds"] > 0 else None,
+        "peak_leave_seconds": peak["leave_seconds"] if peak and peak["leave_seconds"] > 0 else 0.0,
+        "members": member_rows,
+        "pod_name": pod_name,
+    }
 
 def _member_zone(member):
     try:
