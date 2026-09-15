@@ -2762,7 +2762,7 @@ function SettingsView({
         </div>
       )}
 
-      {realIsSuperAdmin && (
+      {realIsSuperAdmin && viewMode === "super_admin" && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
             <div>
@@ -3955,13 +3955,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const cardStyle = { border: "1px solid #DDE4EC", borderRadius: 10, background: "#fff", boxShadow: "0 1px 2px rgba(16,24,40,.02)" };
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
 
-  const personCapacity = data?.capacity;
-  const capacityData = (capacityView === "team" || capacityView === "pod") && data?.team_capacity ? data.team_capacity : personCapacity;
+  const personCapacity = forceSelfOnly ? null : data?.capacity;
+  const capacityData = forceSelfOnly ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_capacity ? data.team_capacity : personCapacity);
   const capacityLabel = capacityView === "pod" ? "Pod capacity" : capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
-  const personLeaveTrends = data?.leave_trends;
-  const leaveData = (capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends;
+  const personLeaveTrends = forceSelfOnly ? null : data?.leave_trends;
+  const leaveData = forceSelfOnly ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends);
   const clientSeconds = Number(data?.summary?.billable_seconds || 0);
   const trackedSeconds = Number(data?.summary?.tracked_seconds || 0);
   const clientShare = trackedSeconds > 0 ? (clientSeconds / trackedSeconds) * 100 : 0;
