@@ -2390,6 +2390,21 @@ function SettingsView({
   const [error, setError] = useState("");
   const [inactivityAuditEnabled, setInactivityAuditEnabled] = useState(null);
   const [savingInactivityAudit, setSavingInactivityAudit] = useState(false);
+  const [karbonIntegration, setKarbonIntegration] = useState(null);
+  const [karbonApplicationId, setKarbonApplicationId] = useState("");
+  const [karbonAccessKey, setKarbonAccessKey] = useState("");
+  const [savingKarbon, setSavingKarbon] = useState(false);
+  const [testingKarbon, setTestingKarbon] = useState(false);
+  const [karbonMessage, setKarbonMessage] = useState("");
+
+  useEffect(() => {
+    if (!realIsSuperAdmin) return;
+    let alive = true;
+    api.getKarbonIntegration()
+      .then((r) => { if (alive) setKarbonIntegration(r); })
+      .catch((err) => { if (alive) setKarbonMessage(err.message); });
+    return () => { alive = false; };
+  }, [realIsSuperAdmin]);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -2404,6 +2419,55 @@ function SettingsView({
       });
     return () => { alive = false; };
   }, [isSuperAdmin]);
+
+  async function saveKarbonIntegration(e) {
+    e.preventDefault();
+    if (!karbonApplicationId.trim() || !karbonAccessKey.trim() || savingKarbon) return;
+    setSavingKarbon(true);
+    setKarbonMessage("");
+    try {
+      const result = await api.saveKarbonIntegration(karbonApplicationId.trim(), karbonAccessKey.trim());
+      setKarbonIntegration(result);
+      setKarbonApplicationId("");
+      setKarbonAccessKey("");
+      setKarbonMessage("Karbon connected successfully.");
+    } catch (err) {
+      setKarbonMessage(err.message);
+    } finally {
+      setSavingKarbon(false);
+    }
+  }
+
+  async function testKarbonIntegration() {
+    if (testingKarbon) return;
+    setTestingKarbon(true);
+    setKarbonMessage("");
+    try {
+      await api.testKarbonIntegration();
+      setKarbonMessage("Connection successful.");
+    } catch (err) {
+      setKarbonMessage(err.message);
+    } finally {
+      setTestingKarbon(false);
+    }
+  }
+
+  async function disconnectKarbonIntegration() {
+    if (!window.confirm("Disconnect Karbon from ClockBook?")) return;
+    setSavingKarbon(true);
+    setKarbonMessage("");
+    try {
+      const result = await api.disconnectKarbonIntegration();
+      setKarbonIntegration(result);
+      setKarbonApplicationId("");
+      setKarbonAccessKey("");
+      setKarbonMessage("Karbon disconnected.");
+    } catch (err) {
+      setKarbonMessage(err.message);
+    } finally {
+      setSavingKarbon(false);
+    }
+  }
 
   async function toggleInactivityAudit() {
     if (!isSuperAdmin || savingInactivityAudit || inactivityAuditEnabled == null) return;
@@ -2637,6 +2701,56 @@ function SettingsView({
                 <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {realIsSuperAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Integrations</div>
+              <div className="cb-tmpl-name">Karbon</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 12 }}>
+              Connect this ClockBook workspace to its Karbon account. Credentials are encrypted on the server and are never returned to the browser after saving.
+            </div>
+            {karbonIntegration?.connected ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
+                  <span className="cb-hint">Application ID ••••{karbonIntegration.application_id_hint || ""}</span>
+                  <span className="cb-hint">Access Key ••••{karbonIntegration.access_key_hint || ""}</span>
+                  {karbonIntegration.source === "environment" && <span className="cb-hint">Legacy environment configuration</span>}
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={testKarbonIntegration} disabled={testingKarbon || savingKarbon}>
+                    {testingKarbon ? "Testing..." : "Test connection"}
+                  </button>
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-danger" onClick={disconnectKarbonIntegration} disabled={savingKarbon}>Disconnect</button>
+                </div>
+                <div className="cb-hint" style={{ marginBottom: 8 }}>Replace credentials</div>
+              </>
+            ) : (
+              <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
+            )}
+            <form onSubmit={saveKarbonIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(220px,1fr) auto", gap: 8, alignItems: "end", maxWidth: 900 }}>
+              <div className="cb-field">
+                <label className="cb-label">Application ID</label>
+                <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Application ID" value={karbonApplicationId} onChange={(e) => setKarbonApplicationId(e.target.value)} />
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Access Key</label>
+                <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Access Key" value={karbonAccessKey} onChange={(e) => setKarbonAccessKey(e.target.value)} />
+              </div>
+              <button type="submit" className="cb-btn cb-btn-primary" disabled={savingKarbon || !karbonApplicationId.trim() || !karbonAccessKey.trim()}>
+                {savingKarbon ? "Connecting..." : karbonIntegration?.connected ? "Replace" : "Connect Karbon"}
+              </button>
+            </form>
+            <div className="cb-hint" style={{ marginTop: 8 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
+            {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
           </div>
         </div>
       )}

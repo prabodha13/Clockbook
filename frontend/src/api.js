@@ -145,6 +145,10 @@ export const api = {
   getInactivityAuditStatus: () => request("/inactivity-events/status"),
   getAuditActivitySummary: (dateFrom = "", dateTo = "") => { const q = new URLSearchParams(); if (dateFrom) q.set("date_from", dateFrom); if (dateTo) q.set("date_to", dateTo); return request(`/audit/activity-summary${q.toString() ? `?${q.toString()}` : ""}`); },
   getKarbonReconciliation: (memberId, dateFrom, dateTo) => { const q = new URLSearchParams(); if (memberId) q.set("member_id", memberId); if (dateFrom) q.set("date_from", dateFrom); if (dateTo) q.set("date_to", dateTo); return request(`/karbon/reconciliation?${q.toString()}`); },
+  getKarbonIntegration: () => request("/integrations/karbon"),
+  saveKarbonIntegration: (applicationId, accessKey) => request("/integrations/karbon", { method: "PUT", body: JSON.stringify({ application_id: applicationId, access_key: accessKey }) }),
+  testKarbonIntegration: () => request("/integrations/karbon/test", { method: "POST" }),
+  disconnectKarbonIntegration: () => request("/integrations/karbon", { method: "DELETE" }),
   setInactivityAuditStatus: (enabled) => request("/inactivity-events/status", { method: "PUT", body: JSON.stringify({ enabled }) }),
   getInactivityEvents: (dateFrom = "", dateTo = "") => {
     const params = new URLSearchParams();
