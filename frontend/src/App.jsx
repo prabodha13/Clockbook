@@ -5271,7 +5271,8 @@ function HelpReportView() {
       )}
       {!error && rows !== null && rows.length > 0 && (
         <div className="cb-table-wrap">
-          <table className="cb-table">
+          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
+            <colgroup><col style={{ width: "31%" }} /><col style={{ width: "22%" }} /><col style={{ width: "22%" }} /><col style={{ width: "12.5%" }} /><col style={{ width: "12.5%" }} /></colgroup>
             <thead>
               <tr>
                 <th>Person</th>
@@ -5299,7 +5300,7 @@ function HelpReportView() {
           </table>
         </div>
       )}
-      <div className="cb-group-head" style={{ marginTop: 28 }}>
+      <div className="cb-group-head" style={{ marginTop: 32, justifyContent: "flex-start", gap: 8 }}>
         <div className="cb-group-title">Help received</div>
         {details && <div className="cb-group-count">{helpReceived.length}</div>}
       </div>
@@ -5312,7 +5313,8 @@ function HelpReportView() {
       )}
       {!detailsError && details !== null && helpReceived.length > 0 && (
         <div className="cb-table-wrap">
-          <table className="cb-table">
+          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
+            <colgroup><col style={{ width: "38%" }} /><col style={{ width: "26%" }} /><col style={{ width: "26%" }} /><col style={{ width: "10%" }} /></colgroup>
             <thead>
               <tr>
                 <th>Person</th>
@@ -5326,6 +5328,7 @@ function HelpReportView() {
                 <Fragment key={r.person}>
                   <tr
                     className="cb-row-clickable"
+                    style={{ background: expandedPerson === r.person ? "var(--paper)" : undefined }}
                     onClick={() => { setExpandedPerson(expandedPerson === r.person ? null : r.person); setExpandedHelper(null); }}
                   >
                     <td>{expandedPerson === r.person ? "\u25be" : "\u25b8"} {r.person}</td>
@@ -5404,7 +5407,7 @@ function HelpReportView() {
           </table>
         </div>
       )}
-      <div className="cb-group-head" style={{ marginTop: 28 }}>
+      <div className="cb-group-head" style={{ marginTop: 32, justifyContent: "flex-start", gap: 8 }}>
         <div className="cb-group-title">Individual entries</div>
         {details && <div className="cb-group-count">{details.length}</div>}
       </div>
@@ -5415,7 +5418,16 @@ function HelpReportView() {
       )}
       {!detailsError && details !== null && details.length > 0 && (
         <div className="cb-table-wrap">
-          <table className="cb-table">
+          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
+            <colgroup>
+              <col style={{ width: "11%" }} />
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "12%" }} />
+              <col style={{ width: "43%" }} />
+              <col style={{ width: "8%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "2%" }} />
+            </colgroup>
             <thead>
               <tr>
                 <th>Person</th>
@@ -5430,13 +5442,13 @@ function HelpReportView() {
             <tbody>
               {details.map((d) => (
                 <tr key={d.id}>
-                  <td>{d.member_name}</td>
-                  <td>{d.direction === "helped" ? "Helped" : "Received help from"}</td>
-                  <td>{d.colleague_name}</td>
-                  <td>{d.context || "—"}</td>
-                  <td className="num cb-mono">{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                  <td>{formatDate(d.created_at)}, {new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
-                  <td>
+                  <td style={{ verticalAlign: "middle" }}>{d.member_name}</td>
+                  <td style={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>{d.direction === "helped" ? "Helped" : "Received help from"}</td>
+                  <td style={{ verticalAlign: "middle" }}>{d.colleague_name}</td>
+                  <td style={{ verticalAlign: "middle", lineHeight: 1.35 }}>{d.context || "—"}</td>
+                  <td className="num cb-mono" style={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
+                  <td style={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>{formatDate(d.created_at)}<br />{new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
+                  <td style={{ verticalAlign: "middle", textAlign: "center", paddingLeft: 4, paddingRight: 4 }}>
                     <button
                       className="cb-icon-btn cb-btn-danger" disabled={!d.task_id}
                       title={d.task_id ? "Delete this entry" : "Logged before this could be linked to a task, nothing to remove here"}
@@ -5582,7 +5594,7 @@ function InactivityAuditView({ members }) {
           <div className="cb-group-head" style={{ marginTop: 28, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Individual periods</div><div className="cb-group-count">{filteredEvents.length}</div></div>
           {filteredEvents.length > 0 && (
             <div className="cb-table-wrap">
-              <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "16%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "20%" }} /><col style={{ width: "9%" }} /><col style={{ width: "10%" }} /><col style={{ width: "9%" }} /></colgroup><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Detected</th><th className="num">Help explained</th><th className="num">Unexplained</th></tr></thead>
+              <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "16%" }} /><col style={{ width: "17%" }} /><col style={{ width: "18%" }} /><col style={{ width: "21%" }} /><col style={{ width: "8%" }} /><col style={{ width: "10%" }} /><col style={{ width: "10%" }} /></colgroup><thead><tr><th>Person</th><th>Detected as</th><th>Started</th><th>Returned / recovered</th><th className="num">Detected</th><th className="num">Help explained</th><th className="num">Unexplained</th></tr></thead>
               <tbody>{filteredEvents.map((e) => <tr key={e.id}>
                 <td>{e.member_name}</td><td>{kindLabel(e.kind)}</td>
                 <td>{formatDate(e.started_at)}, {new Date(e.started_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
