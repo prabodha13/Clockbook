@@ -4,7 +4,7 @@ import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
-  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake,
+  Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake, Search,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -862,6 +862,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
 function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
+  const [taskSearch, setTaskSearch] = useState("");
   const isSuperAdmin = currentUser.role === "super_admin";
   const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
@@ -875,13 +876,21 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
 
   const todo = visibleTasks.filter((t) => t.status === "todo");
   const inProgress = visibleTasks.filter((t) => t.status === "running" || t.status === "paused");
+  const normalizedTaskSearch = taskSearch.trim().toLowerCase();
+  const taskMatchesSearch = (task) => {
+    if (!normalizedTaskSearch) return true;
+    return (task.client_name || "").toLowerCase().includes(normalizedTaskSearch)
+      || (task.name || "").toLowerCase().includes(normalizedTaskSearch);
+  };
+  const filteredTodo = todo.filter(taskMatchesSearch);
+  const filteredInProgress = inProgress.filter(taskMatchesSearch);
   const submittedToday = visibleTasks
     .filter((t) => t.status === "submitted" && isToday(t.submitted_at))
     .sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at));
 
   const inProgressByClient = (() => {
     const map = new Map();
-    for (const t of inProgress) {
+    for (const t of filteredInProgress) {
       if (!map.has(t.client_name)) map.set(t.client_name, []);
       map.get(t.client_name).push(t);
     }
@@ -1098,14 +1107,40 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         )}
       </div>
 
+      <div style={{ margin: "0 0 14px", maxWidth: 460 }}>
+        <div style={{ position: "relative" }}>
+          <Search size={16} aria-hidden="true" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
+          <input
+            className="cb-input"
+            type="search"
+            aria-label="Search client or task"
+            placeholder="Search client or task…"
+            value={taskSearch}
+            onChange={(e) => setTaskSearch(e.target.value)}
+            style={{ width: "100%", paddingLeft: 36, paddingRight: taskSearch ? 36 : 12 }}
+          />
+          {taskSearch && (
+            <button
+              type="button"
+              aria-label="Clear task search"
+              title="Clear search"
+              onClick={() => setTaskSearch("")}
+              style={{ position: "absolute", right: 7, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent", padding: 5, display: "flex", alignItems: "center", cursor: "pointer", color: "var(--ink-soft)" }}
+            >
+              <X size={15} />
+            </button>
+          )}
+        </div>
+      </div>
+
       <div className="cb-group">
         <div className="cb-group-head">
           <div className="cb-group-title">In progress</div>
-          <div className="cb-group-count">{inProgress.length}</div>
+          <div className="cb-group-count">{normalizedTaskSearch ? `${filteredInProgress.length} of ${inProgress.length}` : inProgress.length}</div>
         </div>
         <div className="cb-flat-list">
-          {inProgress.length === 0 ? (
-            <div className="cb-empty">Nothing running or paused. Start a task below to begin tracking.</div>
+          {filteredInProgress.length === 0 ? (
+            <div className="cb-empty">{normalizedTaskSearch ? "No in-progress tasks match your search." : "Nothing running or paused. Start a task below to begin tracking."}</div>
           ) : (
             inProgressByClient.map((group) => (
               <Fragment key={group.clientName}>
@@ -1121,7 +1156,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         </div>
       </div>
 
-      <Group title="To do" items={todo} empty={<span><span className="cb-empty-title">No tasks queued</span><br />Add one from a template or a one off task.</span>} />
+      <Group title="To do" items={filteredTodo} empty={normalizedTaskSearch ? `No queued tasks match "${taskSearch.trim()}".` : <span><span className="cb-empty-title">No tasks queued</span><br />Add one from a template or a one off task.</span>} />
 
       {(!isAdmin || viewFilter === "mine") && (
         <SuggestedTasksSection
