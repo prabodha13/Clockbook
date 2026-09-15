@@ -1803,8 +1803,19 @@ def get_insights(
     if end_date < start_date:
         raise HTTPException(400, "date_to must be on or after date_from")
     days = (end_date - start_date).days + 1
+
+    # The selected range is the planning window. It may extend into the future
+    # (for example, "This month" is the full calendar month). Actual activity
+    # metrics must never manufacture future work, so cap them at today.
+    actual_end_date = min(end_date, today)
+    has_actual_days = actual_end_date >= start_date
+    actual_days = (actual_end_date - start_date).days + 1 if has_actual_days else 0
+
+    # Preserve the existing "previous equivalent period" comparison for actual
+    # metrics by comparing the elapsed portion only, rather than a full future-
+    # inclusive planning window.
     previous_end = start_date - timedelta(days=1)
-    previous_start = previous_end - timedelta(days=days - 1)
+    previous_start = previous_end - timedelta(days=max(actual_days, 1) - 1)
 
     all_tasks = db.query(models.TaskInstance).filter(
         models.TaskInstance.status == "submitted",
@@ -1818,8 +1829,8 @@ def get_insights(
         d = dt.date()
         return start <= d <= end
 
-    current_tasks = [t for t in all_tasks if in_range(t, start_date, end_date)]
-    previous_tasks = [t for t in all_tasks if in_range(t, previous_start, previous_end)]
+    current_tasks = [t for t in all_tasks if has_actual_days and in_range(t, start_date, actual_end_date)]
+    previous_tasks = [t for t in all_tasks if actual_days > 0 and in_range(t, previous_start, previous_end)]
 
     billing_by_type = {
         row.name: bool(row.is_billable)
@@ -1858,24 +1869,28 @@ def get_insights(
     target_unavailable = individual_calamari_maps.get(target.id, {})
     previous_calamari_maps, _previous_calamari_meta = _calamari_daily_adjustments(db, [target], previous_start, previous_end)
     target_previous_unavailable = previous_calamari_maps.get(target.id, {})
-    current_capacity_tasks = _insights_capacity_tasks(target, current_tasks, start_date, end_date)
-    previous_capacity_tasks = _insights_capacity_tasks(target, previous_tasks, previous_start, previous_end)
+    current_capacity_tasks = _insights_capacity_tasks(target, current_tasks, start_date, actual_end_date) if has_actual_days else []
+    previous_capacity_tasks = _insights_capacity_tasks(target, previous_tasks, previous_start, previous_end) if actual_days > 0 else []
     current_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks)
     previous_capacity_tracked_seconds = sum(_insights_task_seconds(t) for t in previous_capacity_tasks)
     current_billable_seconds = sum(_insights_task_seconds(t) for t in current_capacity_tasks if _insights_is_billable(t, billing_by_type))
     previous_billable_seconds = sum(_insights_task_seconds(t) for t in previous_capacity_tasks if _insights_is_billable(t, billing_by_type))
+
+    # Planned capacity covers the full selected window, including future approved
+    # leave/public holidays. Utilisation, however, uses capacity only up to today.
     capacity_seconds = _insights_capacity_seconds(target, start_date, end_date, target_unavailable)
-    previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end, target_previous_unavailable)
-    overall_utilization = round((current_capacity_tracked_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
-    client_utilization = round((current_billable_seconds / capacity_seconds) * 100, 1) if capacity_seconds > 0 else None
+    utilization_capacity_seconds = _insights_capacity_seconds(target, start_date, actual_end_date, target_unavailable) if has_actual_days else 0.0
+    previous_capacity_seconds = _insights_capacity_seconds(target, previous_start, previous_end, target_previous_unavailable) if actual_days > 0 else 0.0
+    overall_utilization = round((current_capacity_tracked_seconds / utilization_capacity_seconds) * 100, 1) if utilization_capacity_seconds > 0 else None
+    client_utilization = round((current_billable_seconds / utilization_capacity_seconds) * 100, 1) if utilization_capacity_seconds > 0 else None
     capacity_trend = _insights_capacity_trend(target, current_capacity_tasks, start_date, end_date, billing_by_type, target_unavailable)
     leave_trends = _insights_leave_summary([target], individual_calamari_meta.get("_leave_by_member", {}), start_date, end_date)
 
     current_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
         models.HelpEvent.created_at >= datetime.combine(start_date, datetime.min.time()),
-        models.HelpEvent.created_at < datetime.combine(end_date + timedelta(days=1), datetime.min.time()),
-    ).all()
+        models.HelpEvent.created_at < datetime.combine((actual_end_date if has_actual_days else start_date - timedelta(days=1)) + timedelta(days=1), datetime.min.time()),
+    ).all() if has_actual_days else []
     previous_help = db.query(models.HelpEvent).filter(
         models.HelpEvent.member_id == target_id,
         models.HelpEvent.created_at >= datetime.combine(previous_start, datetime.min.time()),
@@ -1979,7 +1994,7 @@ def get_insights(
     }
     working_days = 0
     cursor_day = start_date
-    while cursor_day <= end_date:
+    while has_actual_days and cursor_day <= actual_end_date:
         if cursor_day.weekday() < 5:
             working_days += 1
         cursor_day += timedelta(days=1)
@@ -2095,26 +2110,29 @@ def get_insights(
             ).all()
             member_rows = []
             aggregate_week = {}
-            total_capacity = total_tracked = total_billable = 0.0
+            total_capacity = total_utilization_capacity = total_tracked = total_billable = 0.0
             team_calamari_maps, team_calamari_meta = _calamari_daily_adjustments(db, team_members, start_date, end_date, include_leave_breakdown=True)
             for member in team_members:
-                member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and in_range(t, start_date, end_date)]
-                capacity_tasks = _insights_capacity_tasks(member, member_tasks, start_date, end_date)
+                member_tasks = [t for t in team_tasks_all if t.submitted_by_id == member.id and has_actual_days and in_range(t, start_date, actual_end_date)]
+                capacity_tasks = _insights_capacity_tasks(member, member_tasks, start_date, actual_end_date) if has_actual_days else []
                 tracked = sum(_insights_task_seconds(t) for t in capacity_tasks)
                 billable = sum(_insights_task_seconds(t) for t in capacity_tasks if _insights_is_billable(t, billing_by_type))
                 member_unavailable = team_calamari_maps.get(member.id, {})
                 capacity = _insights_capacity_seconds(member, start_date, end_date, member_unavailable)
+                utilization_capacity = _insights_capacity_seconds(member, start_date, actual_end_date, member_unavailable) if has_actual_days else 0.0
                 total_capacity += capacity
+                total_utilization_capacity += utilization_capacity
                 total_tracked += tracked
                 total_billable += billable
                 member_rows.append({
                     "member_id": member.id,
                     "name": member.name,
                     "capacity_seconds": round(capacity, 1),
+                    "utilization_capacity_seconds": round(utilization_capacity, 1),
                     "tracked_seconds": round(tracked, 1),
                     "billable_seconds": round(billable, 1),
-                    "overall_utilization": round((tracked / capacity) * 100, 1) if capacity > 0 else None,
-                    "client_utilization": round((billable / capacity) * 100, 1) if capacity > 0 else None,
+                    "overall_utilization": round((tracked / utilization_capacity) * 100, 1) if utilization_capacity > 0 else None,
+                    "client_utilization": round((billable / utilization_capacity) * 100, 1) if utilization_capacity > 0 else None,
                     "available_seconds": round(max(capacity - tracked, 0.0), 1),
                     "calamari_adjustment_seconds": round(sum(member_unavailable.values()), 1),
                 })
@@ -2132,10 +2150,11 @@ def get_insights(
             )
             team_capacity = {
                 "capacity_seconds": round(total_capacity, 1),
+                "utilization_capacity_seconds": round(total_utilization_capacity, 1),
                 "tracked_seconds": round(total_tracked, 1),
                 "billable_seconds": round(total_billable, 1),
-                "overall_utilization": round((total_tracked / total_capacity) * 100, 1) if total_capacity > 0 else None,
-                "client_utilization": round((total_billable / total_capacity) * 100, 1) if total_capacity > 0 else None,
+                "overall_utilization": round((total_tracked / total_utilization_capacity) * 100, 1) if total_utilization_capacity > 0 else None,
+                "client_utilization": round((total_billable / total_utilization_capacity) * 100, 1) if total_utilization_capacity > 0 else None,
                 "available_seconds": round(max(total_capacity - total_tracked, 0.0), 1),
                 "trend_granularity": "daily" if (end_date - start_date).days <= 6 else "weekly",
                 "trend": [
@@ -2152,6 +2171,7 @@ def get_insights(
         "member": {"id": target.id, "name": target.name},
         "date_from": start_date.isoformat(),
         "date_to": end_date.isoformat(),
+        "actual_date_to": actual_end_date.isoformat() if has_actual_days else None,
         "summary": {
             "tracked_seconds": round(current_totals["tracked"], 1),
             "focused_seconds": round(current_totals["focused"], 1),
@@ -2182,6 +2202,7 @@ def get_insights(
             "weekly_capacity_hours": round(float(getattr(target, "weekly_capacity_hours", 40.0) or 0.0), 2),
             "capacity_effective_from": target.capacity_effective_from.isoformat() if getattr(target, "capacity_effective_from", None) else None,
             "capacity_seconds": round(capacity_seconds, 1),
+            "utilization_capacity_seconds": round(utilization_capacity_seconds, 1),
             "tracked_seconds": round(current_capacity_tracked_seconds, 1),
             "billable_seconds": round(current_billable_seconds, 1),
             "available_seconds": round(max(capacity_seconds - current_capacity_tracked_seconds, 0.0), 1),
