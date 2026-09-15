@@ -4051,13 +4051,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
       {data && (
         <>
           <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+            <div style={{ display: "grid", gridTemplateColumns: `repeat(${personCapacity ? 4 : 3}, minmax(0, 1fr))` }}>
               {[
                 ["Tracked time", formatHM(data.summary.tracked_seconds || 0), comparisonInfo(data.summary.tracked_seconds, data.summary.previous?.tracked_seconds, data.summary.changes?.tracked).detail],
                 ["Client time", formatHM(clientSeconds), `${Math.round(clientShare)}% of submitted time`],
                 ["Meeting time", formatHM(data.summary.meeting_seconds || 0), `${trackedSeconds > 0 ? Math.round((Number(data.summary.meeting_seconds || 0) / trackedSeconds) * 100) : 0}% of submitted time`],
-                ["Capacity utilisation", personCapacity?.overall_utilization == null ? "—" : `${Math.round(personCapacity.overall_utilization)}%`, personCapacity ? `${formatHM(personCapacity.tracked_seconds || 0)} of ${formatHM(personCapacity.capacity_seconds || 0)}` : "No capacity set"],
-              ].map(([label, value, detail], i) => <div key={label} style={{ padding: "15px 18px", borderRight: i < 3 ? "1px solid #E7ECF0" : "none" }}>
+                ...(personCapacity ? [["Capacity utilisation", personCapacity.overall_utilization == null ? "—" : `${Math.round(personCapacity.overall_utilization)}%`, `${formatHM(personCapacity.tracked_seconds || 0)} of ${formatHM(personCapacity.capacity_seconds || 0)}`]] : []),
+              ].map(([label, value, detail], i, rows) => <div key={label} style={{ padding: "15px 18px", borderRight: i < rows.length - 1 ? "1px solid #E7ECF0" : "none" }}>
                 <div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div>
                 <div className="cb-serif" style={{ fontSize: 25, fontWeight: 700, lineHeight: 1.15, marginTop: 4 }}>{value}</div>
                 <div className="cb-hint" style={{ marginTop: 5 }}>{detail}</div>
@@ -4908,7 +4908,7 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onChangeTimezone, onChangeInsightsPermission, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
@@ -5002,6 +5002,16 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
                     getLabel={(z) => z.name}
                   />
                 </div>
+              )}
+              {currentUser.role === "super_admin" && m.role === "admin" && (
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--ink-soft)", whiteSpace: "nowrap" }} title="Allow this admin to view Leave Trends and Capacity Impact in Insights">
+                  <input
+                    type="checkbox"
+                    checked={!!m.can_view_leave_capacity_insights}
+                    onChange={(e) => onChangeInsightsPermission(m.id, e.target.checked)}
+                  />
+                  Leave &amp; capacity insights
+                </label>
               )}
               {currentUser.role === "super_admin" && pods.length > 0 && (
                 <select
@@ -7007,6 +7017,16 @@ export default function App() {
     }
   }
 
+  async function changeMemberInsightsPermission(memberId, enabled) {
+    try {
+      const updated = await api.updateMemberInsightsPermission(memberId, enabled);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      showToast(`${enabled ? "Enabled" : "Disabled"} leave & capacity insights for ${updated.name}`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
   async function addPod(name) {
     try {
       const pod = await api.createPod(name.trim());
@@ -7470,6 +7490,7 @@ export default function App() {
                 onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
                 onChangeTimezone={changeMemberTimezone}
+                onChangeInsightsPermission={changeMemberInsightsPermission}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
                 pods={pods} onAssignPod={assignMemberPod}

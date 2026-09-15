@@ -43,6 +43,7 @@ export const api = {
   deletePod: (id) => request(`/pods/${id}`, { method: "DELETE" }),
   updateMemberPod: (memberId, podId) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId }) }),
   updateMemberTimezone: (memberId, timezoneName) => request(`/members/${memberId}/timezone`, { method: "PATCH", body: JSON.stringify({ timezone_name: timezoneName }) }),
+  updateMemberInsightsPermission: (memberId, enabled) => request(`/members/${memberId}/insights-permission`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
   disconnectGoogleCalendar: () => request("/auth/google/disconnect", { method: "POST" }),
   connectSlack: (memberId, slackEmail) => request(`/members/${memberId}/slack`, { method: "PATCH", body: JSON.stringify({ slack_email: slackEmail }) }),
   disconnectSlack: (memberId) => request(`/members/${memberId}/slack/disconnect`, { method: "POST" }),
