@@ -1,6 +1,9 @@
 import os
 import csv
 import secrets
+import base64
+import hashlib
+import hmac
 import bcrypt
 import httpx
 from urllib.parse import urlencode
@@ -2951,24 +2954,97 @@ def _utc_naive_to_local(dt, member):
     return dt.astimezone(_member_zone(member))
 
 
-def _karbon_headers():
-    token = (os.environ.get("KARBON_TOKEN") or "").strip()
-    access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
-    if not token or not access_key:
-        raise HTTPException(503, "Karbon API is not configured. Add KARBON_TOKEN and KARBON_ACCESS_KEY in Railway variables.")
+def _setting_value(db: Session, key: str) -> str:
+    setting = db.get(models.SystemSetting, key)
+    return setting.value if setting else ""
+
+
+def _set_setting_value(db: Session, key: str, value: str):
+    setting = db.get(models.SystemSetting, key)
+    if setting is None:
+        db.add(models.SystemSetting(key=key, value=value))
+    else:
+        setting.value = value
+
+
+def _integration_master_key() -> bytes:
+    raw = (os.environ.get("CLOCKBOOK_ENCRYPTION_KEY") or "").strip()
+    if not raw:
+        raise HTTPException(503, "Secure integration storage is not configured. Add CLOCKBOOK_ENCRYPTION_KEY once at deployment level.")
+    return hashlib.sha256(raw.encode("utf-8")).digest()
+
+
+def _encrypt_secret(value: str) -> str:
+    master = _integration_master_key()
+    enc_key = hmac.new(master, b"clockbook-integrations-enc", hashlib.sha256).digest()
+    mac_key = hmac.new(master, b"clockbook-integrations-mac", hashlib.sha256).digest()
+    nonce = secrets.token_bytes(16)
+    data = value.encode("utf-8")
+    stream = bytearray()
+    counter = 0
+    while len(stream) < len(data):
+        stream.extend(hmac.new(enc_key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest())
+        counter += 1
+    cipher = bytes(a ^ b for a, b in zip(data, stream))
+    tag = hmac.new(mac_key, nonce + cipher, hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(nonce + cipher + tag).decode("ascii")
+
+
+def _decrypt_secret(token: str) -> str:
+    master = _integration_master_key()
+    enc_key = hmac.new(master, b"clockbook-integrations-enc", hashlib.sha256).digest()
+    mac_key = hmac.new(master, b"clockbook-integrations-mac", hashlib.sha256).digest()
+    try:
+        raw = base64.urlsafe_b64decode(token.encode("ascii"))
+        nonce, cipher, tag = raw[:16], raw[16:-32], raw[-32:]
+        expected = hmac.new(mac_key, nonce + cipher, hashlib.sha256).digest()
+        if not hmac.compare_digest(tag, expected):
+            raise ValueError("invalid tag")
+        stream = bytearray()
+        counter = 0
+        while len(stream) < len(cipher):
+            stream.extend(hmac.new(enc_key, nonce + counter.to_bytes(4, "big"), hashlib.sha256).digest())
+            counter += 1
+        data = bytes(a ^ b for a, b in zip(cipher, stream))
+        return data.decode("utf-8")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(500, "Stored Karbon credentials could not be decrypted")
+
+
+def _karbon_credentials(db: Session):
+    mode = _setting_value(db, "karbon_config_mode").strip().lower()
+    if mode == "disabled":
+        raise HTTPException(503, "Karbon is not connected")
+    token_enc = _setting_value(db, "karbon_application_id_encrypted")
+    access_enc = _setting_value(db, "karbon_access_key_encrypted")
+    if token_enc and access_enc:
+        return _decrypt_secret(token_enc), _decrypt_secret(access_enc), "settings"
+    if mode != "settings":
+        token = (os.environ.get("KARBON_TOKEN") or "").strip()
+        access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
+        if token and access_key:
+            return token, access_key, "environment"
+    raise HTTPException(503, "Karbon is not connected. A Super Admin can connect it in Settings > Integrations.")
+
+
+def _karbon_headers(db: Session):
+    token, access_key, _ = _karbon_credentials(db)
     return {"Authorization": f"Bearer {token}", "AccessKey": access_key}
 
 
-def _karbon_get_all(path, params=None):
+def _karbon_get_all(path, params=None, db: Session = None, headers=None):
     url = f"https://api.karbonhq.com/v3/{path.lstrip('/')}"
     rows = []
     try:
-        with httpx.Client(timeout=25.0, headers=_karbon_headers()) as client:
+        request_headers = headers or _karbon_headers(db)
+        with httpx.Client(timeout=25.0, headers=request_headers) as client:
             next_url = url
             next_params = params
             while next_url:
                 response = client.get(next_url, params=next_params)
-                if response.status_code == 401:
+                if response.status_code in (401, 403):
                     raise HTTPException(502, "Karbon rejected the configured API credentials")
                 if response.status_code >= 400:
                     raise HTTPException(502, f"Karbon API returned {response.status_code}")
@@ -2982,6 +3058,64 @@ def _karbon_get_all(path, params=None):
     except Exception as exc:
         raise HTTPException(502, f"Could not reach Karbon: {str(exc)}")
     return rows
+
+
+@app.get("/api/integrations/karbon")
+def get_karbon_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    mode = _setting_value(db, "karbon_config_mode").strip().lower()
+    token_enc = _setting_value(db, "karbon_application_id_encrypted")
+    access_enc = _setting_value(db, "karbon_access_key_encrypted")
+    if token_enc and access_enc:
+        try:
+            token = _decrypt_secret(token_enc)
+            access_key = _decrypt_secret(access_enc)
+            return {"connected": True, "source": "settings", "application_id_hint": token[-4:] if token else "", "access_key_hint": access_key[-4:] if access_key else ""}
+        except HTTPException as exc:
+            return {"connected": False, "source": "settings", "error": exc.detail}
+    if mode != "disabled":
+        token = (os.environ.get("KARBON_TOKEN") or "").strip()
+        access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
+        if token and access_key:
+            return {"connected": True, "source": "environment", "application_id_hint": token[-4:], "access_key_hint": access_key[-4:]}
+    return {"connected": False, "source": "settings"}
+
+
+@app.put("/api/integrations/karbon")
+def save_karbon_integration(payload: schemas.KarbonIntegrationSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    application_id = payload.application_id.strip()
+    access_key = payload.access_key.strip()
+    if not application_id or not access_key:
+        raise HTTPException(400, "Application ID and Access Key are required")
+    headers = {"Authorization": f"Bearer {application_id}", "AccessKey": access_key}
+    _karbon_get_all("Users", {"$top": 1}, headers=headers)
+    _set_setting_value(db, "karbon_application_id_encrypted", _encrypt_secret(application_id))
+    _set_setting_value(db, "karbon_access_key_encrypted", _encrypt_secret(access_key))
+    _set_setting_value(db, "karbon_config_mode", "settings")
+    db.commit()
+    return {"connected": True, "source": "settings", "application_id_hint": application_id[-4:], "access_key_hint": access_key[-4:]}
+
+
+@app.post("/api/integrations/karbon/test")
+def test_karbon_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _karbon_get_all("Users", {"$top": 1}, db=db)
+    return {"ok": True}
+
+
+@app.delete("/api/integrations/karbon")
+def disconnect_karbon_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _set_setting_value(db, "karbon_application_id_encrypted", "")
+    _set_setting_value(db, "karbon_access_key_encrypted", "")
+    _set_setting_value(db, "karbon_config_mode", "disabled")
+    db.commit()
+    return {"connected": False, "source": "settings"}
 
 
 @app.get("/api/karbon/reconciliation")
@@ -3002,7 +3136,7 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         raise HTTPException(400, "End date must be on or after start date")
 
     safe_email = member.email.replace("'", "''")
-    users = _karbon_get_all("Users", {"$filter": f"EmailAddress eq '{safe_email}'", "$top": 10})
+    users = _karbon_get_all("Users", {"$filter": f"EmailAddress eq '{safe_email}'", "$top": 10}, db=db)
     if not users:
         raise HTTPException(404, f"No Karbon user matched {member.email}")
     karbon_user = users[0]
@@ -3014,7 +3148,7 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         f"UserKey eq '{str(user_key).replace(chr(39), chr(39)*2)}' and "
         f"Date ge {start_date.isoformat()}T00:00:00Z and Date le {end_date.isoformat()}T23:59:59Z"
     )
-    karbon_entries = _karbon_get_all("IndividualTimeEntries", {"$filter": karbon_filter, "$orderby": "Date", "$top": 1000})
+    karbon_entries = _karbon_get_all("IndividualTimeEntries", {"$filter": karbon_filter, "$orderby": "Date", "$top": 1000}, db=db)
     karbon_by_day = {}
     for entry in karbon_entries:
         raw = entry.get("Date")

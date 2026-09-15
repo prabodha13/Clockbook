@@ -43,6 +43,11 @@ class PodCreate(BaseModel):
     name: str
 
 
+class KarbonIntegrationSave(BaseModel):
+    application_id: str
+    access_key: str
+
+
 class MemberPodUpdate(BaseModel):
     pod_id: Optional[str] = None
 
