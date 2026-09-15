@@ -2438,6 +2438,8 @@ function SettingsView({
   const [savingCalamari, setSavingCalamari] = useState(false);
   const [testingCalamari, setTestingCalamari] = useState(false);
   const [calamariMessage, setCalamariMessage] = useState("");
+  const [permissionsOpen, setPermissionsOpen] = useState(false);
+  const [permissionSearch, setPermissionSearch] = useState("");
 
   useEffect(() => {
     if (!realIsSuperAdmin) return;
@@ -2692,48 +2694,127 @@ function SettingsView({
         </div>
       )}
 
-      {realIsSuperAdmin && viewMode === "super_admin" && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
-            <div>
-              <div className="cb-tmpl-field">Permissions</div>
-              <div className="cb-tmpl-name">Leave &amp; capacity insights</div>
-            </div>
-          </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 12 }}>
-              Choose who can view Leave Trends and Capacity &amp; Utilisation in Insights. Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
-            </div>
-            <div style={{ display: "grid", gap: 0, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-              {members.map((m, index) => {
-                const alwaysAllowed = m.role === "super_admin";
-                return (
-                  <label
-                    key={m.id}
-                    style={{
-                      display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                      padding: "10px 12px", cursor: alwaysAllowed ? "default" : "pointer",
-                      borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
-                    }}
-                  >
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
-                      <div className="cb-hint">{roleLabel(m.role)}{alwaysAllowed ? " · Always enabled" : ""}</div>
+      {realIsSuperAdmin && viewMode === "super_admin" && (() => {
+        const enabledMembers = members.filter((m) => m.role !== "super_admin" && !!m.can_view_leave_capacity_insights);
+        const search = permissionSearch.trim().toLowerCase();
+        const searchResults = search
+          ? members.filter((m) => m.role !== "super_admin" && !m.can_view_leave_capacity_insights && m.name.toLowerCase().includes(search))
+          : [];
+        return (
+          <div className="cb-tmpl-card">
+            <button
+              type="button"
+              className="cb-tmpl-head"
+              onClick={() => setPermissionsOpen((v) => !v)}
+              aria-expanded={permissionsOpen}
+              style={{ width: "100%", border: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}
+            >
+              <div>
+                <div className="cb-tmpl-field">Permissions</div>
+                <div className="cb-tmpl-name">Leave &amp; capacity insights</div>
+              </div>
+              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, color: "var(--ink-soft)" }}>
+                <span style={{ fontSize: 12.5 }}>{enabledMembers.length} {enabledMembers.length === 1 ? "person" : "people"} enabled</span>
+                {permissionsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </button>
+
+            {permissionsOpen && (
+              <div style={{ padding: "0 16px 16px" }}>
+                <div className="cb-hint" style={{ marginBottom: 12 }}>
+                  Choose who can view Leave Trends and Capacity &amp; Utilisation in Insights. Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
+                </div>
+
+                <div style={{ position: "relative", maxWidth: 460, marginBottom: 14 }}>
+                  <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
+                  <input
+                    className="cb-input"
+                    value={permissionSearch}
+                    onChange={(e) => setPermissionSearch(e.target.value)}
+                    placeholder="Search staff to add..."
+                    aria-label="Search staff to add leave and capacity insights access"
+                    style={{ width: "100%", paddingLeft: 34, paddingRight: permissionSearch ? 34 : 10 }}
+                  />
+                  {permissionSearch && (
+                    <button
+                      type="button"
+                      className="cb-icon-btn"
+                      onClick={() => setPermissionSearch("")}
+                      aria-label="Clear staff search"
+                      style={{ position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent" }}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+
+                {search && (
+                  <div style={{ maxWidth: 620, marginBottom: 16, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                    {searchResults.length ? searchResults.map((m, index) => (
+                      <div
+                        key={m.id}
+                        style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                          padding: "9px 11px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
+                        }}
+                      >
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
+                          <div className="cb-hint">{roleLabel(m.role)}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="cb-btn cb-btn-sm"
+                          onClick={() => {
+                            onChangeInsightsPermission && onChangeInsightsPermission(m.id, true);
+                            setPermissionSearch("");
+                          }}
+                        >
+                          <Plus size={13} /> Add access
+                        </button>
+                      </div>
+                    )) : (
+                      <div className="cb-hint" style={{ padding: "10px 11px" }}>No matching staff without access.</div>
+                    )}
+                  </div>
+                )}
+
+                <div style={{ maxWidth: 620 }}>
+                  <div className="cb-label" style={{ marginBottom: 7 }}>Has access</div>
+                  {enabledMembers.length ? (
+                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                      {enabledMembers.map((m, index) => (
+                        <div
+                          key={m.id}
+                          style={{
+                            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+                            padding: "9px 11px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
+                          }}
+                        >
+                          <div style={{ minWidth: 0 }}>
+                            <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
+                            <div className="cb-hint">{roleLabel(m.role)}</div>
+                          </div>
+                          <button
+                            type="button"
+                            className="cb-btn cb-btn-sm cb-btn-danger"
+                            onClick={() => onChangeInsightsPermission && onChangeInsightsPermission(m.id, false)}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={alwaysAllowed || !!m.can_view_leave_capacity_insights}
-                      disabled={alwaysAllowed}
-                      onChange={(e) => onChangeInsightsPermission && onChangeInsightsPermission(m.id, e.target.checked)}
-                      aria-label={`Leave and capacity insights access for ${m.name}`}
-                    />
-                  </label>
-                );
-              })}
-            </div>
+                  ) : (
+                    <div className="cb-hint">No additional staff have access.</div>
+                  )}
+                  <div className="cb-hint" style={{ marginTop: 9 }}>Super Admins always have access and do not need to be added.</div>
+                </div>
+              </div>
+            )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {effectiveIsAdmin && (
       <div className="cb-tmpl-card">
