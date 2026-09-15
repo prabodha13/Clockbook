@@ -22,6 +22,7 @@ class MemberOut(BaseModel):
     notification_channel: str = "browser"
     weekly_capacity_hours: float = 40.0
     capacity_effective_from: Optional[date] = None
+    timezone_name: str = "Asia/Colombo"
 
 
 class PodOut(BaseModel):
@@ -59,6 +60,10 @@ class MemberRoleUpdate(BaseModel):
 class MemberCapacityUpdate(BaseModel):
     weekly_capacity_hours: float
     capacity_effective_from: Optional[date] = None
+
+
+class MemberTimezoneUpdate(BaseModel):
+    timezone_name: str
 
 
 class LoginRequest(BaseModel):

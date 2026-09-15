@@ -48,6 +48,7 @@ class Member(Base):
     notification_channel = Column(String, default="browser")  # "browser" or "slack"
     weekly_capacity_hours = Column(Float, default=40.0)  # planning capacity used by Insights
     capacity_effective_from = Column(Date, default=date.today)  # do not apply capacity before this date
+    timezone_name = Column(String, default="Asia/Colombo")  # IANA timezone used for user-local audit times
 
     @property
     def google_calendar_connected(self):
@@ -63,6 +64,21 @@ class Session(Base):
     token = Column(String, primary_key=True)
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class LoginEvent(Base):
+    __tablename__ = "login_events"
+    id = Column(String, primary_key=True, default=lambda: gen_id("login"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class ClockStartEvent(Base):
+    __tablename__ = "clock_start_events"
+    id = Column(String, primary_key=True, default=lambda: gen_id("clk"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class GoogleOAuthState(Base):

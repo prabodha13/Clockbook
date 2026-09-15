@@ -6,6 +6,7 @@ import httpx
 from urllib.parse import urlencode
 from io import StringIO
 from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Header
@@ -92,6 +93,9 @@ def run_startup_migrations():
                 # Start capacity from the date this migration is first deployed; admins can
                 # move the date earlier later if historical capacity is genuinely required.
                 conn.execute(text("UPDATE members SET capacity_effective_from = CURRENT_DATE WHERE capacity_effective_from IS NULL"))
+            if "timezone_name" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN timezone_name VARCHAR DEFAULT 'Asia/Colombo'"))
+                conn.execute(text("UPDATE members SET timezone_name = 'Asia/Colombo' WHERE timezone_name IS NULL OR timezone_name = ''"))
 
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
@@ -385,6 +389,7 @@ def claim_account(payload: schemas.ClaimAccountRequest, db: Session = Depends(ge
     db.refresh(member)
     token = secrets.token_urlsafe(32)
     db.add(models.Session(token=token, member_id=member.id))
+    db.add(models.LoginEvent(member_id=member.id))
     db.commit()
     return schemas.LoginResponse(token=token, member=member)
 
@@ -397,6 +402,7 @@ def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(401, "Incorrect email or password")
     token = secrets.token_urlsafe(32)
     db.add(models.Session(token=token, member_id=member.id))
+    db.add(models.LoginEvent(member_id=member.id))
     db.commit()
     return schemas.LoginResponse(token=token, member=member)
 
@@ -1059,6 +1065,26 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
     # selected reporting period instead of being limited by a start date.
     if "capacity_effective_from" in payload.model_fields_set:
         member.capacity_effective_from = payload.capacity_effective_from
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@app.patch("/api/members/{member_id}/timezone", response_model=schemas.MemberOut)
+def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    if member_id not in allowed_ids:
+        raise HTTPException(403, "You cannot change the time zone for that person")
+    value = (payload.timezone_name or "").strip()
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(400, "Choose a valid IANA time zone")
+    member.timezone_name = value
     db.commit()
     db.refresh(member)
     return member
@@ -2595,6 +2621,11 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
             except ValueError:
                 pass
         task.segments = [*(task.segments or []), {"start": start_iso, "end": None}]
+        try:
+            event_started = datetime.fromisoformat(start_iso.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+        except Exception:
+            event_started = datetime.utcnow()
+        db.add(models.ClockStartEvent(member_id=current_member.id, task_id=task.id, started_at=event_started))
     task.status = "running"
     # Seeds this so a task isn't immediately eligible to be treated as stale the moment it
     # starts, before the browser has had a chance to send its first periodic heartbeat
@@ -2896,6 +2927,190 @@ def repair_task_segments(task_id: str, current_member: models.Member = Depends(g
     db.refresh(task)
     after_hours = round(elapsed_seconds(task.segments) / 3600, 2)
     return {"task": schemas.TaskOut.model_validate(task), "before_hours": before_hours, "after_hours": after_hours}
+
+
+
+# ---------------------------------------------------------------
+# Karbon reconciliation + daily audit activity
+# ---------------------------------------------------------------
+
+def _member_zone(member):
+    try:
+        return ZoneInfo((getattr(member, "timezone_name", None) or "Asia/Colombo").strip())
+    except Exception:
+        return ZoneInfo("UTC")
+
+
+def _utc_naive_to_local(dt, member):
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.astimezone(_member_zone(member))
+
+
+def _karbon_headers():
+    token = (os.environ.get("KARBON_TOKEN") or "").strip()
+    access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
+    if not token or not access_key:
+        raise HTTPException(503, "Karbon API is not configured. Add KARBON_TOKEN and KARBON_ACCESS_KEY in Railway variables.")
+    return {"Authorization": f"Bearer {token}", "AccessKey": access_key}
+
+
+def _karbon_get_all(path, params=None):
+    url = f"https://api.karbonhq.com/v3/{path.lstrip('/')}"
+    rows = []
+    try:
+        with httpx.Client(timeout=25.0, headers=_karbon_headers()) as client:
+            next_url = url
+            next_params = params
+            while next_url:
+                response = client.get(next_url, params=next_params)
+                if response.status_code == 401:
+                    raise HTTPException(502, "Karbon rejected the configured API credentials")
+                if response.status_code >= 400:
+                    raise HTTPException(502, f"Karbon API returned {response.status_code}")
+                payload = response.json()
+                values = payload.get("value", []) if isinstance(payload, dict) else []
+                rows.extend(values if isinstance(values, list) else [])
+                next_url = payload.get("@odata.nextLink") if isinstance(payload, dict) else None
+                next_params = None
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(502, f"Could not reach Karbon: {str(exc)}")
+    return rows
+
+
+@app.get("/api/karbon/reconciliation")
+def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    target_id = member_id or current_member.id
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    if target_id not in allowed_ids:
+        raise HTTPException(403, "You cannot view Karbon time for that person")
+    member = db.get(models.Member, target_id)
+    if not member or not member.email:
+        raise HTTPException(400, "This ClockBook user needs an email address before they can be matched to Karbon")
+    try:
+        start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else (datetime.utcnow().date() - timedelta(days=datetime.utcnow().weekday()))
+        end_date = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else start_date + timedelta(days=6)
+    except ValueError:
+        raise HTTPException(400, "Dates must be YYYY-MM-DD")
+    if end_date < start_date:
+        raise HTTPException(400, "End date must be on or after start date")
+
+    safe_email = member.email.replace("'", "''")
+    users = _karbon_get_all("Users", {"$filter": f"EmailAddress eq '{safe_email}'", "$top": 10})
+    if not users:
+        raise HTTPException(404, f"No Karbon user matched {member.email}")
+    karbon_user = users[0]
+    user_key = karbon_user.get("UserKey") or karbon_user.get("Key") or karbon_user.get("UserId")
+    if not user_key:
+        raise HTTPException(502, "Karbon returned a user without a UserKey")
+
+    karbon_filter = (
+        f"UserKey eq '{str(user_key).replace(chr(39), chr(39)*2)}' and "
+        f"Date ge {start_date.isoformat()}T00:00:00Z and Date le {end_date.isoformat()}T23:59:59Z"
+    )
+    karbon_entries = _karbon_get_all("IndividualTimeEntries", {"$filter": karbon_filter, "$orderby": "Date", "$top": 1000})
+    karbon_by_day = {}
+    for entry in karbon_entries:
+        raw = entry.get("Date")
+        try:
+            day = datetime.fromisoformat(str(raw).replace("Z", "+00:00")).date().isoformat()
+        except Exception:
+            continue
+        karbon_by_day[day] = karbon_by_day.get(day, 0) + int(entry.get("Minutes") or 0)
+
+    clockbook_by_day = {}
+    tasks = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted", models.TaskInstance.submitted_by_id == target_id).all()
+    for task in tasks:
+        dt = _insights_task_work_date(task)
+        if not dt:
+            continue
+        local_dt = _utc_naive_to_local(dt, member)
+        if not local_dt or not (start_date <= local_dt.date() <= end_date):
+            continue
+        day = local_dt.date().isoformat()
+        clockbook_by_day[day] = clockbook_by_day.get(day, 0.0) + _insights_task_seconds(task) / 60.0
+
+    rows = []
+    cursor = start_date
+    while cursor <= end_date:
+        key = cursor.isoformat()
+        cb = round(clockbook_by_day.get(key, 0.0))
+        kb = int(karbon_by_day.get(key, 0))
+        rows.append({"date": key, "clockbook_minutes": cb, "karbon_minutes": kb, "difference_minutes": kb - cb})
+        cursor += timedelta(days=1)
+    cb_total = sum(r["clockbook_minutes"] for r in rows)
+    kb_total = sum(r["karbon_minutes"] for r in rows)
+    return {
+        "member_id": member.id,
+        "member_name": member.name,
+        "member_email": member.email,
+        "karbon_user_key": user_key,
+        "date_from": start_date.isoformat(),
+        "date_to": end_date.isoformat(),
+        "timezone_name": member.timezone_name or "UTC",
+        "clockbook_minutes": cb_total,
+        "karbon_minutes": kb_total,
+        "difference_minutes": kb_total - cb_total,
+        "rows": rows,
+    }
+
+
+@app.get("/api/audit/activity-summary")
+def audit_activity_summary(date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "This report requires a super admin")
+    try:
+        start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else datetime.utcnow().date()
+        end_date = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else start_date
+    except ValueError:
+        raise HTTPException(400, "Dates must be YYYY-MM-DD")
+    if end_date < start_date:
+        raise HTTPException(400, "End date must be on or after start date")
+
+    members = db.query(models.Member).order_by(models.Member.name).all()
+    # Pull a generous UTC envelope; grouping is done in each user's configured local zone.
+    utc_start = datetime.combine(start_date - timedelta(days=1), datetime.min.time())
+    utc_end = datetime.combine(end_date + timedelta(days=2), datetime.min.time())
+    login_events = db.query(models.LoginEvent).filter(models.LoginEvent.created_at >= utc_start, models.LoginEvent.created_at < utc_end).all()
+    clock_events = db.query(models.ClockStartEvent).filter(models.ClockStartEvent.started_at >= utc_start, models.ClockStartEvent.started_at < utc_end).all()
+    logins_by_member = {}
+    clocks_by_member = {}
+    for event in login_events:
+        logins_by_member.setdefault(event.member_id, []).append(event.created_at)
+    for event in clock_events:
+        clocks_by_member.setdefault(event.member_id, []).append(event.started_at)
+
+    rows = []
+    for member in members:
+        per_day = {}
+        for dt in logins_by_member.get(member.id, []):
+            local = _utc_naive_to_local(dt, member)
+            if local and start_date <= local.date() <= end_date:
+                bucket = per_day.setdefault(local.date().isoformat(), {"first_login": None, "first_clock": None})
+                if bucket["first_login"] is None or local < bucket["first_login"]:
+                    bucket["first_login"] = local
+        for dt in clocks_by_member.get(member.id, []):
+            local = _utc_naive_to_local(dt, member)
+            if local and start_date <= local.date() <= end_date:
+                bucket = per_day.setdefault(local.date().isoformat(), {"first_login": None, "first_clock": None})
+                if bucket["first_clock"] is None or local < bucket["first_clock"]:
+                    bucket["first_clock"] = local
+        for day, bucket in sorted(per_day.items()):
+            rows.append({
+                "member_id": member.id,
+                "member_name": member.name,
+                "date": day,
+                "timezone_name": member.timezone_name or "UTC",
+                "first_login_at": bucket["first_login"].isoformat() if bucket["first_login"] else None,
+                "first_clock_at": bucket["first_clock"].isoformat() if bucket["first_clock"] else None,
+            })
+    return rows
 
 
 # ---------------------------------------------------------------
