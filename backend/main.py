@@ -3175,49 +3175,59 @@ def _calamari_daily_adjustments(db: Session, members, start_date, end_date, incl
             row_end = datetime.strptime(str(row.get("to"))[:10], "%Y-%m-%d").date()
         except Exception:
             continue
-        row_start = max(row_start, start_date)
-        row_end = min(row_end, end_date)
-        if row_end < row_start:
-            continue
+        # Capacity/unavailable metrics respect the member's Capacity From date.
+        # Leave Trends are historical reporting, so keep a separate copy of the
+        # selected-period range before applying that capacity boundary.
+        trend_row_start = max(row_start, start_date)
+        trend_row_end = min(row_end, end_date)
+
+        effective_start = _insights_capacity_effective_start(member, start_date)
+        capacity_row_start = max(row_start, effective_start)
+        capacity_row_end = min(row_end, end_date)
+
         daily_hours = max(float(getattr(member, "weekly_capacity_hours", 40.0) or 0.0), 0.0) / 5.0
         daily_seconds = daily_hours * 3600.0
         unit = str(row.get("entitlementAmountUnit") or "DAYS").upper()
-        cursor = row_start
-        business_dates = []
-        while cursor <= row_end:
-            if cursor.weekday() < 5:
-                business_dates.append(cursor)
-            cursor += timedelta(days=1)
-        if not business_dates:
-            continue
         first_amount = float(row.get("amountFirstDay") or 0.0)
         last_amount = float(row.get("amountLastDay") or 0.0)
         total_amount = float(row.get("entitlementAmount") or 0.0)
-        for i, day in enumerate(business_dates):
-            if unit == "HOURS":
-                if len(business_dates) == 1:
-                    hours = total_amount or first_amount or last_amount
-                elif i == 0:
-                    hours = first_amount or min(total_amount, daily_hours)
-                elif i == len(business_dates) - 1:
-                    hours = last_amount or min(total_amount, daily_hours)
+
+        def add_absence_days(range_start, range_end, destination):
+            if destination is None or range_end < range_start:
+                return
+            cursor = range_start
+            business_dates = []
+            while cursor <= range_end:
+                if cursor.weekday() < 5:
+                    business_dates.append(cursor)
+                cursor += timedelta(days=1)
+            for i, day in enumerate(business_dates):
+                if unit == "HOURS":
+                    if len(business_dates) == 1:
+                        hours = total_amount or first_amount or last_amount
+                    elif i == 0:
+                        hours = first_amount or min(total_amount, daily_hours)
+                    elif i == len(business_dates) - 1:
+                        hours = last_amount or min(total_amount, daily_hours)
+                    else:
+                        hours = daily_hours
+                    seconds = min(max(hours, 0.0) * 3600.0, daily_seconds)
                 else:
-                    hours = daily_hours
-                seconds = min(max(hours, 0.0) * 3600.0, daily_seconds)
-            else:
-                if len(business_dates) == 1:
-                    fraction = first_amount or last_amount or total_amount or 1.0
-                elif i == 0:
-                    fraction = first_amount or 1.0
-                elif i == len(business_dates) - 1:
-                    fraction = last_amount or 1.0
-                else:
-                    fraction = 1.0
-                seconds = min(max(fraction, 0.0), 1.0) * daily_seconds
-            key = day.isoformat()
-            result[member.id][key] = min(result[member.id].get(key, 0.0) + seconds, daily_seconds)
-            if leave_result is not None:
-                leave_result[member.id][key] = min(leave_result[member.id].get(key, 0.0) + seconds, daily_seconds)
+                    if len(business_dates) == 1:
+                        fraction = first_amount or last_amount or total_amount or 1.0
+                    elif i == 0:
+                        fraction = first_amount or 1.0
+                    elif i == len(business_dates) - 1:
+                        fraction = last_amount or 1.0
+                    else:
+                        fraction = 1.0
+                    seconds = min(max(fraction, 0.0), 1.0) * daily_seconds
+                key = day.isoformat()
+                destination[member.id][key] = min(destination[member.id].get(key, 0.0) + seconds, daily_seconds)
+
+        add_absence_days(capacity_row_start, capacity_row_end, result)
+        if leave_result is not None:
+            add_absence_days(trend_row_start, trend_row_end, leave_result)
 
     # Holiday calendars are employee-specific, so Calamari exposes them per employee.
     # A failure for one email is surfaced as a warning instead of silently reducing everyone.
@@ -3245,7 +3255,8 @@ def _calamari_daily_adjustments(db: Session, members, start_date, end_date, incl
                 h_end = datetime.strptime(str(row.get("end"))[:10], "%Y-%m-%d").date()
             except Exception:
                 continue
-            cursor = max(h_start, start_date)
+            effective_start = _insights_capacity_effective_start(member, start_date)
+            cursor = max(h_start, effective_start)
             h_end = min(h_end, end_date)
             while cursor <= h_end:
                 if cursor.weekday() < 5:
