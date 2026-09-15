@@ -3992,6 +3992,20 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   const [loadError, setLoadError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
 
+  const exportClientOptions = useMemo(() => [
+    { id: "all", name: "All clients" },
+    ...[...clients]
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }))
+      .map((c) => ({ ...c, id: String(c.id) })),
+  ], [clients]);
+
+  const exportStaffOptions = useMemo(() => [
+    { id: "all", name: "All staff" },
+    ...[...members]
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }))
+      .map((m) => ({ ...m, id: String(m.id) })),
+  ], [members]);
+
   const dateRange = useMemo(() => {
     if (datePreset === "custom") return dateRangeForCustom(customFrom, customTo);
     return dateRangeForPreset(datePreset);
@@ -4162,15 +4176,25 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           <button className={`cb-tab ${pushFilter === "pushed" ? "active" : ""}`} onClick={() => setPushFilter("pushed")}>Pushed</button>
           <button className={`cb-tab ${pushFilter === "all" ? "active" : ""}`} onClick={() => setPushFilter("all")}>All</button>
         </div>
-        <select className="cb-select" style={{ width: 200 }} value={clientFilter} onChange={(e) => setClientFilter(e.target.value)}>
-          <option value="all">All clients</option>
-          {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
+        <div style={{ width: 220 }}>
+          <SearchableSelect
+            options={exportClientOptions}
+            value={String(clientFilter)}
+            onChange={(id) => setClientFilter(String(id))}
+            placeholder="Search clients"
+            getLabel={(c) => c.name || "Unnamed client"}
+          />
+        </div>
         {isAdmin && !forceSelfOnly && (
-          <select className="cb-select" style={{ width: 200 }} value={staffFilter} onChange={(e) => setStaffFilter(e.target.value)}>
-            <option value="all">All staff</option>
-            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          <div style={{ width: 220 }}>
+            <SearchableSelect
+              options={exportStaffOptions}
+              value={String(staffFilter)}
+              onChange={(id) => setStaffFilter(String(id))}
+              placeholder="Search staff"
+              getLabel={(m) => m.name || "Unnamed staff"}
+            />
+          </div>
         )}
         <div style={{ marginLeft: "auto", fontSize: 13, color: "var(--ink-soft)" }}>
           {rows.length} entr{rows.length === 1 ? "y" : "ies"}, <span className="cb-mono" style={{ fontWeight: 600, color: "var(--ink)" }}>{totalHours.toFixed(2)}h</span> ({formatHM(totalHours * 3600)}) total
