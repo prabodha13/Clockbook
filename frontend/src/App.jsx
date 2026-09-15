@@ -1033,7 +1033,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
           )}
           <button className="cb-btn" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
           <button className="cb-btn" data-tour="helper" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
-          <button className="cb-btn cb-btn-primary" onClick={onNewTask}><Plus size={15} />New task</button>
+          <button className="cb-btn cb-btn-primary" data-tour="new-task-button" onClick={onNewTask}><Plus size={15} />New task</button>
         </div>
       </div>
 
@@ -1538,7 +1538,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
 
   return (
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cb-modal">
+      <div className="cb-modal" data-tour="new-task-modal">
         <div className="cb-modal-head">
           <div className="cb-modal-title">New task</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
@@ -6458,7 +6458,7 @@ function savePromptedMeetingIds(set) {
 }
 
 
-function GuidedTour({ onClose }) {
+function GuidedTour({ onClose, onSetNewTaskOpen }) {
   const steps = [
     {
       title: "Welcome to ClockBook",
@@ -6474,6 +6474,17 @@ function GuidedTour({ onClose }) {
       title: "Your work and timers",
       body: "Your active and paused work sits in In progress. Queued work is under To do. Use the play button to start or resume a task, then pause or complete it when needed.",
       target: '[data-tour="task-list"]',
+    },
+    {
+      title: "Add new work",
+      body: "Use New task when the work you need is not already on your dashboard. The next step will open the form so you can see how it works.",
+      target: '[data-tour="new-task-button"]',
+    },
+    {
+      title: "Create a task",
+      body: "Choose the client, then use a standard template or create a custom task. You can assign the work where your access allows it, then use Add to dashboard. This tour will not create anything.",
+      target: '[data-tour="new-task-modal"]',
+      openNewTask: true,
     },
     {
       title: "Record colleague help",
@@ -6495,27 +6506,47 @@ function GuidedTour({ onClose }) {
   const [targetRect, setTargetRect] = useState(null);
   const step = steps[stepIndex];
 
+  useEffect(() => {
+    if (!onSetNewTaskOpen) return;
+    onSetNewTaskOpen(!!step.openNewTask);
+  }, [stepIndex, step.openNewTask, onSetNewTaskOpen]);
+
   useLayoutEffect(() => {
     if (!step.target) {
       setTargetRect(null);
       return;
     }
-    const el = document.querySelector(step.target);
-    if (!el) {
-      setTargetRect(null);
-      return;
-    }
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    let el = null;
+    let retryTimer = null;
+    let settleTimer = null;
+    let cancelled = false;
+
     const update = () => {
+      if (!el) return;
       const r = el.getBoundingClientRect();
       setTargetRect({ left: r.left, top: r.top, width: r.width, height: r.height, bottom: r.bottom, right: r.right });
     };
-    const timer = window.setTimeout(update, 260);
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    update();
+
+    const attach = (attempt = 0) => {
+      if (cancelled) return;
+      el = document.querySelector(step.target);
+      if (!el) {
+        if (attempt < 12) retryTimer = window.setTimeout(() => attach(attempt + 1), 80);
+        else setTargetRect(null);
+        return;
+      }
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      update();
+      settleTimer = window.setTimeout(update, 260);
+      window.addEventListener("resize", update);
+      window.addEventListener("scroll", update, true);
+    };
+
+    attach();
     return () => {
-      window.clearTimeout(timer);
+      cancelled = true;
+      if (retryTimer) window.clearTimeout(retryTimer);
+      if (settleTimer) window.clearTimeout(settleTimer);
       window.removeEventListener("resize", update);
       window.removeEventListener("scroll", update, true);
     };
@@ -6687,6 +6718,7 @@ export default function App() {
   }, [authState, dataLoading, currentUser]);
 
   async function closeGuidedTour() {
+    setShowNewTask(false);
     setShowGuidedTour(false);
     if (!currentUser || currentUser.staff_tour_completed) return;
     try {
@@ -6699,6 +6731,7 @@ export default function App() {
   }
 
   function restartGuidedTour() {
+    setShowNewTask(false);
     setView("dashboard");
     setShowGuidedTour(true);
   }
@@ -7956,7 +7989,7 @@ export default function App() {
       </div>
 
       {showGuidedTour && (
-        <GuidedTour onClose={closeGuidedTour} />
+        <GuidedTour onClose={closeGuidedTour} onSetNewTaskOpen={setShowNewTask} />
       )}
 
       {showQuickMeeting && (
