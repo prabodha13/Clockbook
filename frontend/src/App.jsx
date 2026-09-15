@@ -6649,7 +6649,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (authState !== "ready" || dataLoading || !currentUser || currentUser.role !== "member") return;
+    if (authState !== "ready" || dataLoading || !currentUser) return;
     if (currentUser.staff_tour_completed) return;
     if (tourAutoOpenedForRef.current === currentUser.id) return;
     tourAutoOpenedForRef.current = currentUser.id;
