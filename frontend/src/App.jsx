@@ -4096,6 +4096,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
 
 function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
+  const DEFAULT_TOLERANCE_MINUTES = 15;
   const localDate = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -4133,38 +4134,98 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     if (n === 0) return "0m";
     return `${n > 0 ? "+" : "−"}${formatHM(Math.abs(n) * 60)}`;
   };
-  const status = data ? (Math.abs(data.difference_minutes || 0) <= 5 ? "Matched" : "Review") : "";
+  const toleranceMinutes = data?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
+  const isMatched = (minutes) => Math.abs(minutes || 0) <= toleranceMinutes;
+  const status = data ? (isMatched(data.difference_minutes) ? "Matched" : "Review") : "";
+  const reviewCount = data ? (data.rows || []).filter((r) => !isMatched(r.difference_minutes)).length : 0;
+  const rangeLabel = range ? `${formatDate(`${range.from}T12:00:00`)} – ${formatDate(`${range.to}T12:00:00`)}` : "";
+
+  const styles = {
+    controlPanel: { background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "16px 18px", marginBottom: 18 },
+    summaryGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 18 },
+    summaryCard: { background: "#fff", border: "1px solid var(--line)", borderRadius: 12, padding: "16px 18px", minHeight: 94 },
+    summaryLabel: { fontSize: 11, fontWeight: 750, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--ink-faint)", marginBottom: 8 },
+    summaryValue: { fontSize: 25, lineHeight: 1.1, fontWeight: 720, letterSpacing: "-.02em", color: "var(--ink)" },
+    summaryMeta: { fontSize: 12, color: "var(--ink-faint)", marginTop: 8 },
+    sectionMeta: { display: "flex", alignItems: "center", gap: 8, color: "var(--ink-faint)", fontSize: 12 },
+    statusPill: (ok) => ({
+      display: "inline-flex", alignItems: "center", gap: 6, minWidth: 72, justifyContent: "center",
+      padding: "4px 9px", borderRadius: 999, fontSize: 12, fontWeight: 700,
+      color: ok ? "#166534" : "#92400e",
+      background: ok ? "#ecfdf3" : "#fffbeb",
+      border: `1px solid ${ok ? "#bbf7d0" : "#fde68a"}`,
+    }),
+    statusDot: (ok) => ({ width: 6, height: 6, borderRadius: "50%", background: ok ? "#16a34a" : "#d97706", flex: "0 0 auto" }),
+    reviewRow: { background: "#fffdf5" },
+    differenceGood: { color: "#166534", fontWeight: 650 },
+    differenceReview: { color: "#92400e", fontWeight: 700 },
+  };
 
   return <div>
-    <div className="cb-page-head">
+    <div className="cb-page-head" style={{ marginBottom: 18 }}>
       <div>
         <div className="cb-page-title cb-serif">Karbon Check</div>
-        <div className="cb-page-sub">Compare submitted ClockBook time with time recorded in Karbon. Staff see their own time; admins can review people in their scope.</div>
+        <div className="cb-page-sub">Reconcile submitted ClockBook time against Karbon for the selected period.</div>
       </div>
     </div>
-    <div className="cb-toolbar" style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
-      {isAdmin && !forceSelfOnly && <div style={{ width: 230 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
-      <div><div className="cb-label">Period</div><div className="cb-tabs">
-        <button className={`cb-tab ${preset === "this_week" ? "active" : ""}`} onClick={() => setPreset("this_week")}>This week</button>
-        <button className={`cb-tab ${preset === "last_week" ? "active" : ""}`} onClick={() => setPreset("last_week")}>Last week</button>
-        <button className={`cb-tab ${preset === "custom" ? "active" : ""}`} onClick={() => setPreset("custom")}>Custom</button>
-      </div></div>
-      {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
-      <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !effectiveMemberId || !range}>{busy ? "Comparing..." : "Compare with Karbon"}</button>
+
+    <div style={styles.controlPanel}>
+      <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+        {isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        <div><div className="cb-label">Period</div><div className="cb-tabs">
+          <button className={`cb-tab ${preset === "this_week" ? "active" : ""}`} onClick={() => setPreset("this_week")}>This week</button>
+          <button className={`cb-tab ${preset === "last_week" ? "active" : ""}`} onClick={() => setPreset("last_week")}>Last week</button>
+          <button className={`cb-tab ${preset === "custom" ? "active" : ""}`} onClick={() => setPreset("custom")}>Custom</button>
+        </div></div>
+        {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
+        <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !effectiveMemberId || !range}>{busy ? "Comparing..." : "Compare with Karbon"}</button>
+      </div>
     </div>
+
     {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
-    {!data && !error && <div className="cb-empty">Choose a period and compare when you are ready.</div>}
+    {!data && !error && <div className="cb-empty">Select a period to run a reconciliation.</div>}
     {data && <>
-      <div className="cb-kpi-grid" style={{ marginBottom: 16 }}>
-        <div className="cb-kpi"><div className="cb-kpi-label">ClockBook</div><div className="cb-kpi-value">{formatHM(data.clockbook_minutes * 60)}</div></div>
-        <div className="cb-kpi"><div className="cb-kpi-label">Karbon</div><div className="cb-kpi-value">{formatHM(data.karbon_minutes * 60)}</div></div>
-        <div className="cb-kpi"><div className="cb-kpi-label">Difference</div><div className="cb-kpi-value">{signed(data.difference_minutes)}</div><div className="cb-kpi-sub">{status} · 5m tolerance</div></div>
+      <div style={styles.summaryGrid} className="cb-karbon-summary-grid">
+        <div style={styles.summaryCard}>
+          <div style={styles.summaryLabel}>ClockBook</div>
+          <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.clockbook_minutes * 60)}</div>
+          <div style={styles.summaryMeta}>Submitted time</div>
+        </div>
+        <div style={styles.summaryCard}>
+          <div style={styles.summaryLabel}>Karbon</div>
+          <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.karbon_minutes * 60)}</div>
+          <div style={styles.summaryMeta}>Recorded time</div>
+        </div>
+        <div style={{ ...styles.summaryCard, borderColor: status === "Matched" ? "#bbf7d0" : "#fde68a" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+            <div style={styles.summaryLabel}>Difference</div>
+            <span style={styles.statusPill(status === "Matched")}><span style={styles.statusDot(status === "Matched")} />{status}</span>
+          </div>
+          <div className="cb-mono" style={{ ...styles.summaryValue, color: status === "Matched" ? "#166534" : "#92400e" }}>{signed(data.difference_minutes)}</div>
+          <div style={styles.summaryMeta}>Tolerance ±{toleranceMinutes}m{reviewCount ? ` · ${reviewCount} day${reviewCount === 1 ? "" : "s"} to review` : ""}</div>
+        </div>
       </div>
-      <div className="cb-group-head"><div className="cb-group-title">Daily comparison</div><div className="cb-group-count">{data.member_name}</div></div>
+
+      <div className="cb-group-head" style={{ marginBottom: 10 }}>
+        <div>
+          <div className="cb-group-title">Daily comparison</div>
+          <div style={styles.sectionMeta}><span>{data.member_name}</span><span>·</span><span>{rangeLabel}</span></div>
+        </div>
+      </div>
+
       <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th></tr></thead><tbody>
-        {(data.rows || []).map((r) => { const ok = Math.abs(r.difference_minutes || 0) <= 5; return <tr key={r.date}><td>{formatDate(`${r.date}T12:00:00`)}</td><td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td><td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td><td className="num cb-mono">{signed(r.difference_minutes)}</td><td>{ok ? "Matched" : "Review"}</td></tr>; })}
+        {(data.rows || []).map((r) => {
+          const ok = isMatched(r.difference_minutes);
+          return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
+            <td style={{ fontWeight: 600 }}>{formatDate(`${r.date}T12:00:00`)}</td>
+            <td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td>
+            <td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td>
+            <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
+            <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
+          </tr>;
+        })}
       </tbody></table></div>
-      <div style={{ marginTop: 8, fontSize: 12, color: "var(--ink-faint)" }}>ClockBook uses the final submitted duration, including manual adjustments. Karbon users are matched by email.</div>
+      <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-faint)" }}>ClockBook uses final submitted duration, including manual adjustments. Differences within ±{toleranceMinutes} minutes are treated as matched.</div>
     </>}
   </div>;
 }
