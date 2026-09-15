@@ -1578,8 +1578,20 @@ def _insights_task_work_date(task: models.TaskInstance):
 
 
 def _insights_task_seconds(task: models.TaskInstance):
-    tracked = elapsed_seconds(task.segments)
-    return max(float(task.adjusted_seconds if task.adjusted_seconds is not None else tracked), 0.0)
+    """Return the final submitted duration used by every Insights metric.
+
+    A submitted task can contain timer-tracked time, a manually entered duration, or an
+    edited duration that replaces what the timer captured.  Insights must use the same
+    final duration shown in Export, not raw timer segments only.
+    """
+    tracked = max(float(elapsed_seconds(task.segments)), 0.0)
+    adjusted = getattr(task, "adjusted_seconds", None)
+    if adjusted is None:
+        return tracked
+    try:
+        return max(float(adjusted), 0.0)
+    except (TypeError, ValueError):
+        return tracked
 
 
 def _insights_is_support(task: models.TaskInstance):
