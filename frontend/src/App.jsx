@@ -386,7 +386,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <button className="cb-btn cb-btn-sm" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
           <Video size={13} />Meeting
         </button>
-        {currentUser.role === "member" && onStartTour && (
+        {onStartTour && (
           <button className="cb-btn cb-btn-sm" onClick={onStartTour} title="Replay the ClockBook guided tour">
             <HelpCircle size={13} />Tour
           </button>
@@ -6566,11 +6566,40 @@ function GuidedTour({ onClose }) {
         </div>
         <div className="cb-serif" style={{ fontSize: 21, fontWeight: 700, marginBottom: 8 }}>{step.title}</div>
         <div style={{ fontSize: 14, lineHeight: 1.55, color: "var(--ink-soft, #58635d)", marginBottom: 18 }}>{step.body}</div>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
-          <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Skip tour</button>
-          <div style={{ display: "flex", gap: 8 }}>
-            {stepIndex > 0 && <button type="button" className="cb-btn" onClick={() => setStepIndex((i) => i - 1)}>Back</button>}
-            <button type="button" className="cb-btn cb-btn-primary" onClick={() => isLast ? onClose() : setStepIndex((i) => i + 1)}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: 0, background: "transparent", color: "var(--ink-soft, #58635d)", padding: "8px 0",
+              font: "inherit", fontSize: 13, cursor: "pointer", textDecoration: "underline", textUnderlineOffset: 2,
+            }}
+          >
+            Skip tour
+          </button>
+          <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+            {stepIndex > 0 && (
+              <button
+                type="button"
+                onClick={() => setStepIndex((i) => i - 1)}
+                style={{
+                  minHeight: 36, padding: "8px 13px", borderRadius: 8, border: "1px solid var(--line, #d8ded9)",
+                  background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", font: "inherit", fontSize: 13,
+                  fontWeight: 600, cursor: "pointer",
+                }}
+              >
+                Back
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => isLast ? onClose() : setStepIndex((i) => i + 1)}
+              style={{
+                minHeight: 36, padding: "8px 14px", borderRadius: 8, border: "1px solid var(--green, #245c43)",
+                background: "var(--green, #245c43)", color: "#fff", font: "inherit", fontSize: 13, fontWeight: 700,
+                cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
+              }}
+            >
               {isLast ? "Finish" : <>Next <ChevronRight size={14} /></>}
             </button>
           </div>
