@@ -3208,6 +3208,7 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         "clockbook_minutes": cb_total,
         "karbon_minutes": kb_total,
         "difference_minutes": kb_total - cb_total,
+        "tolerance_minutes": 15,
         "rows": rows,
     }
 
