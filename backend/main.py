@@ -1084,8 +1084,6 @@ def update_member_insights_permission(member_id: str, payload: schemas.MemberIns
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
-    if member.role != "admin":
-        raise HTTPException(400, "Leave and capacity insights access can only be assigned to admins")
     member.can_view_leave_capacity_insights = bool(payload.enabled)
     db.commit()
     db.refresh(member)
@@ -2214,10 +2212,10 @@ def get_insights(
             "trend": capacity_trend,
             "calamari_adjustment_seconds": round(sum(target_unavailable.values()), 1),
             "calamari": _calamari_public_meta(individual_calamari_meta),
-        } if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
-        "team_capacity": (team_capacity if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
-        "leave_trends": (leave_trends if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
-        "team_leave_trends": (team_leave_trends if (current_member.role == "super_admin" or (current_member.role == "admin" and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
+        } if (current_member.role == "super_admin" or bool(getattr(current_member, "can_view_leave_capacity_insights", False))) else None),
+        "team_capacity": (team_capacity if (current_member.role == "super_admin" or (is_admin_or_above(current_member.role) and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
+        "leave_trends": (leave_trends if (current_member.role == "super_admin" or bool(getattr(current_member, "can_view_leave_capacity_insights", False))) else None),
+        "team_leave_trends": (team_leave_trends if (current_member.role == "super_admin" or (is_admin_or_above(current_member.role) and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
         "support_trend": support_trend,
         "tracked_trend": tracked_trend,
         "work_mix": work_mix,

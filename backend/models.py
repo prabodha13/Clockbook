@@ -49,7 +49,7 @@ class Member(Base):
     weekly_capacity_hours = Column(Float, default=40.0)  # planning capacity used by Insights
     capacity_effective_from = Column(Date, default=date.today)  # do not apply capacity before this date
     timezone_name = Column(String, default="Asia/Colombo")  # IANA timezone used for user-local audit times
-    can_view_leave_capacity_insights = Column(Boolean, default=False)  # optional admin access; super admins always have access
+    can_view_leave_capacity_insights = Column(Boolean, default=False)  # optional per-person access; super admins always have access
 
     @property
     def google_calendar_connected(self):
