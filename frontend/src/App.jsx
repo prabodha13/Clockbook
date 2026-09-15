@@ -3879,48 +3879,61 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
 
   return (
     <div style={{ maxWidth: 1460, margin: "0 auto" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 20, alignItems: "flex-start", marginBottom: 18 }}>
-        <div>
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ marginBottom: 12 }}>
           <div className="cb-page-title cb-serif" style={{ fontSize: 30, lineHeight: 1.05 }}>Insights</div>
           <div className="cb-page-sub" style={{ marginTop: 5 }}>Personal time and workload analysis</div>
         </div>
-        <div>
-          <div style={{ display: "grid", gridTemplateColumns: isAdmin && !forceSelfOnly ? "250px 160px auto" : "160px auto", gap: 10, alignItems: "end", justifyContent: "end" }}>
-            {isAdmin && !forceSelfOnly && (
-              <div>
-                <div className="cb-label">Person</div>
-                <select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)} style={{ width: "100%" }}>
-                  {selectableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === currentUser.id ? " (you)" : ""}</option>)}
-                </select>
-              </div>
-            )}
-            <div>
-              <div className="cb-label">Period</div>
-              <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
-                <option value="last_week">Last week</option>
-                <option value="this_month">This month</option>
-                <option value="last_month">Last month</option>
-                <option value="30">Last 30 days</option>
-                <option value="90">Last 3 months</option>
-                <option value="180">Last 6 months</option>
-                <option value="365">Last 12 months</option>
-                <option value="custom">Custom</option>
+
+        <div style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: 10,
+          alignItems: "end",
+          padding: "12px 0",
+          borderTop: "1px solid #E7ECF0",
+          borderBottom: "1px solid #E7ECF0"
+        }}>
+          {isAdmin && !forceSelfOnly && (
+            <div style={{ width: 220 }}>
+              <div className="cb-label">Person</div>
+              <select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)} style={{ width: "100%" }}>
+                {selectableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}{m.id === currentUser.id ? " (you)" : ""}</option>)}
               </select>
             </div>
-            <div>
-              <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
-              <button className="cb-btn cb-btn-sm" onClick={load} disabled={isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{isLoading ? "Refreshing…" : "Refresh"}</button>
-            </div>
+          )}
+          <div style={{ width: 145 }}>
+            <div className="cb-label">Period</div>
+            <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
+              <option value="last_week">Last week</option>
+              <option value="this_month">This month</option>
+              <option value="last_month">Last month</option>
+              <option value="30">Last 30 days</option>
+              <option value="90">Last 3 months</option>
+              <option value="180">Last 6 months</option>
+              <option value="365">Last 12 months</option>
+              <option value="custom">Custom</option>
+            </select>
           </div>
           {range === "custom" && (
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 8, alignItems: "center" }}>
-              <span className="cb-hint">From</span>
-              <input type="date" className="cb-input" style={{ width: 145 }} value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
-              <span className="cb-hint">To</span>
-              <input type="date" className="cb-input" style={{ width: 145 }} value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
-            </div>
+            <>
+              <div style={{ width: 140 }}>
+                <div className="cb-label">From</div>
+                <input type="date" className="cb-input" style={{ width: "100%" }} value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+              </div>
+              <div style={{ width: 140 }}>
+                <div className="cb-label">To</div>
+                <input type="date" className="cb-input" style={{ width: "100%" }} value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+              </div>
+            </>
           )}
-          {isAdmin && !forceSelfOnly && <div className="cb-hint" style={{ marginTop: 4, textAlign: "right" }}>Admins can view insights for staff in their scope.</div>}
+          <div>
+            <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
+            <button className="cb-btn cb-btn-sm" onClick={load} disabled={isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{isLoading ? "Refreshing…" : "Refresh"}</button>
+          </div>
+          {isAdmin && !forceSelfOnly && (
+            <div className="cb-hint" style={{ marginLeft: "auto", alignSelf: "center", paddingTop: 18, whiteSpace: "nowrap" }}>Admins can view insights for staff in their scope.</div>
+          )}
         </div>
       </div>
 
