@@ -3140,9 +3140,26 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
     if not users:
         raise HTTPException(404, f"No Karbon user matched {member.email}")
     karbon_user = users[0]
-    user_key = karbon_user.get("UserKey") or karbon_user.get("Key") or karbon_user.get("UserId")
+
+    # Karbon has used a few different names for the user identifier across
+    # its API responses/documentation. Resolve the identifier defensively
+    # instead of assuming the list endpoint always returns `UserKey`.
+    user_key = (
+        karbon_user.get("UserKey")
+        or karbon_user.get("UserId")
+        or karbon_user.get("UserProfileKey")
+        or karbon_user.get("Key")
+        or karbon_user.get("Id")
+    )
+    if not user_key and isinstance(karbon_user, dict):
+        lower_keys = {str(k).lower(): v for k, v in karbon_user.items()}
+        for candidate in ("userkey", "userid", "userprofilekey", "key", "id"):
+            if lower_keys.get(candidate):
+                user_key = lower_keys[candidate]
+                break
     if not user_key:
-        raise HTTPException(502, "Karbon returned a user without a UserKey")
+        available_fields = ", ".join(sorted(str(k) for k in karbon_user.keys())) if isinstance(karbon_user, dict) else "unknown response shape"
+        raise HTTPException(502, f"Karbon user matched by email but no user identifier was returned. Available fields: {available_fields}")
 
     karbon_filter = (
         f"UserKey eq '{str(user_key).replace(chr(39), chr(39)*2)}' and "
