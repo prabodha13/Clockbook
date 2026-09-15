@@ -6489,7 +6489,7 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
     },
     {
       title: "Create a task",
-      body: "Choose the client, then use a standard template or create a custom task. You can assign the work where your access allows it, then use Add to dashboard. This tour will not create anything.",
+      body: "Choose the client and use a standard template whenever one is available. Only create a custom task when there is no suitable standard template. You can assign the work where your access allows it, then use Add to dashboard. This tour will not create anything.",
       target: '[data-tour="new-task-client"]',
       placement: "above",
       openNewTask: true,
