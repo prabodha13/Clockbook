@@ -2396,6 +2396,12 @@ function SettingsView({
   const [savingKarbon, setSavingKarbon] = useState(false);
   const [testingKarbon, setTestingKarbon] = useState(false);
   const [karbonMessage, setKarbonMessage] = useState("");
+  const [calamariIntegration, setCalamariIntegration] = useState(null);
+  const [calamariTenant, setCalamariTenant] = useState("");
+  const [calamariApiKey, setCalamariApiKey] = useState("");
+  const [savingCalamari, setSavingCalamari] = useState(false);
+  const [testingCalamari, setTestingCalamari] = useState(false);
+  const [calamariMessage, setCalamariMessage] = useState("");
 
   useEffect(() => {
     if (!realIsSuperAdmin) return;
@@ -2403,6 +2409,9 @@ function SettingsView({
     api.getKarbonIntegration()
       .then((r) => { if (alive) setKarbonIntegration(r); })
       .catch((err) => { if (alive) setKarbonMessage(err.message); });
+    api.getCalamariIntegration()
+      .then((r) => { if (alive) { setCalamariIntegration(r); if (r?.tenant) setCalamariTenant(r.tenant); } })
+      .catch((err) => { if (alive) setCalamariMessage(err.message); });
     return () => { alive = false; };
   }, [realIsSuperAdmin]);
 
@@ -2466,6 +2475,54 @@ function SettingsView({
       setKarbonMessage(err.message);
     } finally {
       setSavingKarbon(false);
+    }
+  }
+
+  async function saveCalamariIntegration(e) {
+    e.preventDefault();
+    if (!calamariTenant.trim() || !calamariApiKey.trim() || savingCalamari) return;
+    setSavingCalamari(true);
+    setCalamariMessage("");
+    try {
+      const result = await api.saveCalamariIntegration(calamariTenant.trim(), calamariApiKey.trim());
+      setCalamariIntegration(result);
+      setCalamariTenant(result.tenant || calamariTenant.trim());
+      setCalamariApiKey("");
+      setCalamariMessage("Calamari connected successfully.");
+    } catch (err) {
+      setCalamariMessage(err.message);
+    } finally {
+      setSavingCalamari(false);
+    }
+  }
+
+  async function testCalamariIntegration() {
+    if (testingCalamari) return;
+    setTestingCalamari(true);
+    setCalamariMessage("");
+    try {
+      const result = await api.testCalamariIntegration();
+      setCalamariMessage(result?.holiday_scope_verified === false ? "Connection successful. Holiday scope could not be verified against a matching employee email." : "Connection successful.");
+    } catch (err) {
+      setCalamariMessage(err.message);
+    } finally {
+      setTestingCalamari(false);
+    }
+  }
+
+  async function disconnectCalamariIntegration() {
+    if (!window.confirm("Disconnect Calamari from ClockBook?")) return;
+    setSavingCalamari(true);
+    setCalamariMessage("");
+    try {
+      const result = await api.disconnectCalamariIntegration();
+      setCalamariIntegration(result);
+      setCalamariApiKey("");
+      setCalamariMessage("Calamari disconnected.");
+    } catch (err) {
+      setCalamariMessage(err.message);
+    } finally {
+      setSavingCalamari(false);
     }
   }
 
@@ -2753,6 +2810,55 @@ function SettingsView({
             </form>
             <div className="cb-hint" style={{ marginTop: 8 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
             {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
+          </div>
+        </div>
+      )}
+
+      {realIsSuperAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Integrations</div>
+              <div className="cb-tmpl-name">Calamari</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 12 }}>
+              Uses approved time off and employee public holidays to reduce available capacity. Remote-work requests do not reduce capacity. Staff are matched by their ClockBook email address.
+            </div>
+            {calamariIntegration?.connected ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
+                  <span className="cb-hint">{calamariIntegration.tenant}.calamari.io</span>
+                  <span className="cb-hint">API key ••••{calamariIntegration.api_key_hint || ""}</span>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={testCalamariIntegration} disabled={testingCalamari || savingCalamari}>
+                    {testingCalamari ? "Testing..." : "Test connection"}
+                  </button>
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-danger" onClick={disconnectCalamariIntegration} disabled={savingCalamari}>Disconnect</button>
+                </div>
+                <div className="cb-hint" style={{ marginBottom: 8 }}>Replace connection</div>
+              </>
+            ) : (
+              <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
+            )}
+            <form onSubmit={saveCalamariIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(280px,1.4fr) auto", gap: 10, alignItems: "end", maxWidth: 900 }}>
+              <div>
+                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace</label>
+                <input className="cb-input" placeholder="e.g. aroundfinance" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
+              </div>
+              <div>
+                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>API key</label>
+                <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Calamari API key" value={calamariApiKey} onChange={(e) => setCalamariApiKey(e.target.value)} />
+              </div>
+              <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={savingCalamari || !calamariTenant.trim() || !calamariApiKey.trim()}>
+                {savingCalamari ? "Connecting..." : calamariIntegration?.connected ? "Replace" : "Connect Calamari"}
+              </button>
+            </form>
+            <div className="cb-hint" style={{ marginTop: 8 }}>Create the Calamari key with Absence Requests and Holidays access. The saved key is encrypted and is not displayed again.</div>
+            {calamariMessage && <div className={calamariMessage.toLowerCase().includes("successful") || calamariMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{calamariMessage}</div>}
           </div>
         </div>
       )}
@@ -3588,7 +3694,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
 }
 
 
-function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
+function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, pods = [] }) {
   const toDateKey = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -3609,11 +3715,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [capacityView, setCapacityView] = useState("person");
+  const [capacityPodId, setCapacityPodId] = useState("");
 
   useEffect(() => {
     if (forceSelfOnly && currentUser?.id) setMemberId(currentUser.id);
     if (!isAdmin || forceSelfOnly) setCapacityView("person");
-  }, [forceSelfOnly, currentUser?.id, isAdmin]);
+    if (currentUser?.role !== "super_admin") setCapacityPodId("");
+  }, [forceSelfOnly, currentUser?.id, currentUser?.role, isAdmin]);
 
   const isSuperAdmin = currentUser?.role === "super_admin";
   const selectableMembers = useMemo(() => {
@@ -3671,14 +3779,15 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
     setError("");
     setIsLoading(true);
     try {
-      setData(await api.getInsights(memberId, dates.from, dates.to));
+      const podId = isSuperAdmin && capacityView === "pod" ? capacityPodId : "";
+      setData(await api.getInsights(memberId, dates.from, dates.to, podId));
     } catch (err) {
       setError(err.message || "Could not load insights");
       setData(null);
     } finally {
       setIsLoading(false);
     }
-  }, [memberId, dates.from, dates.to]);
+  }, [memberId, dates.from, dates.to, isSuperAdmin, capacityView, capacityPodId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -3824,8 +3933,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
 
   const personCapacity = data?.capacity;
-  const capacityData = capacityView === "team" && data?.team_capacity ? data.team_capacity : personCapacity;
-  const capacityLabel = capacityView === "team" ? "Team capacity" : "Available capacity";
+  const capacityData = (capacityView === "team" || capacityView === "pod") && data?.team_capacity ? data.team_capacity : personCapacity;
+  const capacityLabel = capacityView === "pod" ? "Pod capacity" : capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
   const clientSeconds = Number(data?.summary?.billable_seconds || 0);
@@ -3989,12 +4098,15 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
             <div style={{ ...panelStyle, marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
                 <div><div className="cb-group-title" style={{ fontSize: 15 }}>Capacity & utilisation</div></div>
-                {isAdmin && !forceSelfOnly && data.team_capacity && <div className="cb-tabs" style={{ flexShrink: 0 }}><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button></div>}
+                {isAdmin && !forceSelfOnly && data.team_capacity && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{[...pods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
+                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => { if (!capacityPodId && pods.length) setCapacityPodId([...pods].sort((a,b) => a.name.localeCompare(b.name))[0].id); setCapacityView("pod"); }}>Pod</button>}</div>
+                </div>}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, .75fr) minmax(520px, 1.65fr)", gap: 22 }}>
                 <div style={{ borderRight: "1px solid #E8ECEF", paddingRight: 22 }}>
                   {[
-                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h` : "Selected period"],
+                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h` : capacityView === "pod" && capacityData.pod_name ? `${capacityData.pod_name} · selected period` : "Selected period"],
                     ["Tracked", formatHM(capacityData.tracked_seconds || 0), capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}% utilisation`],
                     ["Client", formatHM(capacityData.billable_seconds || 0), capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}% of capacity`],
                     ["Available", formatHM(capacityData.available_seconds || 0), "Remaining capacity"],
@@ -4005,7 +4117,20 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) 
                   <CapacityTrendChart rows={capacityData.trend || []}/>
                 </div>
               </div>
-              {capacityView === "team" && (capacityData.members || []).length > 0 && <div className="cb-table-wrap" style={{ marginTop: 14 }}><table className="cb-table"><thead><tr><th>Person</th><th className="num">Capacity</th><th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead><tbody>{capacityData.members.map((row) => <tr key={row.member_id}><td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td><td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td></tr>)}</tbody></table></div>}
+              {capacityData?.calamari_adjustment_seconds > 0 && (
+                <div className="cb-hint" style={{ marginTop: 10 }}>
+                  {formatHM(capacityData.calamari_adjustment_seconds)} removed from available capacity for approved leave/public holidays from Calamari.
+                </div>
+              )}
+              {capacityData?.calamari?.warnings?.length > 0 && (
+                <div className="cb-hint" style={{ marginTop: 6, color: "#8A5A00" }}>
+                  Calamari sync warning: {capacityData.calamari.warnings[0]}{capacityData.calamari.warnings.length > 1 ? ` (+${capacityData.calamari.warnings.length - 1} more)` : ""}
+                </div>
+              )}
+              {(capacityView === "team" || capacityView === "pod") && (capacityData.members || []).length > 0 && (() => {
+                const showUnavailable = (capacityData.members || []).some((row) => Number(row.calamari_adjustment_seconds || 0) > 0);
+                return <div className="cb-table-wrap" style={{ marginTop: 14 }}><table className="cb-table"><thead><tr><th>Person</th><th className="num">Capacity</th>{showUnavailable && <th className="num">Unavailable</th>}<th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead><tbody>{capacityData.members.map((row) => <tr key={row.member_id}><td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td>{showUnavailable && <td className="num cb-mono">{Number(row.calamari_adjustment_seconds || 0) > 0 ? formatHM(row.calamari_adjustment_seconds) : "—"}</td>}<td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td></tr>)}</tbody></table></div>;
+              })()}
             </div>
           )}
 
@@ -7322,7 +7447,7 @@ export default function App() {
             {view === "insights" && (
               <InsightsView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
-                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
               />
             )}
             {view === "export" && (
@@ -7336,7 +7461,7 @@ export default function App() {
             {view === "reconcile" && (
               <KarbonReconciliationView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
-                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
               />
             )}
             {view === "staff" && (

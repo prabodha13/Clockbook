@@ -151,6 +151,10 @@ export const api = {
   saveKarbonIntegration: (applicationId, accessKey) => request("/integrations/karbon", { method: "PUT", body: JSON.stringify({ application_id: applicationId, access_key: accessKey }) }),
   testKarbonIntegration: () => request("/integrations/karbon/test", { method: "POST" }),
   disconnectKarbonIntegration: () => request("/integrations/karbon", { method: "DELETE" }),
+  getCalamariIntegration: () => request("/integrations/calamari"),
+  saveCalamariIntegration: (tenant, apiKey) => request("/integrations/calamari", { method: "PUT", body: JSON.stringify({ tenant, api_key: apiKey }) }),
+  testCalamariIntegration: () => request("/integrations/calamari/test", { method: "POST" }),
+  disconnectCalamariIntegration: () => request("/integrations/calamari", { method: "DELETE" }),
   setInactivityAuditStatus: (enabled) => request("/inactivity-events/status", { method: "PUT", body: JSON.stringify({ enabled }) }),
   getInactivityEvents: (dateFrom = "", dateTo = "") => {
     const params = new URLSearchParams();
