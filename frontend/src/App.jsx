@@ -3701,7 +3701,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
   };
-  const [range, setRange] = useState("90");
+  const [range, setRange] = useState("this_month");
   const [customFrom, setCustomFrom] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
@@ -3724,6 +3724,15 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   }, [forceSelfOnly, currentUser?.id, currentUser?.role, isAdmin]);
 
   const isSuperAdmin = currentUser?.role === "super_admin";
+  const sortedPods = useMemo(() => [...pods].sort((a, b) => a.name.localeCompare(b.name)), [pods]);
+
+  useEffect(() => {
+    if (!isSuperAdmin || capacityView !== "pod") return;
+    const selectedPodStillExists = capacityPodId && sortedPods.some((pod) => pod.id === capacityPodId);
+    if (!selectedPodStillExists) {
+      setCapacityPodId(sortedPods[0]?.id || "");
+    }
+  }, [isSuperAdmin, capacityView, capacityPodId, sortedPods]);
   const selectableMembers = useMemo(() => {
     if (!isAdmin || forceSelfOnly) return [];
     if (isSuperAdmin) return [...members].sort((a, b) => a.name.localeCompare(b.name));
@@ -3776,6 +3785,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
 
   const load = useCallback(async () => {
     if (!memberId) return;
+    if (isSuperAdmin && capacityView === "pod" && !capacityPodId) return;
     setError("");
     setIsLoading(true);
     try {
@@ -3929,7 +3939,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     );
   }
 
-  function LeaveTrendChart({ rows = [] }) {
+  function LeaveTrendChart({ rows = [], granularity = "weekly" }) {
     if (!rows.length) return <div className="cb-empty">No approved leave in this period.</div>;
     const width = 720, height = 190, padL = 42, padR = 16, padT = 20, padB = 34;
     const maxValue = Math.max(1, ...rows.map((r) => Number(r.leave_seconds || 0)));
@@ -3945,7 +3955,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
           const yy = y(r.leave_seconds);
           return <g key={r.period_start}>
             <rect x={cx - barW / 2} y={yy} width={barW} height={Math.max(0, padT + plotH - yy)} rx="4" fill="#4EB68A"/>
-            <text x={cx} y={height-10} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: rows.length > 12 ? undefined : "numeric" })}</text>
+            <text x={cx} y={height-10} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T00:00:00`).toLocaleDateString(undefined, granularity === "monthly" ? { month: "short", year: "2-digit" } : { month: "short", day: "numeric" })}</text>
           </g>;
         })}
       </svg>
@@ -4127,8 +4137,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                   <div className="cb-hint" style={{ marginTop: 3 }}>Approved leave from Calamari. Public holidays and remote-work requests are not counted here.</div>
                 </div>
                 {isAdmin && !forceSelfOnly && data.team_leave_trends && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{[...pods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
-                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => { if (!capacityPodId && pods.length) setCapacityPodId([...pods].sort((a,b) => a.name.localeCompare(b.name))[0].id); setCapacityView("pod"); }}>Pod</button>}</div>
+                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{sortedPods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
+                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => setCapacityView("pod")}>Pod</button>}</div>
                 </div>}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(280px, .72fr) minmax(520px, 1.7fr)", gap: 22 }}>
@@ -4142,7 +4152,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                 </div>
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 700, fontSize: 12.5 }}>{leaveData.trend_granularity === "daily" ? "Daily leave" : leaveData.trend_granularity === "monthly" ? "Monthly leave" : "Weekly leave"}</div>
-                  <LeaveTrendChart rows={leaveData.trend || []}/>
+                  <LeaveTrendChart rows={leaveData.trend || []} granularity={leaveData.trend_granularity}/>
                 </div>
               </div>
               {(capacityView === "team" || capacityView === "pod") && (leaveData.members || []).length > 0 && (
@@ -4157,8 +4167,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
                 <div><div className="cb-group-title" style={{ fontSize: 15 }}>Capacity & utilisation</div></div>
                 {isAdmin && !forceSelfOnly && data.team_capacity && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{[...pods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
-                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => { if (!capacityPodId && pods.length) setCapacityPodId([...pods].sort((a,b) => a.name.localeCompare(b.name))[0].id); setCapacityView("pod"); }}>Pod</button>}</div>
+                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{sortedPods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
+                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => setCapacityView("pod")}>Pod</button>}</div>
                 </div>}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, .75fr) minmax(520px, 1.65fr)", gap: 22 }}>
