@@ -1139,7 +1139,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       </div>
 
       <div className="cb-group" data-tour="task-list">
-        <div className="cb-group-head">
+        <div className="cb-group-head" data-tour="task-list-head">
           <div className="cb-group-title">In progress</div>
           <div className="cb-group-count">{normalizedTaskSearch ? `${filteredInProgress.length} of ${inProgress.length}` : inProgress.length}</div>
         </div>
@@ -1545,7 +1545,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
         </div>
         <form onSubmit={handleSubmit}>
           <div className="cb-modal-body">
-            <div className="cb-field">
+            <div className="cb-field" data-tour="new-task-client">
               <label className="cb-label">Client</label>
               {clients.length > 0 && (
                 <div className="cb-tabs" style={{ marginBottom: 8, width: "fit-content" }}>
@@ -6478,28 +6478,33 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
     {
       title: "Your work and timers",
       body: "Your active and paused work sits in In progress. Queued work is under To do. Use the play button to start or resume a task, then pause or complete it when needed.",
-      target: '[data-tour="task-list"]',
+      target: '[data-tour="task-list-head"]',
+      placement: "below",
     },
     {
       title: "Add new work",
       body: "Use New task when the work you need is not already on your dashboard. The next step will open the form so you can see how it works.",
       target: '[data-tour="new-task-button"]',
+      placement: "below",
     },
     {
       title: "Create a task",
       body: "Choose the client, then use a standard template or create a custom task. You can assign the work where your access allows it, then use Add to dashboard. This tour will not create anything.",
-      target: '[data-tour="new-task-modal"]',
+      target: '[data-tour="new-task-client"]',
+      placement: "above",
       openNewTask: true,
     },
     {
       title: "Track an ad hoc meeting",
       body: "Use Ad hoc meeting for an unscheduled discussion or quick collaboration with a colleague. ClockBook starts a dedicated meeting timer so it stays separate from normal client work. Shortcut: Ctrl+M.",
       target: '[data-tour="ad-hoc-meeting"]',
+      placement: "below",
     },
     {
       title: "Create a meeting from anywhere",
       body: "The Meeting button in the top bar is available throughout ClockBook. Once Google Calendar is connected, it can create the calendar meeting and start tracking it without returning to the dashboard. Shortcut: Ctrl+Shift+M.",
       target: '[data-tour="global-meeting"]',
+      placement: "below",
     },
     {
       title: "Connect Google Calendar",
@@ -6507,6 +6512,7 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
         ? "Your Google Calendar is already connected. ClockBook can use it for calendar meetings and meeting reminders."
         : "Connect Google Calendar so ClockBook can create meetings, show your calendar and recognise meetings that are starting.",
       target: '[data-tour-nav="calendar"]',
+      placement: "right",
       actionLabel: calendarConnected ? null : "Connect Google Calendar",
       actionKind: "calendar",
     },
@@ -6527,11 +6533,13 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
       title: "Record colleague help",
       body: "Use Helper when you help a colleague or receive help. That keeps collaboration time separate from normal client work.",
       target: '[data-tour="helper"]',
+      placement: "below",
     },
     {
       title: "Review your insights",
       body: "Insights shows your tracked work and personal reporting. If you have leave and capacity access, those personal metrics appear there too.",
       target: '[data-tour-nav="insights"]',
+      placement: "right",
     },
     {
       title: "You are ready",
@@ -6616,6 +6624,7 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
   }
 
   const tooltipWidth = Math.min(390, Math.max(280, window.innerWidth - 32));
+  const tooltipHeightEstimate = 220;
   let tooltipStyle = {
     position: "fixed", zIndex: 10002, width: tooltipWidth, maxWidth: "calc(100vw - 32px)",
     background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", border: "1px solid var(--line, #d8ded9)",
@@ -6623,12 +6632,40 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
   };
   if (targetRect) {
     const gap = 14;
-    const left = Math.min(Math.max(16, targetRect.left), Math.max(16, window.innerWidth - tooltipWidth - 16));
-    const roomBelow = window.innerHeight - targetRect.bottom;
-    const top = roomBelow > 240
-      ? Math.min(window.innerHeight - 210, targetRect.bottom + gap)
-      : Math.max(16, targetRect.top - 210 - gap);
-    tooltipStyle = { ...tooltipStyle, left, top };
+    const margin = 16;
+    const clampLeft = (value) => Math.min(Math.max(margin, value), Math.max(margin, window.innerWidth - tooltipWidth - margin));
+    const clampTop = (value) => Math.min(Math.max(margin, value), Math.max(margin, window.innerHeight - tooltipHeightEstimate - margin));
+    const centeredLeft = clampLeft(targetRect.left + (targetRect.width / 2) - (tooltipWidth / 2));
+    const centeredTop = clampTop(targetRect.top + (targetRect.height / 2) - (tooltipHeightEstimate / 2));
+    const preferred = step.placement || "auto";
+
+    if (preferred === "above") {
+      tooltipStyle = { ...tooltipStyle, left: centeredLeft, top: clampTop(targetRect.top - tooltipHeightEstimate - gap) };
+    } else if (preferred === "below") {
+      const desiredTop = targetRect.bottom + gap;
+      const fitsBelow = desiredTop + tooltipHeightEstimate <= window.innerHeight - margin;
+      tooltipStyle = { ...tooltipStyle, left: centeredLeft, top: fitsBelow ? desiredTop : clampTop(targetRect.top - tooltipHeightEstimate - gap) };
+    } else if (preferred === "right") {
+      const desiredLeft = targetRect.right + gap;
+      const fitsRight = desiredLeft + tooltipWidth <= window.innerWidth - margin;
+      tooltipStyle = fitsRight
+        ? { ...tooltipStyle, left: desiredLeft, top: centeredTop }
+        : { ...tooltipStyle, left: clampLeft(targetRect.left - tooltipWidth - gap), top: centeredTop };
+    } else if (preferred === "left") {
+      const desiredLeft = targetRect.left - tooltipWidth - gap;
+      const fitsLeft = desiredLeft >= margin;
+      tooltipStyle = fitsLeft
+        ? { ...tooltipStyle, left: desiredLeft, top: centeredTop }
+        : { ...tooltipStyle, left: clampLeft(targetRect.right + gap), top: centeredTop };
+    } else {
+      const roomBelow = window.innerHeight - targetRect.bottom;
+      const roomAbove = targetRect.top;
+      tooltipStyle = roomBelow >= tooltipHeightEstimate + gap
+        ? { ...tooltipStyle, left: centeredLeft, top: targetRect.bottom + gap }
+        : roomAbove >= tooltipHeightEstimate + gap
+          ? { ...tooltipStyle, left: centeredLeft, top: targetRect.top - tooltipHeightEstimate - gap }
+          : { ...tooltipStyle, left: centeredLeft, top: centeredTop };
+    }
   } else {
     tooltipStyle = { ...tooltipStyle, left: "50%", top: "50%", transform: "translate(-50%, -50%)" };
   }
