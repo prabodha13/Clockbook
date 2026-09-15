@@ -50,6 +50,7 @@ class Member(Base):
     capacity_effective_from = Column(Date, default=date.today)  # do not apply capacity before this date
     timezone_name = Column(String, default="Asia/Colombo")  # IANA timezone used for user-local audit times
     can_view_leave_capacity_insights = Column(Boolean, default=False)  # optional per-person access; super admins always have access
+    staff_tour_completed = Column(Boolean, default=False)  # one-time staff onboarding tour; users can replay it without resetting this flag
 
     @property
     def google_calendar_connected(self):

@@ -103,6 +103,9 @@ def run_startup_migrations():
             if "can_view_leave_capacity_insights" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN can_view_leave_capacity_insights BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET can_view_leave_capacity_insights = FALSE WHERE can_view_leave_capacity_insights IS NULL"))
+            if "staff_tour_completed" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN staff_tour_completed BOOLEAN DEFAULT FALSE"))
+                conn.execute(text("UPDATE members SET staff_tour_completed = FALSE WHERE staff_tour_completed IS NULL"))
 
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
@@ -1088,6 +1091,17 @@ def update_member_insights_permission(member_id: str, payload: schemas.MemberIns
     db.commit()
     db.refresh(member)
     return member
+
+
+@app.patch("/api/auth/tour", response_model=schemas.MemberOut)
+def update_staff_tour(payload: schemas.StaffTourUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # This is deliberately self-service: completing or skipping the onboarding tour only
+    # changes the current user's own preference and grants no additional access. Replaying
+    # the tour from the UI does not reset this flag, so it will not auto-open again later.
+    current_member.staff_tour_completed = bool(payload.completed)
+    db.commit()
+    db.refresh(current_member)
+    return current_member
 
 
 @app.patch("/api/members/{member_id}/timezone", response_model=schemas.MemberOut)

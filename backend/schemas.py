@@ -24,6 +24,7 @@ class MemberOut(BaseModel):
     capacity_effective_from: Optional[date] = None
     timezone_name: str = "Asia/Colombo"
     can_view_leave_capacity_insights: bool = False
+    staff_tour_completed: bool = False
 
 
 class PodOut(BaseModel):
@@ -85,6 +86,10 @@ class MemberTimezoneUpdate(BaseModel):
 
 class MemberInsightsPermissionUpdate(BaseModel):
     enabled: bool
+
+
+class StaffTourUpdate(BaseModel):
+    completed: bool = True
 
 
 class LoginRequest(BaseModel):
