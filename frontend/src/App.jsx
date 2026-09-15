@@ -3588,7 +3588,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
 }
 
 
-function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, pods = [] }) {
+function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
   const toDateKey = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -3609,13 +3609,11 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [capacityView, setCapacityView] = useState("person");
-  const [capacityPodId, setCapacityPodId] = useState("");
 
   useEffect(() => {
     if (forceSelfOnly && currentUser?.id) setMemberId(currentUser.id);
     if (!isAdmin || forceSelfOnly) setCapacityView("person");
-    if (currentUser?.role !== "super_admin") setCapacityPodId("");
-  }, [forceSelfOnly, currentUser?.id, currentUser?.role, isAdmin]);
+  }, [forceSelfOnly, currentUser?.id, isAdmin]);
 
   const isSuperAdmin = currentUser?.role === "super_admin";
   const selectableMembers = useMemo(() => {
@@ -3673,15 +3671,14 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     setError("");
     setIsLoading(true);
     try {
-      const podId = isSuperAdmin && capacityView === "pod" ? capacityPodId : "";
-      setData(await api.getInsights(memberId, dates.from, dates.to, podId));
+      setData(await api.getInsights(memberId, dates.from, dates.to));
     } catch (err) {
       setError(err.message || "Could not load insights");
       setData(null);
     } finally {
       setIsLoading(false);
     }
-  }, [memberId, dates.from, dates.to, isSuperAdmin, capacityView, capacityPodId]);
+  }, [memberId, dates.from, dates.to]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -3827,8 +3824,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
 
   const personCapacity = data?.capacity;
-  const capacityData = (capacityView === "team" || capacityView === "pod") && data?.team_capacity ? data.team_capacity : personCapacity;
-  const capacityLabel = capacityView === "pod" ? "Pod capacity" : capacityView === "team" ? "Team capacity" : "Available capacity";
+  const capacityData = capacityView === "team" && data?.team_capacity ? data.team_capacity : personCapacity;
+  const capacityLabel = capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
   const clientSeconds = Number(data?.summary?.billable_seconds || 0);
@@ -3992,15 +3989,12 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
             <div style={{ ...panelStyle, marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
                 <div><div className="cb-group-title" style={{ fontSize: 15 }}>Capacity & utilisation</div></div>
-                {isAdmin && !forceSelfOnly && data.team_capacity && <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                  {isSuperAdmin && capacityView === "pod" && <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}><option value="">Select pod</option>{[...pods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>}
-                  <div className="cb-tabs"><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>{isSuperAdmin && <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => { if (!capacityPodId && pods.length) setCapacityPodId([...pods].sort((a,b) => a.name.localeCompare(b.name))[0].id); setCapacityView("pod"); }}>Pod</button>}</div>
-                </div>}
+                {isAdmin && !forceSelfOnly && data.team_capacity && <div className="cb-tabs" style={{ flexShrink: 0 }}><button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button><button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button></div>}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "minmax(300px, .75fr) minmax(520px, 1.65fr)", gap: 22 }}>
                 <div style={{ borderRight: "1px solid #E8ECEF", paddingRight: 22 }}>
                   {[
-                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h` : capacityView === "pod" && capacityData.pod_name ? `${capacityData.pod_name} · selected period` : "Selected period"],
+                    [capacityLabel, formatHM(capacityData.capacity_seconds || 0), capacityView === "person" ? `Weekly capacity ${Number(capacityData.weekly_capacity_hours || 0).toFixed(1).replace(/\.0$/, "")}h` : "Selected period"],
                     ["Tracked", formatHM(capacityData.tracked_seconds || 0), capacityTrackedPct == null ? "—" : `${Math.round(capacityTrackedPct)}% utilisation`],
                     ["Client", formatHM(capacityData.billable_seconds || 0), capacityBillablePct == null ? "—" : `${Math.round(capacityBillablePct)}% of capacity`],
                     ["Available", formatHM(capacityData.available_seconds || 0), "Remaining capacity"],
@@ -4011,7 +4005,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                   <CapacityTrendChart rows={capacityData.trend || []}/>
                 </div>
               </div>
-              {(capacityView === "team" || capacityView === "pod") && (capacityData.members || []).length > 0 && <div className="cb-table-wrap" style={{ marginTop: 14 }}><table className="cb-table"><thead><tr><th>Person</th><th className="num">Capacity</th><th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead><tbody>{capacityData.members.map((row) => <tr key={row.member_id}><td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td><td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td></tr>)}</tbody></table></div>}
+              {capacityView === "team" && (capacityData.members || []).length > 0 && <div className="cb-table-wrap" style={{ marginTop: 14 }}><table className="cb-table"><thead><tr><th>Person</th><th className="num">Capacity</th><th className="num">Tracked</th><th className="num">Overall</th><th className="num">Client</th><th className="num">Client util.</th><th className="num">Available</th></tr></thead><tbody>{capacityData.members.map((row) => <tr key={row.member_id}><td style={{ fontWeight: 650 }}>{row.name}</td><td className="num cb-mono">{formatHM(row.capacity_seconds)}</td><td className="num cb-mono">{formatHM(row.tracked_seconds)}</td><td className="num">{row.overall_utilization == null ? "—" : `${Math.round(row.overall_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.billable_seconds)}</td><td className="num">{row.client_utilization == null ? "—" : `${Math.round(row.client_utilization)}%`}</td><td className="num cb-mono">{formatHM(row.available_seconds)}</td></tr>)}</tbody></table></div>}
             </div>
           )}
 
@@ -7328,7 +7322,7 @@ export default function App() {
             {view === "insights" && (
               <InsightsView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
-                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
               />
             )}
             {view === "export" && (
@@ -7342,7 +7336,7 @@ export default function App() {
             {view === "reconcile" && (
               <KarbonReconciliationView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
-                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
+                forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
               />
             )}
             {view === "staff" && (
