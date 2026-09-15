@@ -7843,7 +7843,7 @@ export default function App() {
             onResume={() => myPinnedTask && requestStart(myPinnedTask)}
             onComplete={() => myPinnedTask && setCompletingTask(myPinnedTask)}
             onQuickMeeting={() => setShowQuickMeeting(true)}
-            onStartTour={effectiveCurrentUser.role === "member" ? restartGuidedTour : null}
+            onStartTour={restartGuidedTour}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -7926,7 +7926,7 @@ export default function App() {
         </div>
       </div>
 
-      {showGuidedTour && effectiveCurrentUser?.role === "member" && (
+      {showGuidedTour && (
         <GuidedTour onClose={closeGuidedTour} />
       )}
 
