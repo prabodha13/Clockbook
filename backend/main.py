@@ -1753,7 +1753,6 @@ def get_insights(
     member_id: str = None,
     date_from: str = None,
     date_to: str = None,
-    capacity_pod_id: str = None,
     current_member: models.Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ):
@@ -2038,14 +2037,6 @@ def get_insights(
     team_capacity = None
     if current_member.role in ("admin", "super_admin"):
         team_query = db.query(models.Member).filter(models.Member.id.in_(allowed_ids))
-        selected_capacity_pod = None
-        if capacity_pod_id:
-            if current_member.role != "super_admin":
-                raise HTTPException(403, "Only super admins can view capacity by pod")
-            selected_capacity_pod = db.get(models.Pod, capacity_pod_id)
-            if not selected_capacity_pod:
-                raise HTTPException(404, "Pod not found")
-            team_query = team_query.filter(models.Member.pod_id == capacity_pod_id)
         if current_member.role != "super_admin":
             # Regular admins can see members and admins in their permitted scope,
             # but never super admins. _insights_allowed_member_ids already applies
@@ -2098,8 +2089,6 @@ def get_insights(
                     for _, row in sorted(aggregate_week.items())
                 ],
                 "members": member_rows,
-                "pod_id": selected_capacity_pod.id if selected_capacity_pod else None,
-                "pod_name": selected_capacity_pod.name if selected_capacity_pod else None,
             }
 
     return {
