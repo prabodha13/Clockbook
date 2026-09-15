@@ -2766,99 +2766,99 @@ function SettingsView({
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
             <div>
-              <div className="cb-tmpl-field">Integrations</div>
-              <div className="cb-tmpl-name">Karbon</div>
+              <div className="cb-tmpl-field">Settings</div>
+              <div className="cb-tmpl-name">Integrations</div>
             </div>
           </div>
           <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 12 }}>
-              Connect this ClockBook workspace to its Karbon account. Credentials are encrypted on the server and are never returned to the browser after saving.
+            <div className="cb-hint" style={{ marginBottom: 18 }}>
+              Manage external services connected to this ClockBook workspace. Saved credentials are encrypted on the server and are never returned to the browser after saving.
             </div>
-            {karbonIntegration?.connected ? (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
-                  <span className="cb-hint">Application ID ••••{karbonIntegration.application_id_hint || ""}</span>
-                  <span className="cb-hint">Access Key ••••{karbonIntegration.access_key_hint || ""}</span>
-                  {karbonIntegration.source === "environment" && <span className="cb-hint">Legacy environment configuration</span>}
-                </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-                  <button type="button" className="cb-btn cb-btn-sm" onClick={testKarbonIntegration} disabled={testingKarbon || savingKarbon}>
-                    {testingKarbon ? "Testing..." : "Test connection"}
-                  </button>
-                  <button type="button" className="cb-btn cb-btn-sm cb-btn-danger" onClick={disconnectKarbonIntegration} disabled={savingKarbon}>Disconnect</button>
-                </div>
-                <div className="cb-hint" style={{ marginBottom: 8 }}>Replace credentials</div>
-              </>
-            ) : (
-              <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
-            )}
-            <form onSubmit={saveKarbonIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(220px,1fr) auto", gap: 10, alignItems: "start", maxWidth: 900 }}>
-              <div>
-                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Application ID</label>
-                <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Application ID" value={karbonApplicationId} onChange={(e) => setKarbonApplicationId(e.target.value)} />
-              </div>
-              <div>
-                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Access Key</label>
-                <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Access Key" value={karbonAccessKey} onChange={(e) => setKarbonAccessKey(e.target.value)} />
-              </div>
-              <div style={{ paddingTop: 25 }}>
-                <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={savingKarbon || !karbonApplicationId.trim() || !karbonAccessKey.trim()}>
-                  {savingKarbon ? "Connecting..." : karbonIntegration?.connected ? "Replace" : "Connect Karbon"}
-                </button>
-              </div>
-            </form>
-            <div className="cb-hint" style={{ marginTop: 8 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
-            {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
-          </div>
-        </div>
-      )}
 
-      {realIsSuperAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
             <div>
-              <div className="cb-tmpl-field">Integrations</div>
-              <div className="cb-tmpl-name">Calamari</div>
-            </div>
-          </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 12 }}>
-              Uses approved time off and employee public holidays to reduce available capacity. Remote-work requests do not reduce capacity. Staff are matched by their ClockBook email address.
-            </div>
-            {calamariIntegration?.connected ? (
-              <>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
-                  <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
-                  <span className="cb-hint">{calamariIntegration.tenant}.calamari.io</span>
-                  <span className="cb-hint">API key ••••{calamariIntegration.api_key_hint || ""}</span>
+              <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Karbon</div>
+              <div className="cb-hint" style={{ marginBottom: 12 }}>
+                Connect this ClockBook workspace to its Karbon account.
+              </div>
+              {karbonIntegration?.connected ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
+                    <span className="cb-hint">Application ID ••••{karbonIntegration.application_id_hint || ""}</span>
+                    <span className="cb-hint">Access Key ••••{karbonIntegration.access_key_hint || ""}</span>
+                    {karbonIntegration.source === "environment" && <span className="cb-hint">Legacy environment configuration</span>}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                    <button type="button" className="cb-btn cb-btn-sm" onClick={testKarbonIntegration} disabled={testingKarbon || savingKarbon}>
+                      {testingKarbon ? "Testing..." : "Test connection"}
+                    </button>
+                    <button type="button" className="cb-btn cb-btn-sm cb-btn-danger" onClick={disconnectKarbonIntegration} disabled={savingKarbon}>Disconnect</button>
+                  </div>
+                  <div className="cb-hint" style={{ marginBottom: 8 }}>Replace credentials</div>
+                </>
+              ) : (
+                <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
+              )}
+              <form onSubmit={saveKarbonIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(220px,1fr) auto", gap: 10, alignItems: "start", maxWidth: 900 }}>
+                <div>
+                  <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Application ID</label>
+                  <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Application ID" value={karbonApplicationId} onChange={(e) => setKarbonApplicationId(e.target.value)} />
                 </div>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
-                  <button type="button" className="cb-btn cb-btn-sm" onClick={testCalamariIntegration} disabled={testingCalamari || savingCalamari}>
-                    {testingCalamari ? "Testing..." : "Test connection"}
+                <div>
+                  <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Access Key</label>
+                  <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Karbon Access Key" value={karbonAccessKey} onChange={(e) => setKarbonAccessKey(e.target.value)} />
+                </div>
+                <div style={{ paddingTop: 25 }}>
+                  <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={savingKarbon || !karbonApplicationId.trim() || !karbonAccessKey.trim()}>
+                    {savingKarbon ? "Connecting..." : karbonIntegration?.connected ? "Replace" : "Connect Karbon"}
                   </button>
-                  <button type="button" className="cb-btn cb-btn-sm cb-btn-danger" onClick={disconnectCalamariIntegration} disabled={savingCalamari}>Disconnect</button>
                 </div>
-                <div className="cb-hint" style={{ marginBottom: 8 }}>Replace connection</div>
-              </>
-            ) : (
-              <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
-            )}
-            <form onSubmit={saveCalamariIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(280px,1.4fr) auto", gap: 10, alignItems: "end", maxWidth: 900 }}>
-              <div>
-                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace</label>
-                <input className="cb-input" placeholder="e.g. aroundfinance" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
+              </form>
+              <div className="cb-hint" style={{ marginTop: 8 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
+              {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
+            </div>
+
+            <div style={{ borderTop: "1px solid var(--border)", margin: "22px 0" }} />
+
+            <div>
+              <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Calamari</div>
+              <div className="cb-hint" style={{ marginBottom: 12 }}>
+                Uses approved time off and employee public holidays to reduce available capacity. Remote-work requests do not reduce capacity. Staff are matched by their ClockBook email address.
               </div>
-              <div>
-                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>API key</label>
-                <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Calamari API key" value={calamariApiKey} onChange={(e) => setCalamariApiKey(e.target.value)} />
-              </div>
-              <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={savingCalamari || !calamariTenant.trim() || !calamariApiKey.trim()}>
-                {savingCalamari ? "Connecting..." : calamariIntegration?.connected ? "Replace" : "Connect Calamari"}
-              </button>
-            </form>
-            <div className="cb-hint" style={{ marginTop: 8 }}>Create the Calamari key with Absence Requests and Holidays access. The saved key is encrypted and is not displayed again.</div>
-            {calamariMessage && <div className={calamariMessage.toLowerCase().includes("successful") || calamariMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{calamariMessage}</div>}
+              {calamariIntegration?.connected ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                    <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
+                    <span className="cb-hint">{calamariIntegration.tenant}.calamari.io</span>
+                    <span className="cb-hint">API key ••••{calamariIntegration.api_key_hint || ""}</span>
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                    <button type="button" className="cb-btn cb-btn-sm" onClick={testCalamariIntegration} disabled={testingCalamari || savingCalamari}>
+                      {testingCalamari ? "Testing..." : "Test connection"}
+                    </button>
+                    <button type="button" className="cb-btn cb-btn-sm cb-btn-danger" onClick={disconnectCalamariIntegration} disabled={savingCalamari}>Disconnect</button>
+                  </div>
+                  <div className="cb-hint" style={{ marginBottom: 8 }}>Replace connection</div>
+                </>
+              ) : (
+                <div className="cb-hint" style={{ marginBottom: 8 }}>Not connected</div>
+              )}
+              <form onSubmit={saveCalamariIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(280px,1.4fr) auto", gap: 10, alignItems: "end", maxWidth: 900 }}>
+                <div>
+                  <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace</label>
+                  <input className="cb-input" placeholder="e.g. your-workspace" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
+                </div>
+                <div>
+                  <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>API key</label>
+                  <input type="password" autoComplete="new-password" className="cb-input" placeholder="Paste Calamari API key" value={calamariApiKey} onChange={(e) => setCalamariApiKey(e.target.value)} />
+                </div>
+                <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={savingCalamari || !calamariTenant.trim() || !calamariApiKey.trim()}>
+                  {savingCalamari ? "Connecting..." : calamariIntegration?.connected ? "Replace" : "Connect Calamari"}
+                </button>
+              </form>
+              <div className="cb-hint" style={{ marginTop: 8 }}>Enter the workspace portion of your Calamari URL (for example, "your-workspace" from your-workspace.calamari.io). Create the Calamari key with Absence Requests and Holidays access. The saved key is encrypted and is not displayed again.</div>
+              {calamariMessage && <div className={calamariMessage.toLowerCase().includes("successful") || calamariMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{calamariMessage}</div>}
+            </div>
           </div>
         </div>
       )}
