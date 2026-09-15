@@ -3187,13 +3187,28 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         day = local_dt.date().isoformat()
         clockbook_by_day[day] = clockbook_by_day.get(day, 0.0) + _insights_task_seconds(task) / 60.0
 
+    saved_notes = {
+        n.work_date.isoformat(): n.note or ""
+        for n in db.query(models.KarbonReconciliationNote).filter(
+            models.KarbonReconciliationNote.member_id == target_id,
+            models.KarbonReconciliationNote.work_date >= start_date,
+            models.KarbonReconciliationNote.work_date <= end_date,
+        ).all()
+    }
+
     rows = []
     cursor = start_date
     while cursor <= end_date:
         key = cursor.isoformat()
         cb = round(clockbook_by_day.get(key, 0.0))
         kb = int(karbon_by_day.get(key, 0))
-        rows.append({"date": key, "clockbook_minutes": cb, "karbon_minutes": kb, "difference_minutes": kb - cb})
+        rows.append({
+            "date": key,
+            "clockbook_minutes": cb,
+            "karbon_minutes": kb,
+            "difference_minutes": kb - cb,
+            "note": saved_notes.get(key, ""),
+        })
         cursor += timedelta(days=1)
     cb_total = sum(r["clockbook_minutes"] for r in rows)
     kb_total = sum(r["karbon_minutes"] for r in rows)
@@ -3211,6 +3226,44 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         "tolerance_minutes": 10,
         "rows": rows,
     }
+
+
+@app.put("/api/karbon/reconciliation/note")
+def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    if payload.member_id not in allowed_ids:
+        raise HTTPException(403, "You cannot add a Karbon reconciliation note for that person")
+
+    target = db.get(models.Member, payload.member_id)
+    if not target:
+        raise HTTPException(404, "Staff member not found")
+
+    note_text = (payload.note or "").strip()
+    existing = db.query(models.KarbonReconciliationNote).filter(
+        models.KarbonReconciliationNote.member_id == payload.member_id,
+        models.KarbonReconciliationNote.work_date == payload.date,
+    ).first()
+
+    if not note_text:
+        if existing:
+            db.delete(existing)
+            db.commit()
+        return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": ""}
+
+    if existing:
+        existing.note = note_text
+        existing.created_by_id = current_member.id
+        existing.updated_at = datetime.utcnow()
+    else:
+        existing = models.KarbonReconciliationNote(
+            member_id=payload.member_id,
+            work_date=payload.date,
+            note=note_text,
+            created_by_id=current_member.id,
+        )
+        db.add(existing)
+    db.commit()
+    return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": note_text}
 
 
 @app.get("/api/audit/activity-summary")

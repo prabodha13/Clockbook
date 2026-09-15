@@ -48,6 +48,12 @@ class KarbonIntegrationSave(BaseModel):
     access_key: str
 
 
+class KarbonReconciliationNoteSave(BaseModel):
+    member_id: str
+    date: date
+    note: str = ""
+
+
 class MemberPodUpdate(BaseModel):
     pod_id: Optional[str] = None
 

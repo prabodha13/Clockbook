@@ -81,6 +81,17 @@ class ClockStartEvent(Base):
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class KarbonReconciliationNote(Base):
+    __tablename__ = "karbon_reconciliation_notes"
+    id = Column(String, primary_key=True, default=lambda: gen_id("krn"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    work_date = Column(Date, nullable=False)
+    note = Column(Text, nullable=False, default="")
+    created_by_id = Column(String, ForeignKey("members.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class GoogleOAuthState(Base):
     # A short-lived, single-use marker created the moment someone clicks "Connect Calendar",
     # so that when Google redirects back with just a code and this same state value, and
