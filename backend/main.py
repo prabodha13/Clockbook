@@ -1686,21 +1686,37 @@ def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date,
     effective_start = _insights_capacity_effective_start(member, start_date)
     if effective_start > end_date:
         return []
+
+    # A single-week report is easier to interpret day-by-day. Longer periods
+    # use calendar-week buckets (Monday-Sunday), which keeps the chart readable.
+    use_daily = (end_date - start_date).days <= 6
     buckets = {}
-    first_week = effective_start - timedelta(days=effective_start.weekday())
-    last_week = end_date - timedelta(days=end_date.weekday())
-    cursor = first_week
-    while cursor <= last_week:
-        week_end = cursor + timedelta(days=6)
-        overlap_start = max(cursor, effective_start)
-        overlap_end = min(week_end, end_date)
-        buckets[cursor.isoformat()] = {
-            "period_start": cursor.isoformat(),
-            "capacity_seconds": round(_insights_capacity_seconds(member, overlap_start, overlap_end), 1),
-            "tracked_seconds": 0.0,
-            "billable_seconds": 0.0,
-        }
-        cursor += timedelta(days=7)
+    if use_daily:
+        cursor = effective_start
+        while cursor <= end_date:
+            buckets[cursor.isoformat()] = {
+                "period_start": cursor.isoformat(),
+                "capacity_seconds": round(_insights_capacity_seconds(member, cursor, cursor), 1),
+                "tracked_seconds": 0.0,
+                "billable_seconds": 0.0,
+            }
+            cursor += timedelta(days=1)
+    else:
+        first_week = effective_start - timedelta(days=effective_start.weekday())
+        last_week = end_date - timedelta(days=end_date.weekday())
+        cursor = first_week
+        while cursor <= last_week:
+            week_end = cursor + timedelta(days=6)
+            overlap_start = max(cursor, effective_start)
+            overlap_end = min(week_end, end_date)
+            buckets[cursor.isoformat()] = {
+                "period_start": cursor.isoformat(),
+                "capacity_seconds": round(_insights_capacity_seconds(member, overlap_start, overlap_end), 1),
+                "tracked_seconds": 0.0,
+                "billable_seconds": 0.0,
+            }
+            cursor += timedelta(days=7)
+
     for task in tasks:
         dt = _insights_task_work_date(task)
         if not dt:
@@ -1708,8 +1724,8 @@ def _insights_capacity_trend(member: models.Member, tasks, start_date, end_date,
         day = dt.date()
         if day < effective_start or day > end_date:
             continue
-        week_start = day - timedelta(days=day.weekday())
-        row = buckets.get(week_start.isoformat())
+        bucket_start = day if use_daily else day - timedelta(days=day.weekday())
+        row = buckets.get(bucket_start.isoformat())
         if not row:
             continue
         seconds = _insights_task_seconds(task)
@@ -2020,10 +2036,13 @@ def get_insights(
 
     team_capacity = None
     if current_member.role in ("admin", "super_admin"):
-        team_members = db.query(models.Member).filter(
-            models.Member.id.in_(allowed_ids),
-            models.Member.role == "member",
-        ).order_by(models.Member.name).all()
+        team_query = db.query(models.Member).filter(models.Member.id.in_(allowed_ids))
+        if current_member.role != "super_admin":
+            # Regular admins can see members and admins in their permitted scope,
+            # but never super admins. _insights_allowed_member_ids already applies
+            # the pod restriction when the admin belongs to a pod.
+            team_query = team_query.filter(models.Member.role != "super_admin")
+        team_members = team_query.order_by(models.Member.name).all()
         if team_members:
             team_ids = [m.id for m in team_members]
             team_tasks_all = db.query(models.TaskInstance).filter(
@@ -2052,7 +2071,7 @@ def get_insights(
                     "client_utilization": round((billable / capacity) * 100, 1) if capacity > 0 else None,
                     "available_seconds": round(max(capacity - tracked, 0.0), 1),
                 })
-                for row in _insights_capacity_trend(member, capacity_tasks, start_date, end_date):
+                for row in _insights_capacity_trend(member, capacity_tasks, start_date, end_date, billing_by_type):
                     agg = aggregate_week.setdefault(row["period_start"], {"period_start": row["period_start"], "capacity_seconds": 0.0, "tracked_seconds": 0.0, "billable_seconds": 0.0})
                     agg["capacity_seconds"] += row["capacity_seconds"]
                     agg["tracked_seconds"] += row["tracked_seconds"]
@@ -2064,6 +2083,7 @@ def get_insights(
                 "overall_utilization": round((total_tracked / total_capacity) * 100, 1) if total_capacity > 0 else None,
                 "client_utilization": round((total_billable / total_capacity) * 100, 1) if total_capacity > 0 else None,
                 "available_seconds": round(max(total_capacity - total_tracked, 0.0), 1),
+                "trend_granularity": "daily" if (end_date - start_date).days <= 6 else "weekly",
                 "trend": [
                     {k: (round(v, 1) if k.endswith("_seconds") else v) for k, v in row.items()}
                     for _, row in sorted(aggregate_week.items())
@@ -2112,6 +2132,7 @@ def get_insights(
             "client_utilization": client_utilization,
             "previous_capacity_seconds": round(previous_capacity_seconds, 1),
             "previous_billable_seconds": round(previous_billable_seconds, 1),
+            "trend_granularity": "daily" if (end_date - start_date).days <= 6 else "weekly",
             "trend": capacity_trend,
         },
         "team_capacity": team_capacity,
