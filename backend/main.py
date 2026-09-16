@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, or_, func
 from sqlalchemy.exc import IntegrityError
 
-from database import get_db, engine, Base
+from database import get_db, engine, Base, SessionLocal
 import models
 import schemas
 
@@ -100,16 +100,16 @@ def _ensure_operational_indexes():
     if engine.dialect.name not in ("postgresql", "sqlite"):
         return
     statements = [
-        "CREATE INDEX IF NOT EXISTS ix_tasks_owner_status ON tasks (owner_id, status)",
-        "CREATE INDEX IF NOT EXISTS ix_tasks_submitted_at ON tasks (submitted_at)",
-        "CREATE INDEX IF NOT EXISTS ix_tasks_submitted_by_date ON tasks (submitted_by_id, submitted_at)",
-        "CREATE INDEX IF NOT EXISTS ix_tasks_client_status ON tasks (client_id, status)",
-        "CREATE INDEX IF NOT EXISTS ix_tasks_submitted_pod_date ON tasks (submitted_pod_id, submitted_at)",
-        "CREATE INDEX IF NOT EXISTS ix_tasks_calendar_event ON tasks (source_calendar_event_id)",
-        "CREATE INDEX IF NOT EXISTS ix_members_pod ON members (pod_id)",
-        "CREATE INDEX IF NOT EXISTS ix_sessions_member ON sessions (member_id)",
-        "CREATE INDEX IF NOT EXISTS ix_help_events_member_created ON help_events (member_id, created_at)",
-        "CREATE INDEX IF NOT EXISTS ix_inactivity_member_started ON inactivity_events (member_id, started_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_tenant_owner_status ON tasks (tenant_id, owner_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_tenant_submitted_at ON tasks (tenant_id, submitted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_tenant_submitted_by_date ON tasks (tenant_id, submitted_by_id, submitted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_tenant_client_status ON tasks (tenant_id, client_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_tenant_submitted_pod_date ON tasks (tenant_id, submitted_pod_id, submitted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_tenant_calendar_event ON tasks (tenant_id, source_calendar_event_id)",
+        "CREATE INDEX IF NOT EXISTS ix_members_tenant_pod ON members (tenant_id, pod_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sessions_tenant_member ON sessions (tenant_id, member_id)",
+        "CREATE INDEX IF NOT EXISTS ix_help_events_tenant_member_created ON help_events (tenant_id, member_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_inactivity_tenant_member_started ON inactivity_events (tenant_id, member_id, started_at)",
     ]
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
@@ -128,12 +128,12 @@ def _ensure_operational_indexes():
             duplicate_code = conn.execute(text(
                 "SELECT LOWER(TRIM(code)) AS normalized_code "
                 "FROM clients WHERE code IS NOT NULL AND TRIM(code) <> '' "
-                "GROUP BY LOWER(TRIM(code)) HAVING COUNT(*) > 1 LIMIT 1"
+                "GROUP BY tenant_id, LOWER(TRIM(code)) HAVING COUNT(*) > 1 LIMIT 1"
             )).first()
             if duplicate_code is None:
                 conn.execute(text(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_code_ci "
-                    "ON clients (LOWER(code)) WHERE code IS NOT NULL AND TRIM(code) <> ''"
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_tenant_code_ci "
+                    "ON clients (tenant_id, LOWER(code)) WHERE code IS NOT NULL AND TRIM(code) <> ''"
                 ))
             else:
                 _log_event("client_code_unique_index_pending", duplicate_code=duplicate_code[0])
@@ -163,23 +163,169 @@ DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query"]
 DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
 UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__"
 UNASSIGNED_CLIENT_NAME = "No client assigned"
+AROUND_TENANT_ID = "tenant_around_finance"
+AROUND_TENANT_NAME = "Around Finance"
+AROUND_TENANT_SLUG = "around-finance"
 
+
+def _unassigned_client_id(tenant_id: str) -> str:
+    # Preserve the legacy primary key for Around Finance so existing tasks/FKs need no rewrite.
+    # Future tenants receive their own reserved client row because client IDs are globally unique.
+    return UNASSIGNED_CLIENT_ID if tenant_id == AROUND_TENANT_ID else f"{UNASSIGNED_CLIENT_ID}:{tenant_id}"
+
+
+
+def _current_tenant_id(db: Session) -> str:
+    tenant_id = db.info.get("tenant_id")
+    if not tenant_id:
+        raise HTTPException(401, "No active workspace")
+    return tenant_id
 
 
 def inactivity_audit_enabled(db: Session) -> bool:
-    setting = db.get(models.SystemSetting, "inactivity_audit_enabled")
+    setting = db.query(models.TenantSetting).filter(models.TenantSetting.key == "inactivity_audit_enabled").first()
     return bool(setting and setting.value.strip().lower() in ("1", "true", "yes", "on"))
 
 
 def set_inactivity_audit_enabled(db: Session, enabled: bool) -> bool:
-    setting = db.get(models.SystemSetting, "inactivity_audit_enabled")
+    setting = db.query(models.TenantSetting).filter(models.TenantSetting.key == "inactivity_audit_enabled").first()
     if setting is None:
-        setting = models.SystemSetting(key="inactivity_audit_enabled", value="true" if enabled else "false")
+        setting = models.TenantSetting(key="inactivity_audit_enabled", value="true" if enabled else "false")
         db.add(setting)
     else:
         setting.value = "true" if enabled else "false"
     db.commit()
     return enabled
+
+
+
+def run_multitenant_migration():
+    """One-time, backward-safe migration of the existing workspace into Around Finance.
+
+    Existing primary keys and business records are preserved. Tenant columns are introduced
+    nullable, backfilled, and only then made NOT NULL on PostgreSQL. User identity is split
+    from tenant membership without requiring existing staff to re-register.
+    """
+    tenant_tables = [
+        "pods", "members", "sessions", "login_events", "clock_start_events",
+        "karbon_reconciliation_notes", "google_oauth_states", "dismissed_suggestions",
+        "clients", "bank_accounts", "roles", "task_type_options", "tracked_metrics",
+        "templates", "template_tasks", "tasks", "help_events", "inactivity_events",
+    ]
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+
+    with engine.begin() as conn:
+        # tenants/users/tenant_settings are created by metadata before this runs.
+        existing_tenant = conn.execute(text("SELECT id FROM tenants WHERE id = :id"), {"id": AROUND_TENANT_ID}).first()
+        if not existing_tenant:
+            conn.execute(text(
+                "INSERT INTO tenants (id, name, slug, status, created_at) "
+                "VALUES (:id, :name, :slug, 'active', :created_at)"
+            ), {"id": AROUND_TENANT_ID, "name": AROUND_TENANT_NAME, "slug": AROUND_TENANT_SLUG, "created_at": datetime.utcnow()})
+
+        for table in tenant_tables:
+            if table not in tables:
+                continue
+            columns = {c["name"] for c in inspect(engine).get_columns(table)}
+            if "tenant_id" not in columns:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN tenant_id VARCHAR"))
+            conn.execute(text(f"UPDATE {table} SET tenant_id = :tenant_id WHERE tenant_id IS NULL OR tenant_id = ''"), {"tenant_id": AROUND_TENANT_ID})
+
+        if "members" in tables:
+            member_columns = {c["name"] for c in inspect(engine).get_columns("members")}
+            if "user_id" not in member_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN user_id VARCHAR"))
+        if "sessions" in tables:
+            session_columns = {c["name"] for c in inspect(engine).get_columns("sessions")}
+            if "user_id" not in session_columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR"))
+
+        # Promote each legacy login identity to a global User. The Member row remains the
+        # tenant-specific profile/role/capacity record, so all existing IDs and UI references stay valid.
+        if "members" in tables:
+            legacy_members = conn.execute(text(
+                "SELECT id, email, password_hash FROM members WHERE email IS NOT NULL AND TRIM(email) <> ''"
+            )).fetchall()
+            for member_id, email, password_hash in legacy_members:
+                normalized = (email or "").strip().lower()
+                if not normalized:
+                    continue
+                user = conn.execute(text("SELECT id, password_hash FROM users WHERE LOWER(email) = :email"), {"email": normalized}).first()
+                if user:
+                    user_id = user[0]
+                    if not user[1] and password_hash:
+                        conn.execute(text("UPDATE users SET password_hash = :password_hash WHERE id = :id"), {"password_hash": password_hash, "id": user_id})
+                else:
+                    user_id = "usr_" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
+                    conn.execute(text(
+                        "INSERT INTO users (id, email, password_hash, default_tenant_id, status, created_at) "
+                        "VALUES (:id, :email, :password_hash, :tenant_id, 'active', :created_at)"
+                    ), {"id": user_id, "email": normalized, "password_hash": password_hash, "tenant_id": AROUND_TENANT_ID, "created_at": datetime.utcnow()})
+                conn.execute(text("UPDATE members SET user_id = :user_id, email = :email WHERE id = :member_id"), {"user_id": user_id, "email": normalized, "member_id": member_id})
+
+            conn.execute(text(
+                "UPDATE sessions SET user_id = (SELECT members.user_id FROM members WHERE members.id = sessions.member_id) "
+                "WHERE user_id IS NULL"
+            ))
+
+        # Existing system settings were workspace-owned before multi-tenancy. Copy them to
+        # Around Finance once; keep the old table only for deployment-global backwards compatibility.
+        if "system_settings" in tables:
+            rows = conn.execute(text("SELECT key, value FROM system_settings")).fetchall()
+            for key, value in rows:
+                exists = conn.execute(text(
+                    "SELECT id FROM tenant_settings WHERE tenant_id = :tenant_id AND key = :key"
+                ), {"tenant_id": AROUND_TENANT_ID, "key": key}).first()
+                if not exists:
+                    conn.execute(text(
+                        "INSERT INTO tenant_settings (id, tenant_id, key, value) VALUES (:id, :tenant_id, :key, :value)"
+                    ), {"id": models.gen_id("tset"), "tenant_id": AROUND_TENANT_ID, "key": key, "value": value or ""})
+
+        if engine.dialect.name == "postgresql":
+            # Remove legacy global uniqueness so two tenants can use the same business names/codes.
+            for table, constraint in [
+                ("members", "members_email_key"), ("clients", "clients_code_key"),
+                ("pods", "pods_name_key"), ("roles", "roles_name_key"),
+                ("task_type_options", "task_type_options_name_key"),
+                ("tracked_metrics", "tracked_metrics_name_key"),
+            ]:
+                if table in tables:
+                    conn.execute(text(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {constraint}"))
+            for table in tenant_tables:
+                if table in tables:
+                    conn.execute(text(f"ALTER TABLE {table} ALTER COLUMN tenant_id SET NOT NULL"))
+
+        # Tenant-local uniqueness and lookup indexes. LOWER(code) preserves the current
+        # case-insensitive client-code rule while allowing the same code in another tenant.
+        if "clients" in tables:
+            conn.execute(text("DROP INDEX IF EXISTS uq_clients_code_ci"))
+            duplicate = conn.execute(text(
+                "SELECT tenant_id, LOWER(TRIM(code)) AS normalized_code FROM clients "
+                "WHERE code IS NOT NULL AND TRIM(code) <> '' "
+                "GROUP BY tenant_id, LOWER(TRIM(code)) HAVING COUNT(*) > 1 LIMIT 1"
+            )).first()
+            if duplicate is None:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_tenant_code_ci "
+                    "ON clients (tenant_id, LOWER(code)) WHERE code IS NOT NULL AND TRIM(code) <> ''"
+                ))
+            else:
+                _log_event("client_code_unique_index_pending", tenant_id=duplicate[0], duplicate_code=duplicate[1])
+        for name, table, column in [
+            ("uq_pods_tenant_name_idx", "pods", "name"),
+            ("uq_roles_tenant_name_idx", "roles", "name"),
+            ("uq_task_types_tenant_name_idx", "task_type_options", "name"),
+            ("uq_metrics_tenant_name_idx", "tracked_metrics", "name"),
+        ]:
+            if table in tables:
+                conn.execute(text(f"CREATE UNIQUE INDEX IF NOT EXISTS {name} ON {table} (tenant_id, {column})"))
+        if "members" in tables:
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_members_tenant_user_idx ON members (tenant_id, user_id) WHERE user_id IS NOT NULL"))
+        if "sessions" in tables:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_tenant_member ON sessions (tenant_id, member_id)"))
+
+    _log_event("multitenant_migration_ready", default_tenant=AROUND_TENANT_ID)
 
 
 def run_startup_migrations():
@@ -470,6 +616,7 @@ async def lifespan(app: FastAPI):
         if engine.dialect.name == "postgresql":
             migration_lock_conn = engine.connect()
             migration_lock_conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": STARTUP_MIGRATION_LOCK_KEY})
+        run_multitenant_migration()
         run_startup_migrations()
         _ensure_operational_indexes()
     finally:
@@ -481,8 +628,10 @@ async def lifespan(app: FastAPI):
 
     db = next(get_db())
     try:
-        if db.get(models.Client, UNASSIGNED_CLIENT_ID) is None:
-            db.add(models.Client(id=UNASSIGNED_CLIENT_ID, name=UNASSIGNED_CLIENT_NAME, code=None))
+        db.info["tenant_id"] = AROUND_TENANT_ID
+        around_unassigned_id = _unassigned_client_id(AROUND_TENANT_ID)
+        if db.get(models.Client, around_unassigned_id) is None:
+            db.add(models.Client(id=around_unassigned_id, name=UNASSIGNED_CLIENT_NAME, code=None))
             db.commit()
         if db.query(models.Template).count() == 0:
             tpl = models.Template(field=DEFAULT_TEMPLATE["field"], name=DEFAULT_TEMPLATE["name"])
@@ -599,16 +748,22 @@ def get_current_member(authorization: str = Header(None), db: Session = Depends(
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Not logged in")
     token = authorization[len("Bearer "):]
+    # Session tokens are globally unique and intentionally resolved before tenant scoping.
     session = db.get(models.Session, token)
-    if not session:
+    if not session or not session.tenant_id:
         raise HTTPException(401, "Session no longer valid, please log in again")
-    member = db.get(models.Member, session.member_id)
+    db.info["tenant_id"] = session.tenant_id
+    member = db.query(models.Member).filter(
+        models.Member.id == session.member_id,
+        models.Member.tenant_id == session.tenant_id,
+    ).first()
     if not member:
-        # Clear an orphaned server session as well as rejecting it. This covers accounts
-        # removed outside the normal ClockBook delete flow without creating a timeout.
+        db.info.pop("tenant_id", None)
         db.delete(session)
         db.commit()
-        raise HTTPException(401, "Account no longer exists")
+        raise HTTPException(401, "Account no longer exists in this workspace")
+    if session.user_id and member.user_id and session.user_id != member.user_id:
+        raise HTTPException(401, "Session membership is no longer valid")
     return member
 
 
@@ -630,6 +785,8 @@ def _member_in_admin_scope(current_member, target_member):
     instead of trusting whichever member/task ID the browser sends.
     """
     if not target_member:
+        return False
+    if getattr(target_member, "tenant_id", None) != getattr(current_member, "tenant_id", None):
         return False
     if current_member.role == "super_admin":
         return True
@@ -653,6 +810,8 @@ def _require_member_in_scope(current_member, member_id, db: Session):
 
 def _require_task_in_scope(current_member, task, db: Session, owner_can_access=True):
     if not task:
+        raise HTTPException(404, "Task not found")
+    if getattr(task, "tenant_id", None) != getattr(current_member, "tenant_id", None):
         raise HTTPException(404, "Task not found")
     if owner_can_access and task.owner_id == current_member.id:
         return task
@@ -754,45 +913,46 @@ def elapsed_seconds(segments):
 
 @app.get("/api/auth/status")
 def auth_status(db: Session = Depends(get_db)):
-    # Once at least one account has a password, this bootstrap path closes and everyone
-    # must log in normally. Before that, this tells the frontend whether to show a plain
-    # sign up screen (brand new install) or a claim screen (upgrading an older workspace
-    # that had passwordless accounts already in it).
-    any_secured = db.query(models.Member).filter(models.Member.password_hash.isnot(None)).count()
+    any_secured = db.query(models.User).filter(models.User.password_hash.isnot(None), models.User.status == "active").count()
     if any_secured > 0:
         return {"setup_needed": False, "unclaimed": []}
-    unclaimed = db.query(models.Member).filter(models.Member.password_hash.is_(None)).all()
+    unclaimed = db.query(models.Member).filter(
+        models.Member.tenant_id == AROUND_TENANT_ID, models.Member.user_id.is_(None)
+    ).all()
     return {"setup_needed": True, "unclaimed": [{"id": m.id, "name": m.name} for m in unclaimed]}
 
 
 @app.post("/api/auth/claim", response_model=schemas.LoginResponse)
 def claim_account(payload: schemas.ClaimAccountRequest, request: Request, db: Session = Depends(get_db)):
     _enforce_rate_limit(db, f"claim:{_client_ip(request)}", limit=10, window_seconds=900)
-    any_secured = db.query(models.Member).filter(models.Member.password_hash.isnot(None)).count()
-    if any_secured > 0:
+    if db.query(models.User).filter(models.User.password_hash.isnot(None), models.User.status == "active").count() > 0:
         raise HTTPException(400, "Accounts are already set up, please log in")
     email = payload.email.strip().lower()
-    if db.query(models.Member).filter(models.Member.email == email).first():
+    if db.query(models.User).filter(func.lower(models.User.email) == email).first():
         raise HTTPException(400, "That email is already registered")
+    user = models.User(email=email, password_hash=hash_password(payload.password), default_tenant_id=AROUND_TENANT_ID)
+    db.add(user)
+    db.flush()
+    db.info["tenant_id"] = AROUND_TENANT_ID
     if payload.member_id:
-        member = db.get(models.Member, payload.member_id)
-        if not member or member.password_hash:
+        member = db.query(models.Member).filter(models.Member.id == payload.member_id).first()
+        if not member or member.user_id:
             raise HTTPException(400, "That account cannot be claimed")
+        member.user_id = user.id
         member.email = email
-        member.password_hash = hash_password(payload.password)
+        member.password_hash = user.password_hash
         member.role = "admin"
     else:
         count = db.query(models.Member).count()
         member = models.Member(
-            name=(payload.name or "Admin").strip() or "Admin",
-            email=email, color_idx=count, role="admin",
-            password_hash=hash_password(payload.password),
+            name=(payload.name or "Admin").strip() or "Admin", user_id=user.id,
+            email=email, color_idx=count, role="admin", password_hash=user.password_hash,
         )
         db.add(member)
     db.commit()
     db.refresh(member)
     token = secrets.token_urlsafe(32)
-    db.add(models.Session(token=token, member_id=member.id))
+    db.add(models.Session(token=token, user_id=user.id, member_id=member.id))
     db.add(models.LoginEvent(member_id=member.id))
     db.commit()
     return schemas.LoginResponse(token=token, member=member)
@@ -804,11 +964,24 @@ def login(payload: schemas.LoginRequest, request: Request, db: Session = Depends
     ip = _client_ip(request)
     _enforce_rate_limit(db, f"login-ip:{ip}", limit=50, window_seconds=900)
     _enforce_rate_limit(db, f"login-account:{ip}:{email}", limit=10, window_seconds=900)
-    member = db.query(models.Member).filter(models.Member.email == email).first()
-    if not member or not member.password_hash or not verify_password(payload.password, member.password_hash):
+    user = db.query(models.User).filter(func.lower(models.User.email) == email, models.User.status == "active").first()
+    if not user or not user.password_hash or not verify_password(payload.password, user.password_hash):
         raise HTTPException(401, "Incorrect email or password")
+
+    memberships = db.query(models.Member).filter(models.Member.user_id == user.id).order_by(models.Member.id).all()
+    if not memberships:
+        raise HTTPException(403, "This account is not assigned to a ClockBook workspace")
+    requested_tenant = getattr(payload, "tenant_id", None)
+    tenant_id = requested_tenant or user.default_tenant_id
+    member = next((m for m in memberships if m.tenant_id == tenant_id), None) if tenant_id else None
+    if member is None and len(memberships) == 1:
+        member = memberships[0]
+        tenant_id = member.tenant_id
+    if member is None:
+        raise HTTPException(409, "Choose a workspace before signing in")
+    db.info["tenant_id"] = tenant_id
     token = secrets.token_urlsafe(32)
-    db.add(models.Session(token=token, member_id=member.id))
+    db.add(models.Session(token=token, user_id=user.id, member_id=member.id))
     db.add(models.LoginEvent(member_id=member.id))
     db.commit()
     return schemas.LoginResponse(token=token, member=member)
@@ -828,6 +1001,139 @@ def logout(authorization: str = Header(None), db: Session = Depends(get_db)):
 @app.get("/api/auth/me", response_model=schemas.MemberOut)
 def get_me(current_member: models.Member = Depends(get_current_member)):
     return current_member
+
+
+@app.get("/api/auth/workspaces")
+def list_my_workspaces(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not current_member.user_id:
+        return {"active_tenant_id": current_member.tenant_id, "workspaces": []}
+    memberships = db.query(models.Member).filter(
+        models.Member.user_id == current_member.user_id
+    ).execution_options(skip_tenant_scope=True).all()
+    tenant_ids = [m.tenant_id for m in memberships]
+    tenants = db.query(models.Tenant).filter(models.Tenant.id.in_(tenant_ids)).all() if tenant_ids else []
+    by_id = {t.id: t for t in tenants}
+    return {
+        "active_tenant_id": current_member.tenant_id,
+        "workspaces": [
+            {"id": m.tenant_id, "name": by_id[m.tenant_id].name if m.tenant_id in by_id else m.tenant_id, "role": m.role}
+            for m in memberships
+        ],
+    }
+
+
+@app.post("/api/auth/switch-workspace/{tenant_id}", response_model=schemas.LoginResponse)
+def switch_workspace(tenant_id: str, authorization: str = Header(None), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if not current_member.user_id:
+        raise HTTPException(400, "This account is not linked to a multi-workspace identity")
+    target = db.query(models.Member).filter(
+        models.Member.user_id == current_member.user_id, models.Member.tenant_id == tenant_id
+    ).execution_options(skip_tenant_scope=True).first()
+    if not target:
+        raise HTTPException(403, "You are not a member of that workspace")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Not logged in")
+    old_token = authorization[len("Bearer "):]
+    old_session = db.get(models.Session, old_token)
+    if old_session:
+        db.delete(old_session)
+        db.flush()
+    db.info["tenant_id"] = tenant_id
+    new_token = secrets.token_urlsafe(32)
+    db.add(models.Session(token=new_token, user_id=current_member.user_id, member_id=target.id))
+    db.add(models.LoginEvent(member_id=target.id))
+    db.commit()
+    return schemas.LoginResponse(token=new_token, member=target)
+
+
+def _platform_admin_emails():
+    return {e.strip().lower() for e in (os.environ.get("CLOCKBOOK_PLATFORM_ADMIN_EMAILS") or "").split(",") if e.strip()}
+
+
+def _require_platform_admin(current_member: models.Member, db: Session):
+    user = db.get(models.User, current_member.user_id) if current_member.user_id else None
+    if not user or user.email.lower() not in _platform_admin_emails():
+        raise HTTPException(403, "Platform administrator access is required")
+    return user
+
+
+def _slugify_tenant(value: str) -> str:
+    value = (value or "").strip().lower()
+    out = []
+    dash = False
+    for ch in value:
+        if ch.isalnum():
+            out.append(ch)
+            dash = False
+        elif not dash and out:
+            out.append("-")
+            dash = True
+    return "".join(out).strip("-")
+
+
+def _seed_new_tenant(db: Session, tenant_id: str):
+    previous = db.info.get("tenant_id")
+    db.info["tenant_id"] = tenant_id
+    try:
+        unassigned_id = _unassigned_client_id(tenant_id)
+        if db.get(models.Client, unassigned_id) is None:
+            db.add(models.Client(id=unassigned_id, name=UNASSIGNED_CLIENT_NAME, code=None))
+        if db.query(models.Template).count() == 0:
+            tpl = models.Template(field=DEFAULT_TEMPLATE["field"], name=DEFAULT_TEMPLATE["name"])
+            db.add(tpl); db.flush()
+            for pos, t in enumerate(DEFAULT_TEMPLATE["tasks"]):
+                db.add(models.TemplateTask(template_id=tpl.id, name=t["name"], role=t["role"], task_type=t["task_type"], position=pos))
+        if db.query(models.Role).count() == 0:
+            for name in DEFAULT_ROLES:
+                db.add(models.Role(name=name))
+        if db.query(models.TaskTypeOption).count() == 0:
+            for name in DEFAULT_TASK_TYPES:
+                db.add(models.TaskTypeOption(name=name))
+        if db.query(models.TrackedMetric).count() == 0:
+            for name in DEFAULT_TRACKED_METRICS:
+                db.add(models.TrackedMetric(name=name))
+        db.flush()
+    finally:
+        if previous is None:
+            db.info.pop("tenant_id", None)
+        else:
+            db.info["tenant_id"] = previous
+
+
+@app.get("/api/platform/tenants", response_model=list[schemas.TenantOut])
+def platform_list_tenants(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    _require_platform_admin(current_member, db)
+    return db.query(models.Tenant).order_by(models.Tenant.name).all()
+
+
+@app.post("/api/platform/tenants", response_model=schemas.TenantOut, status_code=201)
+def platform_create_tenant(payload: schemas.TenantCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    user = _require_platform_admin(current_member, db)
+    name = payload.name.strip()
+    slug = _slugify_tenant(payload.slug or name)
+    if not name or not slug:
+        raise HTTPException(400, "Workspace name is required")
+    if db.query(models.Tenant).filter(or_(func.lower(models.Tenant.name) == name.lower(), models.Tenant.slug == slug)).first():
+        raise HTTPException(400, "A workspace with that name or slug already exists")
+    tenant = models.Tenant(name=name, slug=slug, status="active")
+    db.add(tenant); db.flush()
+    previous = db.info.get("tenant_id")
+    db.info["tenant_id"] = tenant.id
+    try:
+        membership = models.Member(
+            user_id=user.id, name=current_member.name, email=user.email, password_hash=user.password_hash,
+            color_idx=0, role="super_admin", timezone_name=current_member.timezone_name,
+        )
+        db.add(membership); db.flush()
+        _seed_new_tenant(db, tenant.id)
+    finally:
+        if previous is None:
+            db.info.pop("tenant_id", None)
+        else:
+            db.info["tenant_id"] = previous
+    db.commit()
+    db.refresh(tenant)
+    return tenant
 
 
 @app.get("/api/time")
@@ -908,6 +1214,7 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
         db.commit()
         return RedirectResponse(url="/?calendar=error")
     member_id = state_row.member_id
+    tenant_id = state_row.tenant_id
     code_verifier = state_row.code_verifier
     db.delete(state_row)
     db.commit()
@@ -929,7 +1236,8 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
     if not refresh_token:
         return RedirectResponse(url="/?calendar=error")
 
-    member = db.get(models.Member, member_id)
+    db.info["tenant_id"] = tenant_id
+    member = db.query(models.Member).filter(models.Member.id == member_id).first()
     if member:
         try:
             member.google_refresh_token = "enc:v1:" + _encrypt_secret(refresh_token)
@@ -1580,12 +1888,22 @@ def list_members(current_member: models.Member = Depends(get_current_member), db
 def create_member(payload: schemas.MemberCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     email = payload.email.strip().lower()
-    if db.query(models.Member).filter(models.Member.email == email).first():
-        raise HTTPException(400, "That email is already registered")
+    if not email:
+        raise HTTPException(400, "Email is required")
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if user and db.query(models.Member).filter(models.Member.user_id == user.id).first():
+        raise HTTPException(400, "That person is already a member of this workspace")
+    if not user:
+        user = models.User(
+            email=email, password_hash=hash_password(payload.password),
+            default_tenant_id=current_member.tenant_id,
+        )
+        db.add(user)
+        db.flush()
     count = db.query(models.Member).count()
     member = models.Member(
-        name=payload.name.strip(), email=email, color_idx=count, role="member",
-        password_hash=hash_password(payload.password),
+        user_id=user.id, name=payload.name.strip(), email=email, color_idx=count, role="member",
+        password_hash=user.password_hash,
     )
     db.add(member)
     db.commit()
@@ -1690,17 +2008,35 @@ def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate
 
 @app.patch("/api/members/{member_id}/credentials", response_model=schemas.MemberOut)
 def set_member_credentials(member_id: str, payload: schemas.LoginRequest, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    # Lets an admin give login access to a legacy passwordless account, or reset someone's
-    # password if they are locked out. There is no email delivery in this app, so whatever
-    # password is set here needs to be shared with that person directly.
+    # Authentication belongs to the global User identity. A tenant admin may reset a user
+    # who belongs only to this tenant; changing credentials for a shared multi-tenant identity
+    # is intentionally blocked because it would affect that person's access elsewhere.
     require_admin(current_member)
     member = _require_member_in_scope(current_member, member_id, db)
     email = payload.email.strip().lower()
-    existing = db.query(models.Member).filter(models.Member.email == email, models.Member.id != member_id).first()
-    if existing:
-        raise HTTPException(400, "That email is already registered")
-    member.email = email
-    member.password_hash = hash_password(payload.password)
+    if not email:
+        raise HTTPException(400, "Email is required")
+    user = db.get(models.User, member.user_id) if member.user_id else None
+    if user:
+        membership_count = db.query(models.Member).filter(models.Member.user_id == user.id).execution_options(skip_tenant_scope=True).count()
+        if membership_count > 1:
+            raise HTTPException(400, "This login belongs to more than one workspace. Global credentials cannot be reset from a workspace admin screen")
+        other_user = db.query(models.User).filter(func.lower(models.User.email) == email, models.User.id != user.id).first()
+        if other_user:
+            raise HTTPException(400, "That email is already registered")
+        user.email = email
+        user.password_hash = hash_password(payload.password)
+        member.email = email
+        member.password_hash = user.password_hash
+    else:
+        if db.query(models.User).filter(func.lower(models.User.email) == email).first():
+            raise HTTPException(400, "That email is already registered")
+        user = models.User(email=email, password_hash=hash_password(payload.password), default_tenant_id=current_member.tenant_id)
+        db.add(user)
+        db.flush()
+        member.user_id = user.id
+        member.email = email
+        member.password_hash = user.password_hash
     _revoke_member_sessions(db, member.id)
     db.commit()
     db.refresh(member)
@@ -1728,8 +2064,26 @@ def delete_member(member_id: str, current_member: models.Member = Depends(get_cu
     ).count()
     if has_tasks > 0:
         raise HTTPException(400, "This person has tracked tasks and cannot be deleted")
+    user_id = member.user_id
     db.query(models.Session).filter(models.Session.member_id == member_id).delete()
     db.delete(member)
+    db.flush()
+    if user_id:
+        # Temporarily bypass the active tenant scope only to determine whether the global
+        # identity still has another tenant membership.
+        previous_skip = db.info.get("skip_tenant_scope")
+        db.info["skip_tenant_scope"] = True
+        try:
+            remaining = db.query(models.Member).filter(models.Member.user_id == user_id).count()
+            if remaining == 0:
+                user = db.get(models.User, user_id)
+                if user:
+                    db.delete(user)
+        finally:
+            if previous_skip is None:
+                db.info.pop("skip_tenant_scope", None)
+            else:
+                db.info["skip_tenant_scope"] = previous_skip
     db.commit()
     return None
 
@@ -1745,10 +2099,20 @@ def delete_member(member_id: str, current_member: models.Member = Depends(get_cu
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN", "")
 
 
-def find_slack_user_id_by_email(email: str):
-    if not SLACK_BOT_TOKEN:
+def _slack_token_for_tenant(db: Session):
+    token_enc = _setting_value(db, "slack_bot_token_encrypted") if db is not None else ""
+    if token_enc:
+        return _decrypt_secret(token_enc)
+    if db is not None and _current_tenant_id(db) != AROUND_TENANT_ID:
+        return ""
+    return SLACK_BOT_TOKEN
+
+
+def find_slack_user_id_by_email(email: str, db: Session = None):
+    slack_token = _slack_token_for_tenant(db) if db is not None else SLACK_BOT_TOKEN
+    if not slack_token:
         return None, "Slack is not set up for this workspace yet"
-    headers = {"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}
+    headers = {"Authorization": f"Bearer {slack_token}"}
     cursor = None
     try:
         for _ in range(20):  # a firm-sized workspace should resolve well within this many pages
@@ -1771,13 +2135,14 @@ def find_slack_user_id_by_email(email: str):
     return None, "No Slack user found with that email in this workspace"
 
 
-def send_slack_message(slack_user_id: str, text: str):
-    if not SLACK_BOT_TOKEN or not slack_user_id:
+def send_slack_message(slack_user_id: str, text: str, db: Session = None):
+    slack_token = _slack_token_for_tenant(db) if db is not None else SLACK_BOT_TOKEN
+    if not slack_token or not slack_user_id:
         return False
     try:
         resp = httpx.post(
             "https://slack.com/api/chat.postMessage",
-            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+            headers={"Authorization": f"Bearer {slack_token}"},
             json={"channel": slack_user_id, "text": text},
             timeout=10,
         )
@@ -1795,7 +2160,7 @@ def connect_slack(member_id: str, payload: schemas.SlackConnect, current_member:
     email = payload.slack_email.strip()
     if not email:
         raise HTTPException(400, "Enter the email your Slack account uses")
-    slack_user_id, error = find_slack_user_id_by_email(email)
+    slack_user_id, error = find_slack_user_id_by_email(email, db)
     if not slack_user_id:
         raise HTTPException(400, error or "Could not find that Slack user")
     current_member.slack_email = email
@@ -1824,7 +2189,7 @@ def test_slack(member_id: str, current_member: models.Member = Depends(get_curre
         raise HTTPException(403, "You can only test your own Slack connection")
     if not current_member.slack_user_id:
         raise HTTPException(400, "Connect Slack first")
-    ok = send_slack_message(current_member.slack_user_id, "This is a test notification from Clockbook. If you can see this, it's working.")
+    ok = send_slack_message(current_member.slack_user_id, "This is a test notification from Clockbook. If you can see this, it's working.", db)
     if not ok:
         raise HTTPException(400, "Could not send a test message, check the Slack setup")
     return {"sent": True}
@@ -1845,7 +2210,7 @@ def update_notification_channel(member_id: str, payload: schemas.NotificationCha
 
 
 @app.post("/api/notifications/relay")
-def relay_notification(payload: dict, current_member: models.Member = Depends(get_current_member)):
+def relay_notification(payload: dict, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     # The one place a notification actually gets sent to Slack. Only ever sends to the
     # calling person's own resolved Slack id, and only if they have chosen Slack as their
     # channel, so this can never be used to message anyone else
@@ -1854,7 +2219,7 @@ def relay_notification(payload: dict, current_member: models.Member = Depends(ge
     text = (payload or {}).get("text", "").strip()
     if not text:
         raise HTTPException(400, "Missing text")
-    ok = send_slack_message(current_member.slack_user_id, text)
+    ok = send_slack_message(current_member.slack_user_id, text, db)
     return {"sent": ok}
 
 
@@ -2830,7 +3195,7 @@ def get_insights(
 
 @app.get("/api/clients", response_model=list[schemas.ClientOut])
 def list_clients(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return db.query(models.Client).filter(models.Client.id != UNASSIGNED_CLIENT_ID).all()
+    return db.query(models.Client).filter(models.Client.id != _unassigned_client_id(current_member.tenant_id)).all()
 
 
 def normalize_client_code(code: str) -> str:
@@ -2844,7 +3209,7 @@ def check_client_code_available(db, code, exclude_client_id=None):
     # Serialize code claims in production so two simultaneous requests cannot both pass
     # the availability check before either commits.
     if engine.dialect.name == "postgresql":
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": code.lower()})
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": f"{current_member.tenant_id}:{code.lower()}"})
     query = db.query(models.Client).filter(func.lower(models.Client.code) == code.lower())
     if exclude_client_id:
         query = query.filter(models.Client.id != exclude_client_id)
@@ -2914,7 +3279,7 @@ def import_clients(payload: schemas.ClientImportRequest, current_member: models.
     # bulk imports (or a bulk import and a normal create) from claiming the same code.
     if engine.dialect.name == "postgresql":
         for code in sorted({code.lower() for _, _, code, _ in prepared}):
-            db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": code})
+            db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": f"{current_member.tenant_id}:{code}"})
 
     existing = db.query(models.Client).filter(func.lower(models.Client.code).in_(list(seen_codes.keys()))).all()
     if existing:
@@ -3455,8 +3820,8 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
             raise HTTPException(403, "Only an admin can assign a task to someone else")
         _require_member_in_scope(current_member, owner_id, db)
 
-    client_id = payload.client_id or UNASSIGNED_CLIENT_ID
-    if client_id == UNASSIGNED_CLIENT_ID:
+    client_id = payload.client_id or _unassigned_client_id(current_member.tenant_id)
+    if client_id == _unassigned_client_id(current_member.tenant_id):
         client_name = UNASSIGNED_CLIENT_NAME
     else:
         client = db.get(models.Client, client_id)
@@ -3697,9 +4062,12 @@ def pause_task_beacon(task_id: str, payload: schemas.TaskPauseBeacon, db: Sessio
     # supplied session token exactly as before, then use the same locked/idempotent transition
     # as a normal pause. The timestamp remains bounded by server-known timer state.
     session = db.get(models.Session, payload.token)
-    if not session:
+    if not session or not session.tenant_id:
         raise HTTPException(401, "Session no longer valid")
-    current_member = db.get(models.Member, session.member_id)
+    db.info["tenant_id"] = session.tenant_id
+    current_member = db.query(models.Member).filter(
+        models.Member.id == session.member_id, models.Member.tenant_id == session.tenant_id
+    ).first()
     if not current_member:
         raise HTTPException(401, "Account no longer exists")
     task = _get_task_for_update(db, task_id)
@@ -3768,8 +4136,8 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
     if payload.end_count is not None and payload.end_count < 0:
         raise HTTPException(400, "Ending metric cannot be negative")
-    if task.client_id == UNASSIGNED_CLIENT_ID:
-        if not payload.client_id or payload.client_id == UNASSIGNED_CLIENT_ID:
+    if task.client_id == _unassigned_client_id(current_member.tenant_id):
+        if not payload.client_id or payload.client_id == _unassigned_client_id(current_member.tenant_id):
             raise HTTPException(400, "Select a client before completing this meeting")
         client = db.get(models.Client, payload.client_id)
         if not client:
@@ -4243,14 +4611,14 @@ def _utc_naive_to_local(dt, member):
 
 
 def _setting_value(db: Session, key: str) -> str:
-    setting = db.get(models.SystemSetting, key)
+    setting = db.query(models.TenantSetting).filter(models.TenantSetting.key == key).first()
     return setting.value if setting else ""
 
 
 def _set_setting_value(db: Session, key: str, value: str):
-    setting = db.get(models.SystemSetting, key)
+    setting = db.query(models.TenantSetting).filter(models.TenantSetting.key == key).first()
     if setting is None:
-        db.add(models.SystemSetting(key=key, value=value))
+        db.add(models.TenantSetting(key=key, value=value))
     else:
         setting.value = value
 
@@ -4309,7 +4677,7 @@ def _karbon_credentials(db: Session):
     access_enc = _setting_value(db, "karbon_access_key_encrypted")
     if token_enc and access_enc:
         return _decrypt_secret(token_enc), _decrypt_secret(access_enc), "settings"
-    if mode != "settings":
+    if mode != "settings" and _current_tenant_id(db) == AROUND_TENANT_ID:
         token = (os.environ.get("KARBON_TOKEN") or "").strip()
         access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
         if token and access_key:
@@ -4362,7 +4730,7 @@ def get_karbon_integration(current_member: models.Member = Depends(get_current_m
             return {"connected": True, "source": "settings", "application_id_hint": token[-4:] if token else "", "access_key_hint": access_key[-4:] if access_key else ""}
         except HTTPException as exc:
             return {"connected": False, "source": "settings", "error": exc.detail}
-    if mode != "disabled":
+    if mode != "disabled" and _current_tenant_id(db) == AROUND_TENANT_ID:
         token = (os.environ.get("KARBON_TOKEN") or "").strip()
         access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
         if token and access_key:

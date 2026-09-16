@@ -11,6 +11,7 @@ class Segment(BaseModel):
 class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    tenant_id: Optional[str] = None
     name: str
     email: Optional[str] = None
     color_idx: int
@@ -95,11 +96,25 @@ class StaffTourUpdate(BaseModel):
 class LoginRequest(BaseModel):
     email: str
     password: str
+    tenant_id: Optional[str] = None
 
 
 class LoginResponse(BaseModel):
     token: str
     member: MemberOut
+
+
+class TenantOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    name: str
+    slug: str
+    status: str = "active"
+
+
+class TenantCreate(BaseModel):
+    name: str
+    slug: Optional[str] = None
 
 
 class ClaimAccountRequest(BaseModel):

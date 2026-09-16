@@ -1,7 +1,7 @@
 import uuid
 import secrets
 from datetime import datetime, date
-from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Integer, Float, JSON, Text
+from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Integer, Float, JSON, Text, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
 
 from database import Base
@@ -11,16 +11,45 @@ def gen_id(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+class TenantScopedMixin:
+    tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
+
+
+class Tenant(Base):
+    __tablename__ = "tenants"
+    id = Column(String, primary_key=True, default=lambda: gen_id("tenant"))
+    name = Column(String, nullable=False)
+    slug = Column(String, nullable=False, unique=True)
+    status = Column(String, nullable=False, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(String, primary_key=True, default=lambda: gen_id("usr"))
+    email = Column(String, nullable=False, unique=True, index=True)
+    password_hash = Column(String, nullable=True)
+    default_tenant_id = Column(String, ForeignKey("tenants.id"), nullable=True)
+    status = Column(String, nullable=False, default="active")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class SystemSetting(Base):
+    # Deployment/global settings only. Tenant-owned settings live in TenantSetting.
     __tablename__ = "system_settings"
     key = Column(String, primary_key=True)
     value = Column(String, nullable=False, default="")
 
+
+class TenantSetting(TenantScopedMixin, Base):
+    __tablename__ = "tenant_settings"
+    __table_args__ = (UniqueConstraint("tenant_id", "key", name="uq_tenant_settings_tenant_key"),)
+    id = Column(String, primary_key=True, default=lambda: gen_id("tset"))
+    key = Column(String, nullable=False)
+    value = Column(String, nullable=False, default="")
+
+
 class RateLimitBucket(Base):
-    # Small database-backed fixed-window counter used for authentication abuse protection.
-    # Keys are SHA-256 hashes, so raw IP/email combinations are never stored here.
     __tablename__ = "rate_limit_buckets"
     key = Column(String, primary_key=True)
     window_start = Column(DateTime, nullable=False)
@@ -28,39 +57,35 @@ class RateLimitBucket(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class Pod(Base):
-    # A team/pod grouping for staff. When a regular admin is assigned to a pod, they only
-    # see task and time data for people in that same pod, super admins always see everyone
-    # regardless of pod, and an admin with no pod assigned keeps seeing everyone too.
+class Pod(TenantScopedMixin, Base):
     __tablename__ = "pods"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_pods_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("pod"))
-    name = Column(String, nullable=False, unique=True)
-
-
-class Member(Base):
-    __tablename__ = "members"
-    id = Column(String, primary_key=True, default=lambda: gen_id("mem"))
     name = Column(String, nullable=False)
-    email = Column(String, unique=True, nullable=True)
-    password_hash = Column(String, nullable=True)
+
+
+class Member(TenantScopedMixin, Base):
+    __tablename__ = "members"
+    __table_args__ = (UniqueConstraint("tenant_id", "user_id", name="uq_members_tenant_user"),)
+    id = Column(String, primary_key=True, default=lambda: gen_id("mem"))
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
+    name = Column(String, nullable=False)
+    # Kept as a tenant-profile snapshot for current API/UI compatibility. Authentication
+    # is performed against User; this field is synchronized when credentials change.
+    email = Column(String, nullable=True, index=True)
+    password_hash = Column(String, nullable=True)  # legacy compatibility; User is authoritative
     color_idx = Column(Integer, default=0)
-    role = Column(String, default="member")  # "admin" or "member"
+    role = Column(String, default="member")
     pod_id = Column(String, ForeignKey("pods.id"), nullable=True)
-    # Never returned by any API response, only a computed "connected" boolean is. This is
-    # the one credential Google gives that keeps working long-term, used to fetch a fresh
-    # short-lived access token each time a calendar check actually needs to happen.
     google_refresh_token = Column(String, nullable=True)
-    # The email this person says matches their Slack account, used once to resolve and
-    # cache slack_user_id below, never used for lookups after that so a rename or a typo
-    # fixed later doesn't silently break an already-working connection
     slack_email = Column(String, nullable=True)
     slack_user_id = Column(String, nullable=True)
-    notification_channel = Column(String, default="browser")  # "browser" or "slack"
-    weekly_capacity_hours = Column(Float, default=40.0)  # planning capacity used by Insights
-    capacity_effective_from = Column(Date, default=date.today)  # do not apply capacity before this date
-    timezone_name = Column(String, default="Asia/Colombo")  # IANA timezone used for user-local audit times
-    can_view_leave_capacity_insights = Column(Boolean, default=False)  # optional per-person access; super admins always have access
-    staff_tour_completed = Column(Boolean, default=False)  # one-time staff onboarding tour; users can replay it without resetting this flag
+    notification_channel = Column(String, default="browser")
+    weekly_capacity_hours = Column(Float, default=40.0)
+    capacity_effective_from = Column(Date, default=date.today)
+    timezone_name = Column(String, default="Asia/Colombo")
+    can_view_leave_capacity_insights = Column(Boolean, default=False)
+    staff_tour_completed = Column(Boolean, default=False)
 
     @property
     def google_calendar_connected(self):
@@ -71,21 +96,22 @@ class Member(Base):
         return bool(self.slack_user_id)
 
 
-class Session(Base):
+class Session(TenantScopedMixin, Base):
     __tablename__ = "sessions"
     token = Column(String, primary_key=True)
+    user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class LoginEvent(Base):
+class LoginEvent(TenantScopedMixin, Base):
     __tablename__ = "login_events"
     id = Column(String, primary_key=True, default=lambda: gen_id("login"))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class ClockStartEvent(Base):
+class ClockStartEvent(TenantScopedMixin, Base):
     __tablename__ = "clock_start_events"
     id = Column(String, primary_key=True, default=lambda: gen_id("clk"))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
@@ -93,7 +119,7 @@ class ClockStartEvent(Base):
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class KarbonReconciliationNote(Base):
+class KarbonReconciliationNote(TenantScopedMixin, Base):
     __tablename__ = "karbon_reconciliation_notes"
     id = Column(String, primary_key=True, default=lambda: gen_id("krn"))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
@@ -104,22 +130,15 @@ class KarbonReconciliationNote(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class GoogleOAuthState(Base):
-    # A short-lived, single-use marker created the moment someone clicks "Connect Calendar",
-    # so that when Google redirects back with just a code and this same state value, and
-    # nothing else identifying who they are, we can safely look up which member started it.
-    # Consumed and deleted the moment it is used, so it cannot be replayed.
+class GoogleOAuthState(TenantScopedMixin, Base):
     __tablename__ = "google_oauth_states"
     state = Column(String, primary_key=True, default=lambda: secrets.token_urlsafe(32))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
-    code_verifier = Column(String, nullable=True)  # PKCE verifier, kept only for this short-lived OAuth attempt
+    code_verifier = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class DismissedSuggestion(Base):
-    # Marks a calendar event as "not needed" for a specific person, purely a reminder they
-    # chose to clear, never turned into a task. Kept separate from source_calendar_event_id
-    # on tasks, since dismissing is the opposite action, deciding nothing should be created.
+class DismissedSuggestion(TenantScopedMixin, Base):
     __tablename__ = "dismissed_suggestions"
     id = Column(String, primary_key=True, default=lambda: gen_id("dsm"))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
@@ -127,44 +146,52 @@ class DismissedSuggestion(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class Client(Base):
+class Client(TenantScopedMixin, Base):
     __tablename__ = "clients"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "code", name="uq_clients_tenant_code"),
+        Index("ix_clients_tenant_name", "tenant_id", "name"),
+    )
     id = Column(String, primary_key=True, default=lambda: gen_id("cli"))
     name = Column(String, nullable=False)
-    code = Column(String, nullable=True, unique=True)
+    code = Column(String, nullable=True)
 
 
-class BankAccount(Base):
+class BankAccount(TenantScopedMixin, Base):
     __tablename__ = "bank_accounts"
+    __table_args__ = (Index("ix_bank_accounts_tenant_client", "tenant_id", "client_id"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("bank"))
     client_id = Column(String, ForeignKey("clients.id"), nullable=False)
     name = Column(String, nullable=False)
 
 
-class Role(Base):
+class Role(TenantScopedMixin, Base):
     __tablename__ = "roles"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_roles_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("role"))
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
 
 
-class TaskTypeOption(Base):
+class TaskTypeOption(TenantScopedMixin, Base):
     __tablename__ = "task_type_options"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_task_types_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("tto"))
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
     is_billable = Column(Boolean, nullable=False, default=False)
 
 
-class TrackedMetric(Base):
+class TrackedMetric(TenantScopedMixin, Base):
     __tablename__ = "tracked_metrics"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_metrics_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("metric"))
-    name = Column(String, nullable=False, unique=True)
+    name = Column(String, nullable=False)
 
 
-class Template(Base):
+class Template(TenantScopedMixin, Base):
     __tablename__ = "templates"
     id = Column(String, primary_key=True, default=lambda: gen_id("tpl"))
     field = Column(String, nullable=False)
-    category = Column(String, nullable=True)  # optional broad category for Insights; falls back to task type when blank
+    category = Column(String, nullable=True)
     name = Column(String, nullable=False)
     tasks = relationship(
         "TemplateTask",
@@ -174,7 +201,7 @@ class Template(Base):
     )
 
 
-class TemplateTask(Base):
+class TemplateTask(TenantScopedMixin, Base):
     __tablename__ = "template_tasks"
     id = Column(String, primary_key=True, default=lambda: gen_id("tt"))
     template_id = Column(String, ForeignKey("templates.id"), nullable=False)
@@ -182,15 +209,15 @@ class TemplateTask(Base):
     role = Column(String, default="")
     task_type = Column(String, default="")
     requires_bank_account = Column(Boolean, default=False)
-    tracks_number_label = Column(String, default="")  # e.g. "Unreconciled transactions", blank means not tracked
-    needs_pay_period = Column(Boolean, default=False)  # legacy payroll-period flag; retained for backwards compatibility only
-    period_types = Column(JSON, default=list)  # valid work-period choices, e.g. daily/weekly/monthly/year
-    period_required = Column(Boolean, default=False)  # if true, completion is blocked until a valid work period is selected
-    position = Column(Integer, nullable=False, default=0)  # explicit display/workflow order within the template
+    tracks_number_label = Column(String, default="")
+    needs_pay_period = Column(Boolean, default=False)
+    period_types = Column(JSON, default=list)
+    period_required = Column(Boolean, default=False)
+    position = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class TaskInstance(Base):
+class TaskInstance(TenantScopedMixin, Base):
     __tablename__ = "tasks"
     id = Column(String, primary_key=True, default=lambda: gen_id("task"))
     client_id = Column(String, ForeignKey("clients.id"), nullable=False)
@@ -198,9 +225,9 @@ class TaskInstance(Base):
     name = Column(String, nullable=False)
     role = Column(String, default="")
     task_type = Column(String, default="")
-    status = Column(String, default="todo")  # todo, running, paused, submitted
+    status = Column(String, default="todo")
     owner_id = Column(String, ForeignKey("members.id"), nullable=True)
-    segments = Column(JSON, default=list)  # list of {"start": iso string, "end": iso string or null}
+    segments = Column(JSON, default=list)
     note = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
     submitted_at = Column(DateTime, nullable=True)
@@ -208,52 +235,51 @@ class TaskInstance(Base):
     pushed_to_karbon = Column(Boolean, default=False)
     bank_account_id = Column(String, ForeignKey("bank_accounts.id"), nullable=True)
     bank_account_name = Column(String, default="")
-    tracks_number_label = Column(String, default="")  # copied from the template task at creation time
+    tracks_number_label = Column(String, default="")
     start_count = Column(Integer, nullable=True)
     end_count = Column(Integer, nullable=True)
-    adjusted_seconds = Column(Float, nullable=True)  # only set when the person edits the tracked time at submit
-    pay_period_type = Column(String, nullable=True)  # "weekly", "fortnightly", or "monthly"
-    pay_period_number = Column(Integer, nullable=True)  # 1-52, 1-26, or 1-12 respectively
-    needs_pay_period = Column(Boolean, default=False)  # legacy copied flag; retained for historical compatibility
-    period_types = Column(JSON, default=list)  # valid work-period choices copied from the template task
-    period_required = Column(Boolean, default=False)  # copied from template; controls whether completion requires a period
+    adjusted_seconds = Column(Float, nullable=True)
+    pay_period_type = Column(String, nullable=True)
+    pay_period_number = Column(Integer, nullable=True)
+    needs_pay_period = Column(Boolean, default=False)
+    period_types = Column(JSON, default=list)
+    period_required = Column(Boolean, default=False)
     period_type = Column(String, nullable=True)
     period_year = Column(Integer, nullable=True)
     period_number = Column(Integer, nullable=True)
-    period_start = Column(String, nullable=True)  # YYYY-MM-DD for daily/custom periods
-    period_end = Column(String, nullable=True)  # YYYY-MM-DD for custom periods
-    source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
-    quick_meeting_request_id = Column(String, nullable=True)  # client-generated idempotency key so retries cannot create a second Calendar event/task
-    calendar_event_deleted_at = Column(DateTime, nullable=True)  # preserves historical linkage while recording that the source Calendar event was deleted
-    source_template_task_id = Column(String, nullable=True)  # immutable snapshot reference to the template-task id used at creation; no FK so history survives template deletion
-    source_template_name = Column(String, nullable=True)  # immutable template-name snapshot from creation time
-    source_template_field = Column(String, nullable=True)  # legacy template field copied for compatibility
-    source_template_category = Column(String, nullable=True)  # optional broad Insights category copied from the template
-    submitted_pod_id = Column(String, nullable=True)  # pod snapshot at submission; intentionally no FK so historical access survives pod deletion
-    last_heartbeat_at = Column(DateTime, nullable=True)  # updated periodically while running, a stale value means the browser tracking it is gone (closed, crashed, or the machine shut down)
+    period_start = Column(String, nullable=True)
+    period_end = Column(String, nullable=True)
+    source_calendar_event_id = Column(String, nullable=True)
+    quick_meeting_request_id = Column(String, nullable=True)
+    calendar_event_deleted_at = Column(DateTime, nullable=True)
+    source_template_task_id = Column(String, nullable=True)
+    source_template_name = Column(String, nullable=True)
+    source_template_field = Column(String, nullable=True)
+    source_template_category = Column(String, nullable=True)
+    submitted_pod_id = Column(String, nullable=True)
+    last_heartbeat_at = Column(DateTime, nullable=True)
 
 
-class HelpEvent(Base):
+class HelpEvent(TenantScopedMixin, Base):
     __tablename__ = "help_events"
     id = Column(String, primary_key=True, default=lambda: gen_id("help"))
-    member_id = Column(String, ForeignKey("members.id"), nullable=False)  # the person reporting this event
-    colleague_id = Column(String, ForeignKey("members.id"), nullable=False)  # who was helped, or who helped them
-    direction = Column(String, nullable=False)  # "helped" (member helped colleague) or "received" (member received help from colleague)
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    colleague_id = Column(String, ForeignKey("members.id"), nullable=False)
+    direction = Column(String, nullable=False)
     seconds = Column(Float, nullable=False)
-    source = Column(String, default="idle_prompt")  # "idle_prompt" or "sleep_alert", which flow this came from
+    source = Column(String, default="idle_prompt")
     created_at = Column(DateTime, default=datetime.utcnow)
-    task_id = Column(String, ForeignKey("tasks.id"), nullable=True)  # the real, non-billable task created alongside this event, so the time shows up in Submitted today and Export too
-    adjusted = Column(Boolean, default=False)  # true if the person changed the pre-filled duration before confirming, matching the same visible flagging tasks already have
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=True)
+    adjusted = Column(Boolean, default=False)
     context = Column(Text, default="")
-    inactivity_event_id = Column(String, nullable=True)  # exact away-period this help classification resolved, if it came from the sleep/lock prompt
+    inactivity_event_id = Column(String, nullable=True)
 
 
-
-class InactivityEvent(Base):
+class InactivityEvent(TenantScopedMixin, Base):
     __tablename__ = "inactivity_events"
     id = Column(String, primary_key=True, default=lambda: gen_id("away"))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
-    kind = Column(String, nullable=False)  # screen_locked, sleep_gap, or stale_gap
+    kind = Column(String, nullable=False)
     started_at = Column(DateTime, nullable=False)
     ended_at = Column(DateTime, nullable=False)
     seconds = Column(Float, nullable=False)
