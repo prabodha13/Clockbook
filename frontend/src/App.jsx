@@ -3384,10 +3384,176 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
   );
 }
 
-function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDelete, onAddAccount, onDeleteAccount, onMergeClients }) {
+function parseClientImportCsv(text) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  const source = String(text || "").replace(/^\uFEFF/, "");
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quoted) {
+      if (ch === '"' && source[i + 1] === '"') { cell += '"'; i += 1; }
+      else if (ch === '"') quoted = false;
+      else cell += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n") { row.push(cell); rows.push(row); row = []; cell = ""; }
+    else if (ch !== "\r") cell += ch;
+  }
+  if (cell.length || row.length) { row.push(cell); rows.push(row); }
+  return rows;
+}
+
+function ClientImportModal({ onClose, onImport }) {
+  const [fileName, setFileName] = useState("");
+  const [parsedRows, setParsedRows] = useState([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function downloadTemplate() {
+    const csv = "Client name,Client code,Bank account 1,Bank account 2,Bank account 3\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "clockbook-client-import-template.csv";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function readFile(file) {
+    setError("");
+    setParsedRows([]);
+    setFileName(file?.name || "");
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setError("Please choose a CSV file.");
+      return;
+    }
+    try {
+      const matrix = parseClientImportCsv(await file.text());
+      if (matrix.length === 0) throw new Error("The CSV is empty.");
+      const headers = matrix[0].map((h) => String(h || "").trim().toLowerCase());
+      const nameIndex = headers.indexOf("client name");
+      const codeIndex = headers.indexOf("client code");
+      const accountIndexes = headers
+        .map((h, index) => ({ h, index }))
+        .filter(({ h }) => /^bank account\s+\d+$/.test(h))
+        .map(({ index }) => index);
+      if (nameIndex < 0 || codeIndex < 0) {
+        throw new Error('The CSV must contain "Client name" and "Client code" columns.');
+      }
+      const output = [];
+      const codeRows = new Map();
+      for (let i = 1; i < matrix.length; i += 1) {
+        const raw = matrix[i];
+        if (raw.every((value) => !String(value || "").trim())) continue;
+        const rowNumber = i + 1;
+        const name = String(raw[nameIndex] || "").trim();
+        const code = String(raw[codeIndex] || "").trim().toUpperCase();
+        if (!name) throw new Error(`Row ${rowNumber}: Client name is required.`);
+        if (!code) throw new Error(`Row ${rowNumber}: Client code is required.`);
+        const duplicateRow = codeRows.get(code.toLowerCase());
+        if (duplicateRow) throw new Error(`Rows ${duplicateRow} and ${rowNumber}: Client code ${code} is duplicated.`);
+        codeRows.set(code.toLowerCase(), rowNumber);
+        const bank_accounts = accountIndexes
+          .map((index) => String(raw[index] || "").trim())
+          .filter(Boolean);
+        output.push({ name, code, bank_accounts });
+      }
+      if (output.length === 0) throw new Error("The CSV does not contain any client rows.");
+      setParsedRows(output);
+    } catch (err) {
+      setError(err.message || "Could not read the CSV file.");
+    }
+  }
+
+  async function submitImport() {
+    if (!parsedRows.length || busy) return;
+    try {
+      setBusy(true);
+      setError("");
+      await onImport(parsedRows);
+      onClose();
+    } catch (err) {
+      setError(err.message || "Import failed.");
+      setBusy(false);
+    }
+  }
+
+  const accountCount = parsedRows.reduce((total, row) => total + row.bank_accounts.length, 0);
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 620 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Import clients</div>
+          <button className="cb-icon-btn" onClick={onClose} disabled={busy}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div style={{ fontSize: 14, lineHeight: 1.55, color: "var(--ink-soft)", marginBottom: 16 }}>
+            Use the ClockBook CSV template. Client name and client code are required. Bank account columns are optional; add more columns as Bank account 4, Bank account 5, and so on if needed.
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+            <button type="button" className="cb-btn" onClick={downloadTemplate}><Download size={14} />Download template</button>
+            <label className="cb-btn cb-btn-primary" style={{ cursor: busy ? "default" : "pointer" }}>
+              <FileSpreadsheet size={14} />Choose CSV
+              <input type="file" accept=".csv,text/csv" disabled={busy} onChange={(e) => readFile(e.target.files?.[0])} style={{ display: "none" }} />
+            </label>
+          </div>
+
+          {fileName && <div className="cb-hint" style={{ marginBottom: 10 }}>Selected file: {fileName}</div>}
+          {error && <div className="cb-error" style={{ marginBottom: 12 }}>{error}</div>}
+
+          {parsedRows.length > 0 && (
+            <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden" }}>
+              <div style={{ padding: "10px 12px", background: "var(--surface-soft)", fontSize: 13, fontWeight: 600 }}>
+                {parsedRows.length} client{parsedRows.length === 1 ? "" : "s"} ready to import · {accountCount} bank account{accountCount === 1 ? "" : "s"}
+              </div>
+              <div style={{ maxHeight: 230, overflow: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ textAlign: "left" }}>
+                      <th style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)" }}>Client</th>
+                      <th style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)", width: 130 }}>Code</th>
+                      <th style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)" }}>Bank accounts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {parsedRows.slice(0, 20).map((row, index) => (
+                      <tr key={`${row.code}-${index}`}>
+                        <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)" }}>{row.name}</td>
+                        <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)", fontWeight: 600 }}>{row.code}</td>
+                        <td style={{ padding: "8px 12px", borderBottom: "1px solid var(--line)", color: "var(--ink-soft)" }}>{row.bank_accounts.join(", ") || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {parsedRows.length > 20 && <div className="cb-hint" style={{ padding: "9px 12px" }}>Showing the first 20 rows.</div>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="cb-modal-foot">
+          <button type="button" className="cb-btn" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="cb-btn cb-btn-primary" onClick={submitImport} disabled={!parsedRows.length || busy}>
+            {busy ? "Importing..." : `Import${parsedRows.length ? ` ${parsedRows.length} clients` : ""}`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onImport, onUpdate, onDelete, onAddAccount, onDeleteAccount, onMergeClients }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [showImport, setShowImport] = useState(false);
   const [error, setError] = useState("");
 
   const visibleClients = useMemo(() => {
@@ -3419,6 +3585,7 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDel
           <div className="cb-page-title cb-serif">Clients</div>
           <div className="cb-page-sub">Every task on the dashboard is tracked against one of these. Click a client to manage its bank accounts.</div>
         </div>
+        {isAdmin && <button type="button" className="cb-btn" onClick={() => setShowImport(true)}><FileSpreadsheet size={14} />Import CSV</button>}
       </div>
       <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 10, maxWidth: 560 }}>
         <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} required />
@@ -3451,6 +3618,7 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDel
           );
         })}
       </div>
+      {showImport && <ClientImportModal onClose={() => setShowImport(false)} onImport={onImport} />}
     </div>
   );
 }
@@ -7883,6 +8051,15 @@ export default function App() {
     return client;
   }
 
+  async function importClients(rows) {
+    const result = await api.importClients(rows);
+    const [freshClients, freshBankAccounts] = await Promise.all([api.getClients(), api.getBankAccounts()]);
+    setClients(freshClients);
+    setBankAccounts(freshBankAccounts);
+    showToast(`${result.imported_clients} client${result.imported_clients === 1 ? "" : "s"} imported`);
+    return result;
+  }
+
   async function updateClient(clientId, name, code) {
     const updated = await api.updateClient(clientId, name, code);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
@@ -8153,7 +8330,7 @@ export default function App() {
             {view === "clients" && (
               <Clients
                 clients={clients} tasks={tasks} bankAccounts={bankAccounts} isAdmin={isAdmin}
-                onAdd={addClient} onUpdate={updateClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
+                onAdd={addClient} onImport={importClients} onUpdate={updateClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
                 onMergeClients={mergeClients}
               />
             )}
