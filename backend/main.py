@@ -119,6 +119,25 @@ def _ensure_operational_indexes():
             if table in tables:
                 conn.execute(text(stmt))
 
+    # New client codes are mandatory and case-insensitively unique. Legacy installations
+    # can already contain duplicate/non-coded clients, so only add the database invariant
+    # once the existing non-empty codes are clean. Until then, the API-level advisory lock
+    # and availability check still prevent any new duplicate code from being created.
+    if "clients" in tables:
+        with engine.begin() as conn:
+            duplicate_code = conn.execute(text(
+                "SELECT LOWER(TRIM(code)) AS normalized_code "
+                "FROM clients WHERE code IS NOT NULL AND TRIM(code) <> '' "
+                "GROUP BY LOWER(TRIM(code)) HAVING COUNT(*) > 1 LIMIT 1"
+            )).first()
+            if duplicate_code is None:
+                conn.execute(text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS uq_clients_code_ci "
+                    "ON clients (LOWER(code)) WHERE code IS NOT NULL AND TRIM(code) <> ''"
+                ))
+            else:
+                _log_event("client_code_unique_index_pending", duplicate_code=duplicate_code[0])
+
 
 def _cleanup_operational_state(db: Session):
     cutoff = datetime.utcnow() - timedelta(days=2)
@@ -2814,9 +2833,18 @@ def list_clients(current_member: models.Member = Depends(get_current_member), db
     return db.query(models.Client).filter(models.Client.id != UNASSIGNED_CLIENT_ID).all()
 
 
+def normalize_client_code(code: str) -> str:
+    normalized = (code or "").strip().upper()
+    if not normalized:
+        raise HTTPException(400, "Client code is required")
+    return normalized
+
+
 def check_client_code_available(db, code, exclude_client_id=None):
-    if not code:
-        return
+    # Serialize code claims in production so two simultaneous requests cannot both pass
+    # the availability check before either commits.
+    if engine.dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": code.lower()})
     query = db.query(models.Client).filter(func.lower(models.Client.code) == code.lower())
     if exclude_client_id:
         query = query.filter(models.Client.id != exclude_client_id)
@@ -2827,11 +2855,18 @@ def check_client_code_available(db, code, exclude_client_id=None):
 
 @app.post("/api/clients", response_model=schemas.ClientOut, status_code=201)
 def create_client(payload: schemas.ClientCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    code = payload.code.strip() if payload.code else None
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Enter a client name")
+    code = normalize_client_code(payload.code)
     check_client_code_available(db, code)
-    client = models.Client(name=payload.name.strip(), code=code)
+    client = models.Client(name=name, code=code)
     db.add(client)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, f'The code "{code}" is already in use')
     db.refresh(client)
     return client
 
@@ -2845,7 +2880,7 @@ def update_client(client_id: str, payload: schemas.ClientCreate, current_member:
     new_name = payload.name.strip()
     if not new_name:
         raise HTTPException(400, "Enter a client name")
-    code = payload.code.strip() if payload.code else None
+    code = normalize_client_code(payload.code)
     check_client_code_available(db, code, exclude_client_id=client_id)
     client.name = new_name
     client.code = code
@@ -2853,7 +2888,11 @@ def update_client(client_id: str, payload: schemas.ClientCreate, current_member:
     # existing task in sync too, so old and new entries never show two different names for
     # what is now the same client.
     db.query(models.TaskInstance).filter(models.TaskInstance.client_id == client_id).update({"client_name": new_name})
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, f'The code "{code}" is already in use')
     db.refresh(client)
     return client
 

@@ -118,7 +118,7 @@ class ClientOut(BaseModel):
 
 class ClientCreate(BaseModel):
     name: str
-    code: Optional[str] = None
+    code: str
 
 
 class RoleOut(BaseModel):
