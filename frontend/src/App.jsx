@@ -2202,6 +2202,65 @@ function InviteMemberModal({ onClose, onInvite, currentUser }) {
   );
 }
 
+function ManualAddMemberModal({ onClose, onAdd }) {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setError("");
+    if (password.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onAdd(name, email, password);
+      onClose();
+    } catch (err) {
+      setError(err.message || "Could not add staff member");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Add staff manually</div>
+          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+        <form onSubmit={submit}>
+          <div className="cb-modal-body">
+            <div className="cb-field">
+              <label className="cb-label">Name</label>
+              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+            </div>
+            <div className="cb-field">
+              <label className="cb-label">Email</label>
+              <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            </div>
+            <div className="cb-field">
+              <label className="cb-label">Temporary password</label>
+              <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
+            </div>
+            <div className="cb-hint">Creates a Staff account directly in this workspace. Use Invite teammate when the person should set their own password or already has a ClockBook login.</div>
+            {error && <div className="cb-error">{error}</div>}
+          </div>
+          <div className="cb-modal-foot">
+            <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>{busy ? "Adding..." : "Add staff"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function WorkPeriodTypePicker({ value, onChange, open, onOpenChange }) {
   const buttonRef = useRef(null);
   const menuRef = useRef(null);
@@ -5677,7 +5736,7 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
@@ -5755,7 +5814,12 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, invitationRefre
           <div className="cb-page-sub">Everyone with access to this workspace, and who has admin rights.</div>
         </div>
         {isAdmin && (
-          <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Invite teammate</button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            {currentUser?.role === "super_admin" && (
+              <button className="cb-btn cb-btn-ghost" onClick={onManualAddMember}><Plus size={15} />Add staff manually</button>
+            )}
+            <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Invite teammate</button>
+          </div>
         )}
       </div>
       {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
@@ -7383,6 +7447,7 @@ export default function App() {
   const [completingTask, setCompletingTask] = useState(null);
   const [startCountPrompt, setStartCountPrompt] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
+  const [showManualAddMember, setShowManualAddMember] = useState(false);
   const [invitationRefreshKey, setInvitationRefreshKey] = useState(0);
   const [sleepAlert, setSleepAlert] = useState(null);
   const [meetingAlert, setMeetingAlert] = useState(null);
@@ -8259,6 +8324,12 @@ export default function App() {
     return invitation;
   }
 
+  async function addStaffManually(name, email, password) {
+    const created = await api.createMember(name.trim(), email.trim(), password);
+    setMembers((prev) => [...prev, created]);
+    return created;
+  }
+
   async function setMemberCredentials(memberId, email, password) {
     const updated = await api.setMemberCredentials(memberId, email.trim(), password);
     setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
@@ -8786,7 +8857,7 @@ export default function App() {
             {view === "staff" && (
               <StaffView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
-                onAddMember={() => setShowAddMember(true)} invitationRefreshKey={invitationRefreshKey} onChangeRole={changeMemberRole}
+                onAddMember={() => setShowAddMember(true)} onManualAddMember={() => setShowManualAddMember(true)} invitationRefreshKey={invitationRefreshKey} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
                 onChangeTimezone={changeMemberTimezone}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
@@ -8873,6 +8944,9 @@ export default function App() {
       ) : null}
       {showAddMember && (
         <InviteMemberModal onClose={() => setShowAddMember(false)} onInvite={addTeammate} currentUser={effectiveCurrentUser} />
+      )}
+      {showManualAddMember && effectiveCurrentUser?.role === "super_admin" && (
+        <ManualAddMemberModal onClose={() => setShowManualAddMember(false)} onAdd={addStaffManually} />
       )}
       {sleepAlert && (
         <SleepAlertModal
