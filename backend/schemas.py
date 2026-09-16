@@ -117,6 +117,41 @@ class TenantCreate(BaseModel):
     slug: Optional[str] = None
 
 
+class TenantInvitationCreate(BaseModel):
+    name: str
+    email: str
+    role: str = "member"
+
+
+class TenantInvitationOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    email: str
+    name: str
+    role: str
+    status: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class TenantInvitationCreated(TenantInvitationOut):
+    token: str
+
+
+class TenantInvitationPublic(BaseModel):
+    workspace_name: str
+    email: str
+    name: str
+    role: str
+    existing_user: bool = False
+    expires_at: datetime
+
+
+class TenantInvitationAccept(BaseModel):
+    password: str
+    name: Optional[str] = None
+
+
 class ClaimAccountRequest(BaseModel):
     member_id: Optional[str] = None
     name: Optional[str] = None

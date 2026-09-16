@@ -110,6 +110,7 @@ def _ensure_operational_indexes():
         "CREATE INDEX IF NOT EXISTS ix_sessions_tenant_member ON sessions (tenant_id, member_id)",
         "CREATE INDEX IF NOT EXISTS ix_help_events_tenant_member_created ON help_events (tenant_id, member_id, created_at)",
         "CREATE INDEX IF NOT EXISTS ix_inactivity_tenant_member_started ON inactivity_events (tenant_id, member_id, started_at)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_invitations_pending_email ON tenant_invitations (tenant_id, LOWER(email)) WHERE accepted_at IS NULL AND revoked_at IS NULL",
     ]
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
@@ -1114,11 +1115,23 @@ def platform_list_tenants(current_member: models.Member = Depends(get_current_me
 def platform_create_tenant(payload: schemas.TenantCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     user = _require_platform_admin(current_member, db)
     name = payload.name.strip()
-    slug = _slugify_tenant(payload.slug or name)
-    if not name or not slug:
+    requested_slug = _slugify_tenant(payload.slug or "")
+    base_slug = requested_slug or _slugify_tenant(name)
+    if not name or not base_slug:
         raise HTTPException(400, "Workspace name is required")
-    if db.query(models.Tenant).filter(or_(func.lower(models.Tenant.name) == name.lower(), models.Tenant.slug == slug)).first():
-        raise HTTPException(400, "A workspace with that name or slug already exists")
+    if requested_slug:
+        if db.query(models.Tenant).filter(models.Tenant.slug == requested_slug).first():
+            raise HTTPException(400, "That workspace slug is already in use")
+        slug = requested_slug
+    else:
+        # Display names are not tenant identities and may legitimately repeat. When the
+        # generated readable slug collides, add a suffix while the real tenant ID remains
+        # globally unique and is what data ownership is scoped against.
+        slug = base_slug
+        suffix = 2
+        while db.query(models.Tenant).filter(models.Tenant.slug == slug).first():
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
     tenant = models.Tenant(name=name, slug=slug, status="active")
     db.add(tenant); db.flush()
     previous = db.info.get("tenant_id")
@@ -1880,6 +1893,233 @@ def dismiss_suggested_task(event_id: str, current_member: models.Member = Depend
 
 
 # ---------------------------------------------------------------
+# Tenant invitations / memberships
+# ---------------------------------------------------------------
+
+INVITATION_TTL_DAYS = 7
+
+
+def _invitation_token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _invite_role_allowed(current_member: models.Member, role: str) -> bool:
+    if role not in ("member", "admin", "super_admin"):
+        return False
+    if role == "super_admin" and current_member.role != "super_admin":
+        return False
+    return current_member.role in ("admin", "super_admin")
+
+
+def _find_invitation_by_token(db: Session, token: str, lock: bool = False):
+    token = (token or "").strip()
+    if not token:
+        return None
+    q = db.query(models.TenantInvitation).filter(
+        models.TenantInvitation.token_hash == _invitation_token_hash(token)
+    ).execution_options(skip_tenant_scope=True)
+    if lock and engine.dialect.name == "postgresql":
+        q = q.with_for_update()
+    return q.first()
+
+
+def _validate_live_invitation(invitation: models.TenantInvitation):
+    if not invitation:
+        raise HTTPException(404, "Invitation not found")
+    if invitation.accepted_at:
+        raise HTTPException(410, "This invitation has already been used")
+    if invitation.revoked_at:
+        raise HTTPException(410, "This invitation has been revoked")
+    if invitation.expires_at < datetime.utcnow():
+        raise HTTPException(410, "This invitation has expired")
+
+
+@app.get("/api/invitations/{token}", response_model=schemas.TenantInvitationPublic)
+def get_invitation(token: str, db: Session = Depends(get_db)):
+    invitation = _find_invitation_by_token(db, token)
+    _validate_live_invitation(invitation)
+    tenant = db.get(models.Tenant, invitation.tenant_id)
+    if not tenant or tenant.status != "active":
+        raise HTTPException(410, "This workspace is no longer available")
+    user = db.query(models.User).filter(func.lower(models.User.email) == invitation.email.lower()).first()
+    return schemas.TenantInvitationPublic(
+        workspace_name=tenant.name,
+        email=invitation.email,
+        name=invitation.name,
+        role=invitation.role,
+        existing_user=bool(user),
+        expires_at=invitation.expires_at,
+    )
+
+
+@app.post("/api/invitations/{token}/accept", response_model=schemas.LoginResponse)
+def accept_invitation(token: str, payload: schemas.TenantInvitationAccept, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit(db, f"invite-accept:{_client_ip(request)}", limit=20, window_seconds=900)
+    invitation = _find_invitation_by_token(db, token, lock=True)
+    _validate_live_invitation(invitation)
+    tenant = db.get(models.Tenant, invitation.tenant_id)
+    if not tenant or tenant.status != "active":
+        raise HTTPException(410, "This workspace is no longer available")
+
+    email = invitation.email.strip().lower()
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if user:
+        if user.status != "active":
+            raise HTTPException(400, "This login is not active")
+        if not user.password_hash or not verify_password(payload.password, user.password_hash):
+            # This is intentionally a 400 rather than a 401. A failed invitation password
+            # check must not make the browser treat an unrelated current session as revoked.
+            raise HTTPException(400, "That password does not match your existing ClockBook login")
+    else:
+        if len(payload.password or "") < 8:
+            raise HTTPException(400, "Password must be at least 8 characters")
+        user = models.User(
+            email=email,
+            password_hash=hash_password(payload.password),
+            default_tenant_id=invitation.tenant_id,
+        )
+        db.add(user)
+        db.flush()
+
+    # From this point on, every tenant-owned read/write is automatically scoped to the
+    # invited workspace, including the membership and new session created below.
+    db.info["tenant_id"] = invitation.tenant_id
+    existing_membership = db.query(models.Member).filter(models.Member.user_id == user.id).first()
+    if existing_membership:
+        invitation.accepted_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(400, "You already belong to this workspace")
+
+    display_name = (payload.name or invitation.name or "").strip()
+    if not display_name:
+        raise HTTPException(400, "Name is required")
+    color_idx = db.query(models.Member).count()
+    member = models.Member(
+        user_id=user.id,
+        name=display_name,
+        email=user.email,
+        password_hash=user.password_hash,
+        color_idx=color_idx,
+        role=invitation.role,
+    )
+    db.add(member)
+    db.flush()
+    invitation.accepted_at = datetime.utcnow()
+    session_token = secrets.token_urlsafe(32)
+    db.add(models.Session(token=session_token, user_id=user.id, member_id=member.id))
+    db.add(models.LoginEvent(member_id=member.id))
+    db.commit()
+    db.refresh(member)
+    return schemas.LoginResponse(token=session_token, member=member)
+
+
+@app.get("/api/tenant-invitations", response_model=list[schemas.TenantInvitationOut])
+def list_tenant_invitations(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    return db.query(models.TenantInvitation).order_by(models.TenantInvitation.created_at.desc()).limit(100).all()
+
+
+@app.post("/api/tenant-invitations", response_model=schemas.TenantInvitationCreated, status_code=201)
+def create_tenant_invitation(payload: schemas.TenantInvitationCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    email = payload.email.strip().lower()
+    name = payload.name.strip()
+    role = (payload.role or "member").strip()
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if not email or "@" not in email:
+        raise HTTPException(400, "Enter a valid email address")
+    if not _invite_role_allowed(current_member, role):
+        raise HTTPException(403, "You cannot invite someone with that access level")
+
+    user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
+    if user and db.query(models.Member).filter(models.Member.user_id == user.id).first():
+        raise HTTPException(400, "That person is already a member of this workspace")
+
+    now = datetime.utcnow()
+    pending = db.query(models.TenantInvitation).filter(
+        func.lower(models.TenantInvitation.email) == email,
+        models.TenantInvitation.accepted_at.is_(None),
+        models.TenantInvitation.revoked_at.is_(None),
+    ).order_by(models.TenantInvitation.created_at.desc()).first()
+    if pending and pending.expires_at >= now:
+        raise HTTPException(400, "There is already a pending invitation for that email")
+    if pending and pending.expires_at < now:
+        pending.revoked_at = now
+
+    raw_token = secrets.token_urlsafe(32)
+    invitation = models.TenantInvitation(
+        email=email,
+        name=name,
+        role=role,
+        token_hash=_invitation_token_hash(raw_token),
+        invited_by_id=current_member.id,
+        expires_at=now + timedelta(days=INVITATION_TTL_DAYS),
+    )
+    db.add(invitation)
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, "There is already a pending invitation for that email")
+    db.refresh(invitation)
+    return schemas.TenantInvitationCreated(
+        id=invitation.id,
+        email=invitation.email,
+        name=invitation.name,
+        role=invitation.role,
+        status=invitation.status,
+        created_at=invitation.created_at,
+        expires_at=invitation.expires_at,
+        token=raw_token,
+    )
+
+
+@app.post("/api/tenant-invitations/{invitation_id}/regenerate", response_model=schemas.TenantInvitationCreated)
+def regenerate_tenant_invitation(invitation_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    invitation = db.get(models.TenantInvitation, invitation_id)
+    if not invitation:
+        raise HTTPException(404, "Invitation not found")
+    if invitation.accepted_at:
+        raise HTTPException(400, "An accepted invitation cannot be regenerated")
+    if invitation.revoked_at:
+        raise HTTPException(400, "A revoked invitation cannot be regenerated")
+    if not _invite_role_allowed(current_member, invitation.role):
+        raise HTTPException(403, "You cannot manage that invitation")
+    raw_token = secrets.token_urlsafe(32)
+    invitation.token_hash = _invitation_token_hash(raw_token)
+    invitation.expires_at = datetime.utcnow() + timedelta(days=INVITATION_TTL_DAYS)
+    db.commit()
+    db.refresh(invitation)
+    return schemas.TenantInvitationCreated(
+        id=invitation.id,
+        email=invitation.email,
+        name=invitation.name,
+        role=invitation.role,
+        status=invitation.status,
+        created_at=invitation.created_at,
+        expires_at=invitation.expires_at,
+        token=raw_token,
+    )
+
+
+@app.delete("/api/tenant-invitations/{invitation_id}", status_code=204)
+def revoke_tenant_invitation(invitation_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    invitation = db.get(models.TenantInvitation, invitation_id)
+    if not invitation:
+        return None
+    if invitation.accepted_at:
+        raise HTTPException(400, "An accepted invitation cannot be revoked")
+    if not _invite_role_allowed(current_member, invitation.role):
+        raise HTTPException(403, "You cannot manage that invitation")
+    invitation.revoked_at = datetime.utcnow()
+    db.commit()
+    return None
+
+
+# ---------------------------------------------------------------
 # Members
 # ---------------------------------------------------------------
 
@@ -1897,6 +2137,8 @@ def create_member(payload: schemas.MemberCreate, current_member: models.Member =
     user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
     if user and db.query(models.Member).filter(models.Member.user_id == user.id).first():
         raise HTTPException(400, "That person is already a member of this workspace")
+    if user:
+        raise HTTPException(400, "That email already has a ClockBook login. Invite them to this workspace instead")
     if not user:
         user = models.User(
             email=email, password_hash=hash_password(payload.password),

@@ -61,3 +61,21 @@ After deployment, verify:
 5. `GET /api/auth/workspaces` reports Around Finance as the active tenant for an existing user.
 
 For PostgreSQL the migration also removes the old global uniqueness constraints and replaces them with tenant-scoped indexes. Fresh SQLite databases use the multi-tenant schema directly; upgraded legacy SQLite databases are supported for the Around Finance migration, while PostgreSQL remains the production target for operating multiple tenants.
+
+## Tenant user invitations
+
+Tenant membership is managed separately from global login identity. Admins and Super Admins can create secure workspace invitations from the Staff page instead of choosing passwords for other people.
+
+Invitation flow:
+
+- The invitation is bound to the current tenant, email address and requested tenant role.
+- Invitation links expire after 7 days.
+- Only a SHA-256 hash of the invitation token is stored in the database; the raw token is shown only when the invitation is created or regenerated.
+- Pending invitations can be regenerated or revoked from the Staff page.
+- A regular Admin can invite Staff or Admin users. Only a Super Admin can invite another Super Admin.
+- If the invited email already has a ClockBook login in another tenant, the person verifies that existing password and ClockBook creates only a new membership. Their existing password is not changed.
+- If the email is new to ClockBook, the invitee chooses their own password while accepting the invitation.
+- Accepting an invitation creates a tenant-bound session and opens the invited workspace immediately.
+- An email address that already belongs to the current tenant cannot be invited again.
+
+ClockBook currently generates a secure invitation link for the administrator to send through their normal communication channel. No outbound email provider is required for the invitation system itself.

@@ -96,6 +96,34 @@ class Member(TenantScopedMixin, Base):
         return bool(self.slack_user_id)
 
 
+class TenantInvitation(TenantScopedMixin, Base):
+    __tablename__ = "tenant_invitations"
+    __table_args__ = (
+        Index("ix_tenant_invitations_tenant_email", "tenant_id", "email"),
+        Index("ix_tenant_invitations_token_hash", "token_hash", unique=True),
+    )
+    id = Column(String, primary_key=True, default=lambda: gen_id("inv"))
+    email = Column(String, nullable=False)
+    name = Column(String, nullable=False)
+    role = Column(String, nullable=False, default="member")
+    token_hash = Column(String, nullable=False)
+    invited_by_id = Column(String, ForeignKey("members.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    accepted_at = Column(DateTime, nullable=True)
+    revoked_at = Column(DateTime, nullable=True)
+
+    @property
+    def status(self):
+        if self.accepted_at:
+            return "accepted"
+        if self.revoked_at:
+            return "revoked"
+        if self.expires_at and self.expires_at < datetime.utcnow():
+            return "expired"
+        return "pending"
+
+
 class Session(TenantScopedMixin, Base):
     __tablename__ = "sessions"
     token = Column(String, primary_key=True)
