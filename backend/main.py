@@ -2101,7 +2101,15 @@ def accept_invitation(token: str, payload: schemas.TenantInvitationAccept, reque
 @app.get("/api/tenant-invitations", response_model=list[schemas.TenantInvitationOut])
 def list_tenant_invitations(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
-    return db.query(models.TenantInvitation).order_by(models.TenantInvitation.created_at.desc()).limit(100).all()
+    # Be explicit here even though the ORM tenant guard also applies. Invitations are an
+    # access-control surface and must never leak into another workspace's Staff page.
+    return (
+        db.query(models.TenantInvitation)
+        .filter(models.TenantInvitation.tenant_id == current_member.tenant_id)
+        .order_by(models.TenantInvitation.created_at.desc())
+        .limit(100)
+        .all()
+    )
 
 
 @app.post("/api/tenant-invitations", response_model=schemas.TenantInvitationCreated, status_code=201)
@@ -2118,11 +2126,15 @@ def create_tenant_invitation(payload: schemas.TenantInvitationCreate, request: R
         raise HTTPException(403, "You cannot invite someone with that access level")
 
     user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
-    if user and db.query(models.Member).filter(models.Member.user_id == user.id).first():
+    if user and db.query(models.Member).filter(
+        models.Member.user_id == user.id,
+        models.Member.tenant_id == current_member.tenant_id,
+    ).first():
         raise HTTPException(400, "That person is already a member of this workspace")
 
     now = datetime.utcnow()
     pending = db.query(models.TenantInvitation).filter(
+        models.TenantInvitation.tenant_id == current_member.tenant_id,
         func.lower(models.TenantInvitation.email) == email,
         models.TenantInvitation.accepted_at.is_(None),
         models.TenantInvitation.revoked_at.is_(None),
@@ -2134,6 +2146,7 @@ def create_tenant_invitation(payload: schemas.TenantInvitationCreate, request: R
 
     raw_token = secrets.token_urlsafe(32)
     invitation = models.TenantInvitation(
+        tenant_id=current_member.tenant_id,
         email=email,
         name=name,
         role=role,
@@ -2168,7 +2181,10 @@ def create_tenant_invitation(payload: schemas.TenantInvitationCreate, request: R
 @app.post("/api/tenant-invitations/{invitation_id}/regenerate", response_model=schemas.TenantInvitationCreated)
 def regenerate_tenant_invitation(invitation_id: str, request: Request, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
-    invitation = db.get(models.TenantInvitation, invitation_id)
+    invitation = db.query(models.TenantInvitation).filter(
+        models.TenantInvitation.id == invitation_id,
+        models.TenantInvitation.tenant_id == current_member.tenant_id,
+    ).first()
     if not invitation:
         raise HTTPException(404, "Invitation not found")
     if invitation.accepted_at:
@@ -2202,7 +2218,10 @@ def regenerate_tenant_invitation(invitation_id: str, request: Request, current_m
 @app.delete("/api/tenant-invitations/{invitation_id}", status_code=204)
 def revoke_tenant_invitation(invitation_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
-    invitation = db.get(models.TenantInvitation, invitation_id)
+    invitation = db.query(models.TenantInvitation).filter(
+        models.TenantInvitation.id == invitation_id,
+        models.TenantInvitation.tenant_id == current_member.tenant_id,
+    ).first()
     if not invitation:
         return None
     if invitation.accepted_at:
@@ -2225,12 +2244,23 @@ def list_members(current_member: models.Member = Depends(get_current_member), db
 
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
 def create_member(payload: schemas.MemberCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    require_admin(current_member)
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can add staff manually")
+    name = payload.name.strip()
     email = payload.email.strip().lower()
+    if not name:
+        raise HTTPException(400, "Name is required")
+    if not email or "@" not in email:
+        raise HTTPException(400, "Enter a valid email address")
+    if len(payload.password or "") < 8:
+        raise HTTPException(400, "Password must be at least 8 characters")
     if not email:
         raise HTTPException(400, "Email is required")
     user = db.query(models.User).filter(func.lower(models.User.email) == email).first()
-    if user and db.query(models.Member).filter(models.Member.user_id == user.id).first():
+    if user and db.query(models.Member).filter(
+        models.Member.user_id == user.id,
+        models.Member.tenant_id == current_member.tenant_id,
+    ).first():
         raise HTTPException(400, "That person is already a member of this workspace")
     if user:
         raise HTTPException(400, "That email already has a ClockBook login. Invite them to this workspace instead")
@@ -2243,7 +2273,8 @@ def create_member(payload: schemas.MemberCreate, current_member: models.Member =
         db.flush()
     count = db.query(models.Member).count()
     member = models.Member(
-        user_id=user.id, name=payload.name.strip(), email=email, color_idx=count, role="member",
+        tenant_id=current_member.tenant_id,
+        user_id=user.id, name=name, email=email, color_idx=count, role="member",
         password_hash=user.password_hash,
     )
     db.add(member)
