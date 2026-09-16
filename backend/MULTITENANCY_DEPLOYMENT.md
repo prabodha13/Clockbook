@@ -50,6 +50,12 @@ If `CLOCKBOOK_PLATFORM_ADMIN_EMAILS` is not set, platform tenant creation is una
 
 Karbon, Calamari, inactivity settings and future tenant settings are stored per tenant. Existing Around Finance integration settings are migrated automatically. Environment-based Karbon and Slack fallback credentials are retained only for Around Finance so a future tenant cannot inherit Around Finance credentials accidentally. Google Calendar remains per member.
 
+External integrations are optional per workspace. ClockBook exposes non-secret connection-status flags to the frontend so integration-specific UI can disappear when the current workspace has not chosen that service. In particular, **Karbon Check** is hidden unless Karbon is connected, and Calamari-specific Leave Trends / leave-adjustment messaging is hidden unless Calamari is connected. Core ClockBook capacity reporting continues without Calamari.
+
+## Workspace branding
+
+Each workspace can store its own company logo under **Settings > Organisation**. Super Admins can upload, replace or remove the logo. The browser resizes the image before upload and ClockBook stores the tenant-scoped logo in `tenant_settings`; it is then returned with that user's workspace memberships so the top-bar workspace switcher can show the correct company logo for each tenant.
+
 ## Deployment verification
 
 After deployment, verify:

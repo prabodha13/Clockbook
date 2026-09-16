@@ -117,6 +117,10 @@ class TenantCreate(BaseModel):
     slug: Optional[str] = None
 
 
+class WorkspaceBrandingUpdate(BaseModel):
+    logo_data_url: Optional[str] = None
+
+
 class TenantInvitationCreate(BaseModel):
     name: str
     email: str

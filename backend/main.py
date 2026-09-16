@@ -1028,12 +1028,62 @@ def list_my_workspaces(current_member: models.Member = Depends(get_current_membe
     tenant_ids = [m.tenant_id for m in memberships]
     tenants = db.query(models.Tenant).filter(models.Tenant.id.in_(tenant_ids)).all() if tenant_ids else []
     by_id = {t.id: t for t in tenants}
+    logo_rows = db.query(models.TenantSetting).filter(
+        models.TenantSetting.tenant_id.in_(tenant_ids),
+        models.TenantSetting.key == "workspace_logo_data_url",
+    ).execution_options(skip_tenant_scope=True).all() if tenant_ids else []
+    logos_by_tenant = {row.tenant_id: row.value for row in logo_rows if row.value}
     return {
         "active_tenant_id": current_member.tenant_id,
         "workspaces": [
-            {"id": m.tenant_id, "name": by_id[m.tenant_id].name if m.tenant_id in by_id else m.tenant_id, "role": m.role}
+            {
+                "id": m.tenant_id,
+                "name": by_id[m.tenant_id].name if m.tenant_id in by_id else m.tenant_id,
+                "role": m.role,
+                "logo_data_url": logos_by_tenant.get(m.tenant_id, ""),
+            }
             for m in memberships
         ],
+    }
+
+
+def _validate_workspace_logo_data_url(value: str) -> str:
+    value = (value or "").strip()
+    if not value:
+        return ""
+    allowed_prefixes = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,")
+    prefix = next((p for p in allowed_prefixes if value.startswith(p)), None)
+    if not prefix:
+        raise HTTPException(400, "Logo must be a PNG, JPEG or WebP image")
+    try:
+        raw = base64.b64decode(value[len(prefix):], validate=True)
+    except Exception:
+        raise HTTPException(400, "Logo image data is invalid")
+    if len(raw) > 350_000:
+        raise HTTPException(400, "Logo is too large. Use an image under 350 KB after resizing")
+    return value
+
+
+@app.get("/api/workspace/branding")
+def get_workspace_branding(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    tenant = db.get(models.Tenant, current_member.tenant_id)
+    return {
+        "workspace_id": current_member.tenant_id,
+        "name": tenant.name if tenant else current_member.tenant_id,
+        "logo_data_url": _setting_value(db, "workspace_logo_data_url"),
+    }
+
+
+@app.put("/api/workspace/branding")
+def update_workspace_branding(payload: schemas.WorkspaceBrandingUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can manage workspace branding")
+    logo = _validate_workspace_logo_data_url(payload.logo_data_url or "")
+    _set_setting_value(db, "workspace_logo_data_url", logo)
+    db.commit()
+    return {
+        "workspace_id": current_member.tenant_id,
+        "logo_data_url": logo,
     }
 
 
@@ -5087,6 +5137,32 @@ def _karbon_get_all(path, params=None, db: Session = None, headers=None):
     except Exception as exc:
         raise HTTPException(502, f"Could not reach Karbon: {str(exc)}")
     return rows
+
+
+def _karbon_connected_for_workspace(db: Session) -> bool:
+    mode = _setting_value(db, "karbon_config_mode").strip().lower()
+    token_enc = _setting_value(db, "karbon_application_id_encrypted")
+    access_enc = _setting_value(db, "karbon_access_key_encrypted")
+    if token_enc and access_enc:
+        return True
+    if mode != "disabled" and _current_tenant_id(db) == AROUND_TENANT_ID:
+        return bool((os.environ.get("KARBON_TOKEN") or "").strip() and (os.environ.get("KARBON_ACCESS_KEY") or "").strip())
+    return False
+
+
+def _calamari_connected_for_workspace(db: Session) -> bool:
+    mode = _setting_value(db, "calamari_config_mode").strip().lower()
+    return bool(mode != "disabled" and _setting_value(db, "calamari_tenant").strip() and _setting_value(db, "calamari_api_key_encrypted"))
+
+
+@app.get("/api/integrations/status")
+def get_integration_status(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Non-secret capability flags are intentionally available to every member so the UI can
+    # hide features a workspace has not chosen to connect. Credentials remain Super Admin-only.
+    return {
+        "karbon_connected": _karbon_connected_for_workspace(db),
+        "calamari_connected": _calamari_connected_for_workspace(db),
+    }
 
 
 @app.get("/api/integrations/karbon")
