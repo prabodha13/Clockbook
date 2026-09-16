@@ -1508,6 +1508,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             period_number: periodByTaskId[t.id]?.number ? parseInt(periodByTaskId[t.id].number, 10) : null,
             period_start: periodByTaskId[t.id]?.start || null,
             period_end: periodByTaskId[t.id]?.end || null,
+            source_template_task_id: t.id,
             source_template_name: selectedTemplate.name,
             source_template_field: selectedTemplate.field,
             source_template_category: selectedTemplate.category || null,
