@@ -330,6 +330,7 @@ class AdHocMeetingFinish(BaseModel):
 
 class QuickMeetingCreate(BaseModel):
     summary: str
+    request_id: Optional[str] = None
     attendee_member_ids: List[str] = []
     external_emails: List[str] = []
     client_id: Optional[str] = None

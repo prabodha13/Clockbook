@@ -108,6 +108,12 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE members ADD COLUMN staff_tour_completed BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET staff_tour_completed = FALSE WHERE staff_tour_completed IS NULL"))
 
+    if "google_oauth_states" in inspector.get_table_names():
+        existing_google_state_columns = {c["name"] for c in inspector.get_columns("google_oauth_states")}
+        with engine.begin() as conn:
+            if "code_verifier" not in existing_google_state_columns:
+                conn.execute(text("ALTER TABLE google_oauth_states ADD COLUMN code_verifier VARCHAR"))
+
     if "clients" in inspector.get_table_names():
         existing_client_columns = {c["name"] for c in inspector.get_columns("clients")}
         with engine.begin() as conn:
@@ -193,6 +199,10 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN period_end VARCHAR"))
             if "source_calendar_event_id" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_calendar_event_id VARCHAR"))
+            if "quick_meeting_request_id" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN quick_meeting_request_id VARCHAR"))
+            if "calendar_event_deleted_at" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN calendar_event_deleted_at TIMESTAMP"))
             if "source_template_name" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
             if "source_template_field" not in existing_task_columns:
@@ -299,6 +309,21 @@ def _ensure_one_running_timer_invariant(db: Session):
         print(f"[timer-integrity] database-level one-running-timer index not installed for dialect={dialect}")
 
 
+def _ensure_quick_meeting_idempotency_invariant():
+    """Ensure one local Quick Meeting result per user/request key.
+
+    The Google event itself also receives a deterministic event id derived from the same
+    request key, so this DB rule is the local half of end-to-end idempotency.
+    """
+    if engine.dialect.name in ("postgresql", "sqlite"):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_quick_meeting_request "
+                "ON tasks (owner_id, quick_meeting_request_id) "
+                "WHERE quick_meeting_request_id IS NOT NULL AND owner_id IS NOT NULL"
+            ))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -350,6 +375,9 @@ async def lifespan(app: FastAPI):
         # database invariant as well as application logic. This does not change normal timer
         # behaviour; it closes the millisecond race where two tabs could both start at once.
         _ensure_one_running_timer_invariant(db)
+        # Phase 3 integration integrity: retries/double actions for Quick Meeting must
+        # resolve to the same local task rather than creating duplicates.
+        _ensure_quick_meeting_idempotency_invariant()
     finally:
         db.close()
     yield
@@ -638,9 +666,17 @@ GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events"
 def get_google_connect_url(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(500, "Google Calendar integration has not been configured on this server yet")
-    # Clear out any previous, unused attempt for this person before issuing a fresh one
-    db.query(models.GoogleOAuthState).filter(models.GoogleOAuthState.member_id == current_member.id).delete()
-    state_row = models.GoogleOAuthState(member_id=current_member.id)
+    # OAuth attempts are single-use and short-lived. Remove this member's previous attempt
+    # plus any globally stale rows, then bind this attempt to a PKCE verifier as well as state.
+    cutoff = datetime.utcnow() - timedelta(minutes=10)
+    db.query(models.GoogleOAuthState).filter(
+        or_(models.GoogleOAuthState.member_id == current_member.id, models.GoogleOAuthState.created_at < cutoff)
+    ).delete(synchronize_session=False)
+    code_verifier = secrets.token_urlsafe(48)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode("ascii")).digest()
+    ).rstrip(b"=").decode("ascii")
+    state_row = models.GoogleOAuthState(member_id=current_member.id, code_verifier=code_verifier)
     db.add(state_row)
     db.commit()
     params = {
@@ -653,6 +689,8 @@ def get_google_connect_url(current_member: models.Member = Depends(get_current_m
         # ever consent, so reconnecting after a disconnect still works correctly
         "prompt": "consent",
         "state": state_row.state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
     }
     return {"url": "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params)}
 
@@ -667,7 +705,14 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
     state_row = db.get(models.GoogleOAuthState, state)
     if not state_row:
         return RedirectResponse(url="/?calendar=error")
+    # State is deliberately short-lived. PKCE prevents an intercepted authorization code
+    # from being exchanged without the verifier generated by ClockBook for this attempt.
+    if not state_row.created_at or state_row.created_at < datetime.utcnow() - timedelta(minutes=10) or not state_row.code_verifier:
+        db.delete(state_row)
+        db.commit()
+        return RedirectResponse(url="/?calendar=error")
     member_id = state_row.member_id
+    code_verifier = state_row.code_verifier
     db.delete(state_row)
     db.commit()
 
@@ -678,6 +723,7 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
             "client_secret": GOOGLE_CLIENT_SECRET,
             "redirect_uri": GOOGLE_REDIRECT_URI,
             "grant_type": "authorization_code",
+            "code_verifier": code_verifier,
         }, timeout=10)
         resp.raise_for_status()
         refresh_token = resp.json().get("refresh_token")
@@ -701,6 +747,14 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
 
 @app.post("/api/auth/google/disconnect", response_model=schemas.MemberOut)
 def disconnect_google_calendar(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Best-effort revoke at Google as well as forgetting it locally. A Google outage must not
+    # prevent the user from disconnecting ClockBook, so local removal always wins.
+    try:
+        refresh_token = _google_refresh_token_value(current_member, db)
+        if refresh_token:
+            httpx.post("https://oauth2.googleapis.com/revoke", params={"token": refresh_token}, timeout=10)
+    except Exception:
+        pass
     current_member.google_refresh_token = None
     db.commit()
     db.refresh(current_member)
@@ -737,6 +791,18 @@ def get_google_access_token(member, db: Session = None):
             "client_secret": GOOGLE_CLIENT_SECRET,
             "grant_type": "refresh_token",
         }, timeout=10)
+        if resp.status_code == 400:
+            try:
+                token_error = resp.json().get("error")
+            except Exception:
+                token_error = None
+            if token_error == "invalid_grant":
+                # Consent was revoked or the refresh token otherwise became invalid. Mark the
+                # integration disconnected instead of pretending it is still connected forever.
+                member.google_refresh_token = None
+                if db is not None:
+                    db.commit()
+                return None
         resp.raise_for_status()
         return resp.json().get("access_token")
     except Exception:
@@ -751,7 +817,7 @@ def get_meeting_now(current_member: models.Member = Depends(get_current_member),
         return {"connected": False, "meeting": None}
     access_token = get_google_access_token(current_member, db)
     if not access_token:
-        return {"connected": True, "meeting": None}
+        return {"connected": bool(current_member.google_refresh_token), "meeting": None}
 
     now = datetime.utcnow()
     # A generous look-back window so an already-in-progress meeting is still found, the
@@ -805,7 +871,7 @@ def get_calendar_events(start: str = None, end: str = None, current_member: mode
         return {"connected": False, "events": []}
     access_token = get_google_access_token(current_member, db)
     if not access_token:
-        return {"connected": True, "events": [], "error": "Could not refresh access, try reconnecting"}
+        return {"connected": bool(current_member.google_refresh_token), "events": [], "error": "Could not refresh access, try reconnecting"}
 
     now = datetime.utcnow()
     def parse_bound(value, fallback):
@@ -972,11 +1038,37 @@ def update_calendar_event(event_id: str, payload: schemas.CalendarEventUpdate, c
         if resp.status_code in (401, 403):
             raise HTTPException(403, "Google Calendar needs event-edit permission. Reconnect Google Calendar once, then try again")
         resp.raise_for_status()
-        return {"ok": True}
+        # Keep an unsubmitted ClockBook task linked to this event in sync with a renamed
+        # Calendar event. Submitted history is intentionally immutable. Rescheduling itself
+        # does not alter tracked timer segments.
+        linked = db.query(models.TaskInstance).filter(
+            models.TaskInstance.owner_id == current_member.id,
+            models.TaskInstance.source_calendar_event_id == event_id,
+        ).all()
+        for task in linked:
+            if payload.summary is not None and task.status != "submitted":
+                task.name = summary
+            task.calendar_event_deleted_at = None
+        if linked:
+            db.commit()
+        return {"ok": True, "reconciled_tasks": len(linked)}
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(502, "Could not update the Google Calendar event")
+
+
+def _mark_calendar_event_deleted(db: Session, member_id: str, event_id: str) -> int:
+    linked = db.query(models.TaskInstance).filter(
+        models.TaskInstance.owner_id == member_id,
+        models.TaskInstance.source_calendar_event_id == event_id,
+    ).all()
+    if linked:
+        deleted_at = datetime.utcnow()
+        for task in linked:
+            task.calendar_event_deleted_at = deleted_at
+        db.commit()
+    return len(linked)
 
 
 @app.delete("/api/calendar/events/{event_id}")
@@ -993,11 +1085,13 @@ def delete_calendar_event(event_id: str, current_member: models.Member = Depends
             params={"sendUpdates": "all"}, timeout=15,
         )
         if resp.status_code == 404:
-            return {"ok": True}
+            reconciled = _mark_calendar_event_deleted(db, current_member.id, event_id)
+            return {"ok": True, "reconciled_tasks": reconciled}
         if resp.status_code in (401, 403):
             raise HTTPException(403, "Google Calendar needs event-edit permission. Reconnect Google Calendar once, then try again")
         resp.raise_for_status()
-        return {"ok": True}
+        reconciled = _mark_calendar_event_deleted(db, current_member.id, event_id)
+        return {"ok": True, "reconciled_tasks": reconciled}
     except HTTPException:
         raise
     except Exception:
@@ -1014,6 +1108,49 @@ def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: mo
         raise HTTPException(400, "Meeting name is required")
     if payload.duration_minutes < 5 or payload.duration_minutes > 240:
         raise HTTPException(400, "Meeting duration must be between 5 and 240 minutes")
+
+    request_id = (payload.request_id or "").strip()
+    if not request_id:
+        # Backwards compatibility for an older frontend during a rolling deployment. The
+        # current frontend always supplies a stable key for the lifetime of the modal.
+        request_id = secrets.token_urlsafe(24)
+    if len(request_id) > 200:
+        raise HTTPException(400, "Invalid meeting request id")
+
+    # A replay/retry of an already-completed request returns the existing task instead of
+    # creating another event. Fetching the Google event is best-effort and only enriches links.
+    existing = db.query(models.TaskInstance).filter(
+        models.TaskInstance.owner_id == current_member.id,
+        models.TaskInstance.quick_meeting_request_id == request_id,
+    ).first()
+    if existing:
+        event = {}
+        access_token = get_google_access_token(current_member, db)
+        if access_token and existing.source_calendar_event_id:
+            try:
+                ev_resp = httpx.get(
+                    f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{existing.source_calendar_event_id}",
+                    headers={"Authorization": f"Bearer {access_token}"}, timeout=10,
+                )
+                if ev_resp.is_success:
+                    event = ev_resp.json()
+            except Exception:
+                pass
+        meet_url = event.get("hangoutLink")
+        if not meet_url:
+            for entry in (event.get("conferenceData") or {}).get("entryPoints", []):
+                if entry.get("entryPointType") == "video" and entry.get("uri"):
+                    meet_url = entry.get("uri")
+                    break
+        return {
+            "event_id": existing.source_calendar_event_id,
+            "summary": existing.name,
+            "meet_url": meet_url,
+            "calendar_url": event.get("htmlLink"),
+            "attendees": [],
+            "task": schemas.TaskOut.model_validate(existing).model_dump(mode="json"),
+            "reused": True,
+        }
 
     access_token = get_google_access_token(current_member, db)
     if not access_token:
@@ -1046,14 +1183,18 @@ def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: mo
 
     now = datetime.utcnow().replace(microsecond=0)
     end = now + timedelta(minutes=payload.duration_minutes)
+    # Google permits caller-supplied event ids. Deriving one from our idempotency key makes
+    # duplicate/retried inserts converge on the same external event too, not just the same DB row.
+    event_id = "cb" + hashlib.sha256(f"{current_member.id}:{request_id}".encode("utf-8")).hexdigest()[:40]
     event_body = {
+        "id": event_id,
         "summary": summary,
         "start": {"dateTime": now.isoformat() + "Z"},
         "end": {"dateTime": end.isoformat() + "Z"},
         "attendees": [{"email": email} for email in attendee_emails],
         "conferenceData": {
             "createRequest": {
-                "requestId": secrets.token_urlsafe(18),
+                "requestId": "cb-" + hashlib.sha256(request_id.encode("utf-8")).hexdigest()[:32],
                 "conferenceSolutionKey": {"type": "hangoutsMeet"},
             }
         },
@@ -1069,16 +1210,26 @@ def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: mo
         )
         if resp.status_code in (401, 403):
             raise HTTPException(403, "Google Calendar needs meeting-creation permission. Reconnect Google Calendar once, then try again")
-        resp.raise_for_status()
-        event = resp.json()
+        if resp.status_code == 429:
+            raise HTTPException(503, "Google Calendar is temporarily rate-limiting requests. Please try again shortly")
+        if resp.status_code == 409:
+            # The same idempotent request already created the Google event (for example the
+            # first response was lost). Re-read that exact event and continue local recovery.
+            existing_resp = httpx.get(
+                f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}",
+                headers={"Authorization": f"Bearer {access_token}"}, timeout=10,
+            )
+            existing_resp.raise_for_status()
+            event = existing_resp.json()
+        else:
+            resp.raise_for_status()
+            event = resp.json()
     except HTTPException:
         raise
     except Exception:
         raise HTTPException(502, "Could not create the Google Calendar meeting")
 
-    event_id = event.get("id")
-    if not event_id:
-        raise HTTPException(502, "Google Calendar created the event without returning an event id")
+    returned_event_id = event.get("id") or event_id
 
     client = None
     if payload.client_id:
@@ -1097,12 +1248,27 @@ def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: mo
         status="todo",
         segments=[],
         note="",
-        source_calendar_event_id=event_id,
+        source_calendar_event_id=returned_event_id,
+        quick_meeting_request_id=request_id,
+        calendar_event_deleted_at=None,
     )
     db.add(task)
-    db.commit()
-    db.refresh(task)
-    started = start_task(task.id, schemas.TaskStart(), current_member, db)
+    try:
+        db.commit()
+        db.refresh(task)
+    except IntegrityError:
+        # Concurrent retry won the local insert race. Reuse its task instead of duplicating.
+        db.rollback()
+        task = db.query(models.TaskInstance).filter(
+            models.TaskInstance.owner_id == current_member.id,
+            models.TaskInstance.quick_meeting_request_id == request_id,
+        ).first()
+        if not task:
+            raise
+        reused = True
+    else:
+        reused = False
+        task = start_task(task.id, schemas.TaskStart(), current_member, db)
 
     meet_url = event.get("hangoutLink")
     if not meet_url:
@@ -1112,12 +1278,13 @@ def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: mo
                 break
 
     return {
-        "event_id": event_id,
-        "summary": summary,
+        "event_id": returned_event_id,
+        "summary": task.name,
         "meet_url": meet_url,
         "calendar_url": event.get("htmlLink"),
         "attendees": attendee_emails,
-        "task": schemas.TaskOut.model_validate(started).model_dump(mode="json"),
+        "task": schemas.TaskOut.model_validate(task).model_dump(mode="json"),
+        "reused": reused,
     }
 
 

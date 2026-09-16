@@ -102,6 +102,7 @@ class GoogleOAuthState(Base):
     __tablename__ = "google_oauth_states"
     state = Column(String, primary_key=True, default=lambda: secrets.token_urlsafe(32))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    code_verifier = Column(String, nullable=True)  # PKCE verifier, kept only for this short-lived OAuth attempt
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -212,6 +213,8 @@ class TaskInstance(Base):
     period_start = Column(String, nullable=True)  # YYYY-MM-DD for daily/custom periods
     period_end = Column(String, nullable=True)  # YYYY-MM-DD for custom periods
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
+    quick_meeting_request_id = Column(String, nullable=True)  # client-generated idempotency key so retries cannot create a second Calendar event/task
+    calendar_event_deleted_at = Column(DateTime, nullable=True)  # preserves historical linkage while recording that the source Calendar event was deleted
     source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed
     source_template_field = Column(String, nullable=True)  # legacy template field copied for compatibility
     source_template_category = Column(String, nullable=True)  # optional broad Insights category copied from the template
