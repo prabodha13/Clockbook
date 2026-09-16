@@ -3209,11 +3209,12 @@ def normalize_client_code(code: str) -> str:
     return normalized
 
 
-def check_client_code_available(db, code, exclude_client_id=None):
-    # Serialize code claims in production so two simultaneous requests cannot both pass
-    # the availability check before either commits.
+def check_client_code_available(db, tenant_id, code, exclude_client_id=None):
+    # Serialize code claims per tenant in production so two simultaneous requests cannot
+    # both pass the availability check before either commits. The tenant id must be passed
+    # explicitly; this helper is also used outside request-local variable scope.
     if engine.dialect.name == "postgresql":
-        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": f"{current_member.tenant_id}:{code.lower()}"})
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": f"{tenant_id}:{code.lower()}"})
     query = db.query(models.Client).filter(func.lower(models.Client.code) == code.lower())
     if exclude_client_id:
         query = query.filter(models.Client.id != exclude_client_id)
@@ -3228,7 +3229,7 @@ def create_client(payload: schemas.ClientCreate, current_member: models.Member =
     if not name:
         raise HTTPException(400, "Enter a client name")
     code = normalize_client_code(payload.code)
-    check_client_code_available(db, code)
+    check_client_code_available(db, current_member.tenant_id, code)
     client = models.Client(name=name, code=code)
     db.add(client)
     try:
@@ -3317,7 +3318,7 @@ def update_client(client_id: str, payload: schemas.ClientCreate, current_member:
     if not new_name:
         raise HTTPException(400, "Enter a client name")
     code = normalize_client_code(payload.code)
-    check_client_code_available(db, code, exclude_client_id=client_id)
+    check_client_code_available(db, current_member.tenant_id, code, exclude_client_id=client_id)
     client.name = new_name
     client.code = code
     # Tasks store their own copy of the client name for historical display, keep every
