@@ -253,6 +253,79 @@ function LoginScreen({ onLogin }) {
   );
 }
 
+function InvitationAcceptScreen({ token, onAccepted }) {
+  const [invite, setInvite] = useState(null);
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    api.getInvitation(token)
+      .then((data) => {
+        if (!alive) return;
+        setInvite(data);
+        setName(data.name || "");
+      })
+      .catch((err) => { if (alive) setError(err.message || "This invitation is not available"); });
+    return () => { alive = false; };
+  }, [token]);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!invite || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.acceptInvitation(token, password, name.trim());
+      await onAccepted(result);
+    } catch (err) {
+      setError(err.message || "Could not accept invitation");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-center-screen">
+      <div className="cb-welcome" style={{ maxWidth: 430 }}>
+        <div className="cb-welcome-mark"><Building2 size={22} /></div>
+        <div className="cb-welcome-title cb-serif">Join a ClockBook workspace</div>
+        {!invite && !error && <div className="cb-welcome-sub">Checking your invitation...</div>}
+        {invite && (
+          <>
+            <div className="cb-welcome-sub">
+              You have been invited to <strong>{invite.workspace_name}</strong> as {roleLabel(invite.role)}.
+            </div>
+            <form onSubmit={submit}>
+              <div className="cb-field" style={{ textAlign: "left" }}>
+                <label className="cb-label">Email</label>
+                <input className="cb-input" value={invite.email} disabled />
+              </div>
+              {!invite.existing_user && (
+                <div className="cb-field" style={{ textAlign: "left" }}>
+                  <label className="cb-label">Your name</label>
+                  <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+                </div>
+              )}
+              <div className="cb-field" style={{ textAlign: "left" }}>
+                <label className="cb-label">{invite.existing_user ? "Your existing ClockBook password" : "Choose a password"}</label>
+                <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required autoFocus={invite.existing_user} />
+              </div>
+              {invite.existing_user && <div className="cb-hint" style={{ marginBottom: 12 }}>This uses your existing ClockBook login. Your password is not changed.</div>}
+              {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
+              <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={busy}>
+                {busy ? "Joining..." : `Join ${invite.workspace_name}`}
+              </button>
+            </form>
+          </>
+        )}
+        {!invite && error && <div className="cb-error">{error}</div>}
+      </div>
+    </div>
+  );
+}
+
 function ClaimScreen({ unclaimed, onClaim }) {
   const [mode, setMode] = useState(unclaimed.length ? "existing" : "new");
   const [memberId, setMemberId] = useState(unclaimed[0] ? unclaimed[0].id : "");
@@ -2036,60 +2109,96 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
   );
 }
 
-function AddMemberModal({ onClose, onAdd }) {
+function InviteMemberModal({ onClose, onInvite, currentUser }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("member");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [created, setCreated] = useState(null);
+  const [copied, setCopied] = useState(false);
+
+  function inviteUrl(token) {
+    return `${window.location.origin}${window.location.pathname}?invite=${encodeURIComponent(token)}`;
+  }
 
   async function submit(e) {
     e.preventDefault();
     setError("");
     setBusy(true);
     try {
-      await onAdd(name, email, password);
-      onClose();
+      const result = await onInvite(name, email, role);
+      setCreated(result);
     } catch (err) {
       setError(err.message);
+    } finally {
       setBusy(false);
     }
+  }
+
+  async function copyLink() {
+    if (!created?.token) return;
+    const ok = await copyToClipboard(inviteUrl(created.token));
+    setCopied(ok);
+    if (!ok) window.prompt("Copy invitation link", inviteUrl(created.token));
   }
 
   return (
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">Add teammate</div>
+          <div className="cb-modal-title">Invite teammate</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
-        <form onSubmit={submit}>
-          <div className="cb-modal-body">
-            <div className="cb-field">
-              <label className="cb-label">Name</label>
-              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
+        {!created ? (
+          <form onSubmit={submit}>
+            <div className="cb-modal-body">
+              <div className="cb-field">
+                <label className="cb-label">Name</label>
+                <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Email</label>
+                <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="e.g. priya@firm.com" required />
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Access</label>
+                <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
+                  <option value="member">Staff</option>
+                  <option value="admin">Admin</option>
+                  {currentUser?.role === "super_admin" && <option value="super_admin">Super Admin</option>}
+                </select>
+              </div>
+              <div className="cb-hint">ClockBook creates a secure invitation link valid for 7 days. The person chooses their own password. Existing ClockBook users keep their current login.</div>
+              {error && <div className="cb-error">{error}</div>}
             </div>
-            <div className="cb-field">
-              <label className="cb-label">Email</label>
-              <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="e.g. priya@firm.com" required />
+            <div className="cb-modal-foot">
+              <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
+              <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>{busy ? "Creating..." : "Create invitation"}</button>
             </div>
-            <div className="cb-field">
-              <label className="cb-label">Set a password for them</label>
-              <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} minLength={8} required />
+          </form>
+        ) : (
+          <>
+            <div className="cb-modal-body">
+              <div className="cb-notice" style={{ marginBottom: 12 }}>
+                Invitation ready for <strong>{created.email}</strong> · {roleLabel(created.role)}
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Invitation link</label>
+                <input className="cb-input" value={inviteUrl(created.token)} readOnly onFocus={(e) => e.target.select()} />
+              </div>
+              <div className="cb-hint">Send this link to the teammate. ClockBook stores only a hash of the invitation token, so this exact link is shown only now unless you generate a new one later.</div>
             </div>
-            <div className="cb-hint">Share this password with them directly, there is no email sent automatically. They can log in with it right away.</div>
-            {error && <div className="cb-error">{error}</div>}
-          </div>
-          <div className="cb-modal-foot">
-            <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>Add</button>
-          </div>
-        </form>
+            <div className="cb-modal-foot">
+              <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Done</button>
+              <button type="button" className="cb-btn cb-btn-primary" onClick={copyLink}><Copy size={14} />{copied ? "Copied" : "Copy link"}</button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
 }
-
 
 function WorkPeriodTypePicker({ value, onChange, open, onOpenChange }) {
   const buttonRef = useRef(null);
@@ -5566,11 +5675,53 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
+  const [invitations, setInvitations] = useState([]);
+  const [invitationMessage, setInvitationMessage] = useState("");
   const settingUpMember = members.find((m) => m.id === settingUpId);
+
+  const loadInvitations = useCallback(async () => {
+    if (!isAdmin) { setInvitations([]); return; }
+    try {
+      const rows = await api.getTenantInvitations();
+      setInvitations(rows.filter((row) => row.status === "pending"));
+    } catch (err) {
+      setError(err.message || "Could not load invitations");
+    }
+  }, [isAdmin]);
+
+  useEffect(() => { loadInvitations(); }, [loadInvitations, invitationRefreshKey]);
+
+  function invitationUrl(token) {
+    return `${window.location.origin}${window.location.pathname}?invite=${encodeURIComponent(token)}`;
+  }
+
+  async function regenerateInvitation(invitation) {
+    try {
+      const updated = await api.regenerateTenantInvitation(invitation.id);
+      const url = invitationUrl(updated.token);
+      const copied = await copyToClipboard(url);
+      if (!copied) window.prompt("Copy invitation link", url);
+      setInvitationMessage(copied ? `New invitation link copied for ${updated.email}.` : `New invitation link created for ${updated.email}.`);
+      await loadInvitations();
+    } catch (err) {
+      setError(err.message || "Could not regenerate invitation");
+    }
+  }
+
+  async function revokeInvitation(invitation) {
+    if (!window.confirm(`Revoke the invitation for ${invitation.email}?`)) return;
+    try {
+      await api.revokeTenantInvitation(invitation.id);
+      setInvitationMessage(`Invitation revoked for ${invitation.email}.`);
+      await loadInvitations();
+    } catch (err) {
+      setError(err.message || "Could not revoke invitation");
+    }
+  }
   const timezoneOptions = useMemo(() => {
     let zones = [];
     try { zones = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []; } catch (_) {}
@@ -5596,10 +5747,35 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onChangeRole, o
           <div className="cb-page-sub">Everyone with access to this workspace, and who has admin rights.</div>
         </div>
         {isAdmin && (
-          <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Add teammate</button>
+          <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Invite teammate</button>
         )}
       </div>
       {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
+      {invitationMessage && <div className="cb-notice" style={{ marginBottom: 10 }}>{invitationMessage}</div>}
+      {isAdmin && invitations.length > 0 && (
+        <div className="cb-card" style={{ marginBottom: 14 }}>
+          <div className="cb-card-head">
+            <div>
+              <div className="cb-tmpl-field">Pending invitations</div>
+              <div className="cb-tmpl-name">Waiting to join this workspace</div>
+            </div>
+          </div>
+          <div style={{ padding: "4px 14px" }}>
+            {invitations.map((invitation) => (
+              <div key={invitation.id} className="cb-row" style={{ paddingLeft: 0, paddingRight: 0 }}>
+                <div className="cb-row-main">
+                  <div className="cb-row-task">{invitation.name}</div>
+                  <div className="cb-row-meta">{invitation.email} · {roleLabel(invitation.role)} · expires {formatDate(invitation.expires_at)}</div>
+                </div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => regenerateInvitation(invitation)}>New link</button>
+                  <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => revokeInvitation(invitation)}>Revoke</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="cb-card-list">
         {members.map((m) => (
           <div className="cb-row" key={m.id}>
@@ -7162,7 +7338,10 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
 }
 
 export default function App() {
-  const [authState, setAuthState] = useState("loading"); // loading | claim | login | ready
+  const [authState, setAuthState] = useState("loading"); // loading | claim | login | invite | ready
+  const [invitationToken, setInvitationToken] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get("invite") || ""; } catch (_) { return ""; }
+  });
   const [unclaimedMembers, setUnclaimedMembers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
   const [workspaces, setWorkspaces] = useState([]);
@@ -7196,6 +7375,7 @@ export default function App() {
   const [completingTask, setCompletingTask] = useState(null);
   const [startCountPrompt, setStartCountPrompt] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
+  const [invitationRefreshKey, setInvitationRefreshKey] = useState(0);
   const [sleepAlert, setSleepAlert] = useState(null);
   const [meetingAlert, setMeetingAlert] = useState(null);
   const [meetingTrackPrompt, setMeetingTrackPrompt] = useState(null);
@@ -7307,6 +7487,10 @@ export default function App() {
   // upgraded from the old passwordless version (show the one time claim screen instead).
   useEffect(() => {
     (async () => {
+      if (invitationToken) {
+        setAuthState("invite");
+        return;
+      }
       const token = getToken();
       if (token) {
         try {
@@ -7330,7 +7514,7 @@ export default function App() {
         setAuthState("login");
       }
     })();
-  }, []);
+  }, [invitationToken]);
 
   // The login token intentionally lives only for the browser session; there is no
   // inactivity timeout. If the server explicitly revokes it after a security-sensitive
@@ -7352,6 +7536,15 @@ export default function App() {
     window.addEventListener("clockbook-session-revoked", handleSessionRevoked);
     return () => window.removeEventListener("clockbook-session-revoked", handleSessionRevoked);
   }, []);
+
+  async function acceptInvitation(result) {
+    setToken(result.token);
+    setCurrentUser(result.member);
+    setInvitationToken("");
+    try { window.history.replaceState({}, "", window.location.pathname); } catch (_) {}
+    setDataLoading(true);
+    setAuthState("ready");
+  }
 
   const loadWorkspaces = useCallback(async () => {
     try {
@@ -8052,9 +8245,10 @@ export default function App() {
     }
   }
 
-  async function addTeammate(name, email, password) {
-    const member = await api.createMember(name.trim(), email.trim(), password);
-    setMembers((prev) => [...prev, member]);
+  async function addTeammate(name, email, role) {
+    const invitation = await api.createTenantInvitation(name.trim(), email.trim(), role);
+    setInvitationRefreshKey((value) => value + 1);
+    return invitation;
   }
 
   async function setMemberCredentials(memberId, email, password) {
@@ -8484,6 +8678,9 @@ export default function App() {
   if (authState === "loading") {
     return <div className="cb-root"><LoadingScreen /></div>;
   }
+  if (authState === "invite" && invitationToken) {
+    return <div className="cb-root"><InvitationAcceptScreen token={invitationToken} onAccepted={acceptInvitation} /></div>;
+  }
   if (authState === "claim") {
     return <div className="cb-root"><ClaimScreen unclaimed={unclaimedMembers} onClaim={handleClaim} /></div>;
   }
@@ -8581,7 +8778,7 @@ export default function App() {
             {view === "staff" && (
               <StaffView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
-                onAddMember={() => setShowAddMember(true)} onChangeRole={changeMemberRole}
+                onAddMember={() => setShowAddMember(true)} invitationRefreshKey={invitationRefreshKey} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
                 onChangeTimezone={changeMemberTimezone}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
@@ -8667,7 +8864,7 @@ export default function App() {
         <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} clients={clients} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
       ) : null}
       {showAddMember && (
-        <AddMemberModal onClose={() => setShowAddMember(false)} onAdd={addTeammate} />
+        <InviteMemberModal onClose={() => setShowAddMember(false)} onInvite={addTeammate} currentUser={effectiveCurrentUser} />
       )}
       {sleepAlert && (
         <SleepAlertModal

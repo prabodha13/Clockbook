@@ -77,6 +77,12 @@ export const api = {
   switchWorkspace: (tenantId) => request(`/auth/switch-workspace/${tenantId}`, { method: "POST" }),
   getPlatformTenants: () => request("/platform/tenants"),
   createPlatformTenant: (name, slug = "") => request("/platform/tenants", { method: "POST", body: JSON.stringify({ name, slug: slug || null }) }),
+  getInvitation: (token) => request(`/invitations/${encodeURIComponent(token)}`),
+  acceptInvitation: (token, password, name = null) => request(`/invitations/${encodeURIComponent(token)}/accept`, { method: "POST", body: JSON.stringify({ password, name: name || null }) }),
+  getTenantInvitations: () => request("/tenant-invitations"),
+  createTenantInvitation: (name, email, role = "member") => request("/tenant-invitations", { method: "POST", body: JSON.stringify({ name, email, role }) }),
+  regenerateTenantInvitation: (invitationId) => request(`/tenant-invitations/${invitationId}/regenerate`, { method: "POST" }),
+  revokeTenantInvitation: (invitationId) => request(`/tenant-invitations/${invitationId}`, { method: "DELETE" }),
   setStaffTourCompleted: (completed = true) => request("/auth/tour", { method: "PATCH", body: JSON.stringify({ completed: !!completed }) }),
 
   getMembers: () => request("/members"),
