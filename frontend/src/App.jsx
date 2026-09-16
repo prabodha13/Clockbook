@@ -1356,7 +1356,12 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
   }, []);
 
   const filtered = query.trim()
-    ? options.filter((o) => getLabel(o).toLowerCase().includes(query.trim().toLowerCase()))
+    ? options.filter((o) => {
+        const q = query.trim().toLowerCase();
+        const primary = (getLabel(o) || "").toLowerCase();
+        const secondary = getSecondary ? String(getSecondary(o) || "").toLowerCase() : "";
+        return primary.includes(q) || secondary.includes(q);
+      })
     : options;
 
   return (
@@ -1392,6 +1397,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState(clients[0] ? clients[0].id : "");
   const [newClientName, setNewClientName] = useState("");
+  const [newClientCode, setNewClientCode] = useState("");
 
   const [taskMode, setTaskMode] = useState(templates.length ? "template" : "custom");
   const [templateId, setTemplateId] = useState("");
@@ -1458,8 +1464,9 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     try {
       setBusy(true);
       if (clientMode === "new") {
-        if (!newClientName.trim()) { setBusy(false); return; }
-        const c = await onAddClient(newClientName);
+        if (!newClientName.trim()) { setError("Enter a client name"); setBusy(false); return; }
+        if (!newClientCode.trim()) { setError("Client code is required"); setBusy(false); return; }
+        const c = await onAddClient(newClientName, newClientCode);
         cId = c.id; cName = c.name;
       } else {
         const c = clients.find((c) => c.id === clientId);
@@ -1557,10 +1564,13 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
               {clientMode === "existing" ? (
                 <SearchableSelect
                   options={clients} value={clientId} onChange={setClientId}
-                  placeholder="Search clients..." getLabel={(c) => c.name}
+                  placeholder="Search clients..." getLabel={(c) => c.name} getSecondary={(c) => c.code || ""}
                 />
               ) : (
-                <input className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 160px", gap: 8 }}>
+                  <input className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                  <input className="cb-input" placeholder="Client code" value={newClientCode} onChange={(e) => setNewClientCode(e.target.value)} required />
+                </div>
               )}
             </div>
 
@@ -3195,7 +3205,15 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
   async function saveClientName() {
     const trimmedName = editedName.trim();
     const trimmedCode = editedCode.trim();
-    if (!trimmedName || (trimmedName === client.name && trimmedCode === (client.code || ""))) {
+    if (!trimmedName) {
+      setError("Enter a client name");
+      return;
+    }
+    if (!trimmedCode) {
+      setError("Client code is required");
+      return;
+    }
+    if (trimmedName === client.name && trimmedCode === (client.code || "")) {
       setIsEditingName(false);
       return;
     }
@@ -3275,7 +3293,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
             />
             <input
               className="cb-input" style={{ maxWidth: 140 }} value={editedCode}
-              onChange={(e) => setEditedCode(e.target.value)} placeholder="Code (optional)"
+              onChange={(e) => setEditedCode(e.target.value)} placeholder="Client code"
               onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
             />
             <button className="cb-btn cb-btn-sm cb-btn-primary" disabled={renaming} onClick={saveClientName}>Save</button>
@@ -3299,7 +3317,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
               )}
             </div>
             <div className="cb-row-meta">
-              {client.code && <span>Code: {client.code}</span>}
+              {client.code ? <span>Code: {client.code}</span> : <span>Code missing</span>}
               {taskCount} task{taskCount === 1 ? "" : "s"} tracked, {bankAccounts.length} bank account{bankAccounts.length === 1 ? "" : "s"}
             </div>
           </div>
@@ -3335,7 +3353,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
                     <div style={{ width: 240 }}>
                       <SearchableSelect
                         options={allClients.filter((c) => c.id !== client.id)} value={mergeTargetId} onChange={setMergeTargetId}
-                        placeholder="Search for the duplicate..." getLabel={(c) => c.name}
+                        placeholder="Search for the duplicate..." getLabel={(c) => c.name} getSecondary={(c) => c.code || ""}
                       />
                     </div>
                     <button className="cb-btn cb-btn-sm cb-btn-danger" disabled={!mergeTargetId || merging} onClick={handleMerge}>
@@ -3369,11 +3387,20 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
 function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDelete, onAddAccount, onDeleteAccount, onMergeClients }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState("");
+
+  const visibleClients = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return [...clients]
+      .sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }))
+      .filter((c) => !q || (c.name || "").toLowerCase().includes(q) || (c.code || "").toLowerCase().includes(q));
+  }, [clients, searchQuery]);
 
   async function submit(e) {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim()) { setError("Enter a client name"); return; }
+    if (!code.trim()) { setError("Client code is required"); return; }
     try {
       await onAdd(name, code);
       setName("");
@@ -3393,15 +3420,26 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onUpdate, onDel
           <div className="cb-page-sub">Every task on the dashboard is tracked against one of these. Click a client to manage its bank accounts.</div>
         </div>
       </div>
-      <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 6, maxWidth: 480 }}>
-        <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} />
-        <input className="cb-input" style={{ maxWidth: 140 }} placeholder="Code (optional)" value={code} onChange={(e) => setCode(e.target.value)} />
+      <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 10, maxWidth: 560 }}>
+        <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input className="cb-input" style={{ maxWidth: 160 }} placeholder="Client code" value={code} onChange={(e) => setCode(e.target.value)} required />
         <button type="submit" className="cb-btn cb-btn-primary" style={{ flexShrink: 0 }}><Plus size={15} />Add</button>
       </form>
       {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
+      <div style={{ position: "relative", maxWidth: 420, marginBottom: 12 }}>
+        <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
+        <input
+          className="cb-input"
+          style={{ paddingLeft: 34 }}
+          placeholder="Search clients by name or code..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+      </div>
       <div className="cb-card-list">
         {clients.length === 0 && <div className="cb-empty">No clients yet. Add your first one above.</div>}
-        {clients.map((c) => {
+        {clients.length > 0 && visibleClients.length === 0 && <div className="cb-empty">No clients match your search.</div>}
+        {visibleClients.map((c) => {
           const count = tasks.filter((t) => t.client_id === c.id).length;
           const accounts = bankAccounts.filter((a) => a.client_id === c.id);
           return (
