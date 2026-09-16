@@ -121,6 +121,21 @@ class ClientCreate(BaseModel):
     code: str
 
 
+class ClientImportRow(BaseModel):
+    name: str
+    code: str
+    bank_accounts: List[str] = []
+
+
+class ClientImportRequest(BaseModel):
+    rows: List[ClientImportRow]
+
+
+class ClientImportResult(BaseModel):
+    imported_clients: int
+    imported_bank_accounts: int
+
+
 class RoleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

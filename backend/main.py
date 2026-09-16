@@ -2871,6 +2871,73 @@ def create_client(payload: schemas.ClientCreate, current_member: models.Member =
     return client
 
 
+@app.post("/api/clients/import", response_model=schemas.ClientImportResult)
+def import_clients(payload: schemas.ClientImportRequest, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    rows = payload.rows or []
+    if not rows:
+        raise HTTPException(400, "The CSV does not contain any client rows")
+    if len(rows) > 1000:
+        raise HTTPException(400, "A maximum of 1,000 clients can be imported at once")
+
+    prepared = []
+    seen_codes = {}
+    for index, row in enumerate(rows, start=2):
+        name = (row.name or "").strip()
+        if not name:
+            raise HTTPException(400, f"Row {index}: client name is required")
+        try:
+            code = normalize_client_code(row.code)
+        except HTTPException:
+            raise HTTPException(400, f"Row {index}: client code is required")
+        key = code.lower()
+        if key in seen_codes:
+            raise HTTPException(400, f'Rows {seen_codes[key]} and {index}: client code "{code}" is duplicated in the CSV')
+        seen_codes[key] = index
+
+        accounts = []
+        seen_accounts = set()
+        for raw_name in row.bank_accounts or []:
+            account_name = (raw_name or "").strip()
+            if not account_name:
+                continue
+            account_key = account_name.casefold()
+            if account_key in seen_accounts:
+                continue
+            seen_accounts.add(account_key)
+            accounts.append(account_name)
+        if len(accounts) > 50:
+            raise HTTPException(400, f"Row {index}: too many bank accounts")
+        prepared.append((index, name, code, accounts))
+
+    # Lock every incoming code in a stable order on PostgreSQL. This prevents two concurrent
+    # bulk imports (or a bulk import and a normal create) from claiming the same code.
+    if engine.dialect.name == "postgresql":
+        for code in sorted({code.lower() for _, _, code, _ in prepared}):
+            db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:code))"), {"code": code})
+
+    existing = db.query(models.Client).filter(func.lower(models.Client.code).in_(list(seen_codes.keys()))).all()
+    if existing:
+        conflict = existing[0]
+        raise HTTPException(400, f'The code "{conflict.code}" is already used by {conflict.name}')
+
+    imported_accounts = 0
+    try:
+        for _, name, code, accounts in prepared:
+            client = models.Client(name=name, code=code)
+            db.add(client)
+            db.flush()
+            for account_name in accounts:
+                db.add(models.BankAccount(client_id=client.id, name=account_name))
+                imported_accounts += 1
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(400, "One or more client codes are already in use")
+
+    return schemas.ClientImportResult(imported_clients=len(prepared), imported_bank_accounts=imported_accounts)
+
+
 @app.patch("/api/clients/{client_id}", response_model=schemas.ClientOut)
 def update_client(client_id: str, payload: schemas.ClientCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
