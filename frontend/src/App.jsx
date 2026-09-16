@@ -3892,12 +3892,10 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const sortedPods = useMemo(() => [...pods].sort((a, b) => a.name.localeCompare(b.name)), [pods]);
 
   useEffect(() => {
-    if (!isSuperAdmin || capacityView !== "pod") return;
-    const selectedPodStillExists = capacityPodId && sortedPods.some((pod) => pod.id === capacityPodId);
-    if (!selectedPodStillExists) {
-      setCapacityPodId(sortedPods[0]?.id || "");
-    }
-  }, [isSuperAdmin, capacityView, capacityPodId, sortedPods]);
+    if (!isSuperAdmin || !capacityPodId) return;
+    const selectedPodStillExists = sortedPods.some((pod) => pod.id === capacityPodId);
+    if (!selectedPodStillExists) setCapacityPodId("");
+  }, [isSuperAdmin, capacityPodId, sortedPods]);
   const selectableMembers = useMemo(() => {
     if (!isAdmin || forceSelfOnly) return [];
     if (isSuperAdmin) return [...members].sort((a, b) => a.name.localeCompare(b.name));
@@ -3966,7 +3964,6 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
 
   const load = useCallback(async () => {
     if (!memberId) return;
-    if (isSuperAdmin && capacityView === "pod" && !capacityPodId) return;
     setError("");
     setIsLoading(true);
     try {
@@ -4153,12 +4150,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const panelStyle = { ...cardStyle, padding: 16, minWidth: 0 };
 
   const personCapacity = forceSelfOnly ? null : data?.capacity;
-  const capacityData = forceSelfOnly ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_capacity ? data.team_capacity : personCapacity);
+  const podSelectionMissing = isSuperAdmin && capacityView === "pod" && !capacityPodId;
+  const capacityData = forceSelfOnly || podSelectionMissing ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_capacity ? data.team_capacity : personCapacity);
   const capacityLabel = capacityView === "pod" ? "Pod capacity" : capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
   const personLeaveTrends = forceSelfOnly ? null : data?.leave_trends;
-  const leaveData = forceSelfOnly ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends);
+  const leaveData = forceSelfOnly || podSelectionMissing ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends);
   const clientSeconds = Number(data?.summary?.billable_seconds || 0);
   const trackedSeconds = Number(data?.summary?.tracked_seconds || 0);
   const clientShare = trackedSeconds > 0 ? (clientSeconds / trackedSeconds) * 100 : 0;
@@ -4318,6 +4316,28 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ paddingLeft: 20 }}><div style={{ fontSize: 12, fontWeight: 700, marginBottom: 11 }}>Task types</div><DistributionList rows={data.task_type_mix || []} total={data.distribution_totals?.task_type_seconds || 0} color="#6B7C93" empty="No task-type data." /></div>
             </div>
           </div>
+
+          {podSelectionMissing && (
+            <div style={{ ...panelStyle, marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <div className="cb-group-title" style={{ fontSize: 15 }}>Pod insights</div>
+                  <div className="cb-hint" style={{ marginTop: 3 }}>No pod selected. Choose a pod to view its leave trends and capacity, or switch back to Person or Team.</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                  <select className="cb-select" value={capacityPodId} onChange={(e) => setCapacityPodId(e.target.value)} style={{ minWidth: 180 }}>
+                    <option value="">Select pod</option>
+                    {sortedPods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                  <div className="cb-tabs">
+                    <button className={`cb-tab ${capacityView === "person" ? "active" : ""}`} onClick={() => setCapacityView("person")}>Person</button>
+                    <button className={`cb-tab ${capacityView === "team" ? "active" : ""}`} onClick={() => setCapacityView("team")}>Team</button>
+                    <button className={`cb-tab ${capacityView === "pod" ? "active" : ""}`} onClick={() => setCapacityView("pod")}>Pod</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           {leaveData && (
             <div style={{ ...panelStyle, marginBottom: 14 }}>
