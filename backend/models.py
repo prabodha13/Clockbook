@@ -18,6 +18,16 @@ class SystemSetting(Base):
     key = Column(String, primary_key=True)
     value = Column(String, nullable=False, default="")
 
+class RateLimitBucket(Base):
+    # Small database-backed fixed-window counter used for authentication abuse protection.
+    # Keys are SHA-256 hashes, so raw IP/email combinations are never stored here.
+    __tablename__ = "rate_limit_buckets"
+    key = Column(String, primary_key=True)
+    window_start = Column(DateTime, nullable=False)
+    count = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class Pod(Base):
     # A team/pod grouping for staff. When a regular admin is assigned to a pod, they only
     # see task and time data for people in that same pod, super admins always see everyone

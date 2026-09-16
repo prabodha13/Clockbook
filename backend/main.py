@@ -7,15 +7,17 @@ import hmac
 import bcrypt
 import httpx
 import time
+import logging
+import json
 from urllib.parse import urlencode
 from io import StringIO
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi import FastAPI, Depends, HTTPException, Header, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
+from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, or_, func
@@ -24,6 +26,106 @@ from sqlalchemy.exc import IntegrityError
 from database import get_db, engine, Base
 import models
 import schemas
+
+CLOCKBOOK_VERSION = (os.environ.get("CLOCKBOOK_VERSION") or os.environ.get("RAILWAY_GIT_COMMIT_SHA") or "unknown").strip()
+STARTUP_MIGRATION_LOCK_KEY = 424242017
+
+logger = logging.getLogger("clockbook")
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.addHandler(handler)
+logger.setLevel(getattr(logging, (os.environ.get("CLOCKBOOK_LOG_LEVEL") or "INFO").upper(), logging.INFO))
+logger.propagate = False
+
+
+def _log_event(event: str, **fields):
+    payload = {"event": event, "ts": datetime.utcnow().isoformat() + "Z", **fields}
+    logger.info(json.dumps(payload, default=str, separators=(",", ":")))
+
+
+def _rate_limit_identity(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _enforce_rate_limit(db: Session, identity: str, limit: int, window_seconds: int):
+    """Database-backed fixed-window limiter, safe across multiple Railway app instances."""
+    now = datetime.utcnow()
+    epoch = int(now.replace(tzinfo=timezone.utc).timestamp())
+    window_epoch = epoch - (epoch % window_seconds)
+    window_start = datetime.utcfromtimestamp(window_epoch)
+    key = _rate_limit_identity(identity)
+
+    # Lock an existing bucket on PostgreSQL. SQLite serializes writes itself. A first-use
+    # insert can race, so retry once after an IntegrityError.
+    for attempt in range(2):
+        try:
+            query = db.query(models.RateLimitBucket).filter(models.RateLimitBucket.key == key)
+            if engine.dialect.name == "postgresql":
+                query = query.with_for_update()
+            bucket = query.first()
+            if bucket is None:
+                db.add(models.RateLimitBucket(key=key, window_start=window_start, count=1, updated_at=now))
+                db.commit()
+                return
+            if bucket.window_start != window_start:
+                bucket.window_start = window_start
+                bucket.count = 1
+            elif bucket.count >= limit:
+                db.rollback()
+                retry_after = max(1, window_seconds - (epoch - window_epoch))
+                raise HTTPException(429, "Too many attempts. Please try again shortly.", headers={"Retry-After": str(retry_after)})
+            else:
+                bucket.count += 1
+            bucket.updated_at = now
+            db.commit()
+            return
+        except IntegrityError:
+            db.rollback()
+            if attempt == 1:
+                raise
+
+
+def _client_ip(request: Request) -> str:
+    # On Railway/proxies, X-Forwarded-For is the useful client address. Only the first hop
+    # is used and it is never persisted raw; it is immediately hashed into a rate-limit key.
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",", 1)[0].strip()
+    if forwarded:
+        return forwarded
+    return request.client.host if request.client else "unknown"
+
+
+def _ensure_operational_indexes():
+    """Add safe, non-semantic indexes for common production query paths."""
+    if engine.dialect.name not in ("postgresql", "sqlite"):
+        return
+    statements = [
+        "CREATE INDEX IF NOT EXISTS ix_tasks_owner_status ON tasks (owner_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_submitted_at ON tasks (submitted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_submitted_by_date ON tasks (submitted_by_id, submitted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_client_status ON tasks (client_id, status)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_submitted_pod_date ON tasks (submitted_pod_id, submitted_at)",
+        "CREATE INDEX IF NOT EXISTS ix_tasks_calendar_event ON tasks (source_calendar_event_id)",
+        "CREATE INDEX IF NOT EXISTS ix_members_pod ON members (pod_id)",
+        "CREATE INDEX IF NOT EXISTS ix_sessions_member ON sessions (member_id)",
+        "CREATE INDEX IF NOT EXISTS ix_help_events_member_created ON help_events (member_id, created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_inactivity_member_started ON inactivity_events (member_id, started_at)",
+    ]
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    with engine.begin() as conn:
+        for stmt in statements:
+            table = stmt.split(" ON ", 1)[1].split(" ", 1)[0]
+            if table in tables:
+                conn.execute(text(stmt))
+
+
+def _cleanup_operational_state(db: Session):
+    cutoff = datetime.utcnow() - timedelta(days=2)
+    db.query(models.RateLimitBucket).filter(models.RateLimitBucket.updated_at < cutoff).delete(synchronize_session=False)
+    db.query(models.GoogleOAuthState).filter(models.GoogleOAuthState.created_at < datetime.utcnow() - timedelta(hours=1)).delete(synchronize_session=False)
+    db.commit()
+
 
 DEFAULT_TEMPLATE = {
     "field": "Bookkeeping",
@@ -340,7 +442,24 @@ def _ensure_quick_meeting_idempotency_invariant():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    run_startup_migrations()
+
+    # Railway can briefly run old/new instances together during deploys. Serialize the
+    # existing idempotent startup migrations on PostgreSQL so two instances never ALTER
+    # the same schema concurrently. SQLite local/test installs do not need this lock.
+    migration_lock_conn = None
+    try:
+        if engine.dialect.name == "postgresql":
+            migration_lock_conn = engine.connect()
+            migration_lock_conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": STARTUP_MIGRATION_LOCK_KEY})
+        run_startup_migrations()
+        _ensure_operational_indexes()
+    finally:
+        if migration_lock_conn is not None:
+            try:
+                migration_lock_conn.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": STARTUP_MIGRATION_LOCK_KEY})
+            finally:
+                migration_lock_conn.close()
+
     db = next(get_db())
     try:
         if db.get(models.Client, UNASSIGNED_CLIENT_ID) is None:
@@ -391,6 +510,8 @@ async def lifespan(app: FastAPI):
         # Phase 3 integration integrity: retries/double actions for Quick Meeting must
         # resolve to the same local task rather than creating duplicates.
         _ensure_quick_meeting_idempotency_invariant()
+        _cleanup_operational_state(db)
+        _log_event("startup_ready", version=CLOCKBOOK_VERSION, database=engine.dialect.name)
     finally:
         db.close()
     yield
@@ -406,6 +527,42 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def operational_request_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id") or secrets.token_hex(16)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        duration_ms = round((time.perf_counter() - started) * 1000, 1)
+        _log_event("request_error", request_id=request_id, method=request.method, path=request.url.path, duration_ms=duration_ms, error=type(exc).__name__)
+        raise
+    duration_ms = round((time.perf_counter() - started) * 1000, 1)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-ClockBook-Version"] = CLOCKBOOK_VERSION
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    _log_event("request", request_id=request_id, method=request.method, path=request.url.path, status=response.status_code, duration_ms=duration_ms)
+    return response
+
+
+@app.get("/health/live", include_in_schema=False)
+def health_live():
+    return {"status": "ok"}
+
+
+@app.get("/health/ready", include_in_schema=False)
+def health_ready():
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"status": "ready", "database": "ok", "version": CLOCKBOOK_VERSION}
+    except Exception:
+        return JSONResponse(status_code=503, content={"status": "not_ready", "database": "unavailable", "version": CLOCKBOOK_VERSION})
 
 
 def hash_password(password):
@@ -590,7 +747,8 @@ def auth_status(db: Session = Depends(get_db)):
 
 
 @app.post("/api/auth/claim", response_model=schemas.LoginResponse)
-def claim_account(payload: schemas.ClaimAccountRequest, db: Session = Depends(get_db)):
+def claim_account(payload: schemas.ClaimAccountRequest, request: Request, db: Session = Depends(get_db)):
+    _enforce_rate_limit(db, f"claim:{_client_ip(request)}", limit=10, window_seconds=900)
     any_secured = db.query(models.Member).filter(models.Member.password_hash.isnot(None)).count()
     if any_secured > 0:
         raise HTTPException(400, "Accounts are already set up, please log in")
@@ -622,8 +780,11 @@ def claim_account(payload: schemas.ClaimAccountRequest, db: Session = Depends(ge
 
 
 @app.post("/api/auth/login", response_model=schemas.LoginResponse)
-def login(payload: schemas.LoginRequest, db: Session = Depends(get_db)):
+def login(payload: schemas.LoginRequest, request: Request, db: Session = Depends(get_db)):
     email = payload.email.strip().lower()
+    ip = _client_ip(request)
+    _enforce_rate_limit(db, f"login-ip:{ip}", limit=50, window_seconds=900)
+    _enforce_rate_limit(db, f"login-account:{ip}:{email}", limit=10, window_seconds=900)
     member = db.query(models.Member).filter(models.Member.email == email).first()
     if not member or not member.password_hash or not verify_password(payload.password, member.password_hash):
         raise HTTPException(401, "Incorrect email or password")
