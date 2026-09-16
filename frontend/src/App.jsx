@@ -356,7 +356,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace }) {
   const isAdmin = isAdminRole(currentUser.role);
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
@@ -383,6 +383,37 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
       <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {workspaces.length > 0 && (
+          workspaces.length === 1 ? (
+            <div
+              title="Current workspace"
+              style={{
+                display: "flex", alignItems: "center", gap: 7, minHeight: 34, padding: "0 10px",
+                border: "1px solid var(--border)", borderRadius: 8, background: "var(--paper)",
+                color: "var(--ink-soft)", fontSize: 12.5, fontWeight: 650, whiteSpace: "nowrap",
+              }}
+            >
+              <Building2 size={13} />
+              {workspaces[0].name}
+            </div>
+          ) : (
+            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+              <Building2 size={13} style={{ position: "absolute", left: 10, pointerEvents: "none", color: "var(--ink-soft)" }} />
+              <select
+                className="cb-input"
+                aria-label="Current workspace"
+                title="Switch workspace"
+                value={activeWorkspaceId || ""}
+                onChange={(e) => onSwitchWorkspace && onSwitchWorkspace(e.target.value)}
+                style={{ minHeight: 34, width: 190, padding: "5px 28px 5px 30px", fontSize: 12.5, fontWeight: 650 }}
+              >
+                {workspaces.map((workspace) => (
+                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                ))}
+              </select>
+            </div>
+          )
+        )}
         <button className="cb-btn cb-btn-sm" data-tour="global-meeting" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
           <Video size={13} />Meeting
         </button>
@@ -2424,11 +2455,147 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
   );
 }
 
+function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated }) {
+  const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0] || null;
+  const [platformTenants, setPlatformTenants] = useState([]);
+  const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
+  const [platformChecked, setPlatformChecked] = useState(false);
+  const [newWorkspaceName, setNewWorkspaceName] = useState("");
+  const [newWorkspaceSlug, setNewWorkspaceSlug] = useState("");
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+
+  async function refreshPlatformTenants() {
+    try {
+      const rows = await api.getPlatformTenants();
+      setPlatformTenants(rows || []);
+      setIsPlatformAdmin(true);
+    } catch (err) {
+      if (err.status === 403) {
+        setPlatformTenants([]);
+        setIsPlatformAdmin(false);
+      } else {
+        setWorkspaceMessage(err.message || "Could not load platform workspaces");
+      }
+    } finally {
+      setPlatformChecked(true);
+    }
+  }
+
+  useEffect(() => {
+    refreshPlatformTenants();
+  }, []);
+
+  async function createWorkspace(e) {
+    e.preventDefault();
+    const name = newWorkspaceName.trim();
+    if (!name || creatingWorkspace) return;
+    setCreatingWorkspace(true);
+    setWorkspaceMessage("");
+    try {
+      const created = await api.createPlatformTenant(name, newWorkspaceSlug.trim());
+      setNewWorkspaceName("");
+      setNewWorkspaceSlug("");
+      await refreshPlatformTenants();
+      if (onWorkspaceCreated) await onWorkspaceCreated(created);
+      setWorkspaceMessage(`${created.name} created. It is now available in the workspace switcher.`);
+    } catch (err) {
+      setWorkspaceMessage(err.message || "Could not create workspace");
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="cb-tmpl-card">
+        <div className="cb-tmpl-head">
+          <div>
+            <div className="cb-tmpl-field">Organisation</div>
+            <div className="cb-tmpl-name">Workspace</div>
+          </div>
+        </div>
+        <div style={{ padding: 16 }}>
+          {activeWorkspace ? (
+            <div style={{ display: "grid", gap: 10 }}>
+              <div>
+                <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
+                <div className="cb-hint" style={{ marginTop: 3 }}>Workspace ID: {activeWorkspace.id}</div>
+              </div>
+              {workspaces.length > 1 && (
+                <div style={{ maxWidth: 360 }}>
+                  <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Switch workspace</label>
+                  <select
+                    className="cb-input"
+                    value={activeWorkspaceId || ""}
+                    onChange={(e) => onSwitchWorkspace && onSwitchWorkspace(e.target.value)}
+                    style={{ width: "100%" }}
+                  >
+                    {workspaces.map((workspace) => (
+                      <option key={workspace.id} value={workspace.id}>{workspace.name} · {roleLabel(workspace.role)}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="cb-hint">Workspace information is unavailable.</div>
+          )}
+        </div>
+      </div>
+
+      {platformChecked && isPlatformAdmin && (
+        <div className="cb-tmpl-card">
+          <div className="cb-tmpl-head">
+            <div>
+              <div className="cb-tmpl-field">Platform administration</div>
+              <div className="cb-tmpl-name">Workspaces</div>
+            </div>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div className="cb-hint" style={{ marginBottom: 14 }}>
+              Create a separate company workspace. Each workspace has its own clients, tasks, staff, templates, settings and integrations.
+            </div>
+            <form onSubmit={createWorkspace} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.2fr) minmax(180px,1fr) auto", gap: 10, alignItems: "end", maxWidth: 820 }}>
+              <div>
+                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace name</label>
+                <input className="cb-input" value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. Test Company Ltd" />
+              </div>
+              <div>
+                <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Slug <span className="cb-hint">(optional)</span></label>
+                <input className="cb-input" value={newWorkspaceSlug} onChange={(e) => setNewWorkspaceSlug(e.target.value)} placeholder="test-company" />
+              </div>
+              <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={creatingWorkspace || !newWorkspaceName.trim()}>
+                {creatingWorkspace ? "Creating..." : "Create workspace"}
+              </button>
+            </form>
+            {workspaceMessage && <div className="cb-hint" style={{ marginTop: 10 }}>{workspaceMessage}</div>}
+            {platformTenants.length > 0 && (
+              <div style={{ marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+                <div className="cb-label" style={{ marginBottom: 8 }}>Platform workspaces</div>
+                <div style={{ display: "grid", gap: 6, maxWidth: 620 }}>
+                  {platformTenants.map((tenant) => (
+                    <div key={tenant.id} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <span style={{ fontWeight: 650 }}>{tenant.name}</span>
+                      <span className="cb-hint">{tenant.slug}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function SettingsView({
   roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], onChangeInsightsPermission,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
+  workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -2678,6 +2845,12 @@ function SettingsView({
           <div className="cb-page-sub">The fixed lists everyone picks from when setting up templates or logging a task.</div>
         </div>
       </div>
+      <WorkspaceSettingsCard
+        workspaces={workspaces}
+        activeWorkspaceId={activeWorkspaceId}
+        onSwitchWorkspace={onSwitchWorkspace}
+        onWorkspaceCreated={onWorkspaceCreated}
+      />
       {realIsSuperAdmin && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
@@ -6992,6 +7165,8 @@ export default function App() {
   const [authState, setAuthState] = useState("loading"); // loading | claim | login | ready
   const [unclaimedMembers, setUnclaimedMembers] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
+  const [workspaces, setWorkspaces] = useState([]);
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
   const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [members, setMembers] = useState([]);
@@ -7164,6 +7339,8 @@ export default function App() {
     function handleSessionRevoked() {
       clearToken();
       setCurrentUser(null);
+      setWorkspaces([]);
+      setActiveWorkspaceId("");
       setMembers([]);
       setClients([]);
       setTemplates([]);
@@ -7175,6 +7352,40 @@ export default function App() {
     window.addEventListener("clockbook-session-revoked", handleSessionRevoked);
     return () => window.removeEventListener("clockbook-session-revoked", handleSessionRevoked);
   }, []);
+
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const result = await api.getWorkspaces();
+      setWorkspaces(result?.workspaces || []);
+      setActiveWorkspaceId(result?.active_tenant_id || "");
+      return result;
+    } catch (err) {
+      setWorkspaces([]);
+      setActiveWorkspaceId("");
+      return null;
+    }
+  }, []);
+
+  async function switchWorkspace(tenantId) {
+    if (!tenantId || tenantId === activeWorkspaceId) return;
+    if (myRunningTask) {
+      showToast("Pause or complete your running timer before switching workspace.", true);
+      return;
+    }
+    try {
+      const result = await api.switchWorkspace(tenantId);
+      setToken(result.token);
+      // Reloading after a workspace switch deliberately clears all tenant-owned UI state,
+      // cached integration state and open modals before loading the target workspace.
+      window.location.reload();
+    } catch (err) {
+      showToast(err.message || "Could not switch workspace", true);
+    }
+  }
+
+  async function workspaceCreated() {
+    await loadWorkspaces();
+  }
 
   const loadAll = useCallback(async () => {
     try {
@@ -7200,6 +7411,11 @@ export default function App() {
       setLoadError(err.message || "Could not reach the server");
     }
   }, []);
+
+  useEffect(() => {
+    if (authState !== "ready") return;
+    loadWorkspaces();
+  }, [authState, loadWorkspaces]);
 
   useEffect(() => {
     if (authState !== "ready") return;
@@ -7231,6 +7447,8 @@ export default function App() {
     }
     clearToken();
     setCurrentUser(null);
+    setWorkspaces([]);
+    setActiveWorkspaceId("");
     setMembers([]);
     setClients([]);
     setTemplates([]);
@@ -8304,6 +8522,9 @@ export default function App() {
             onComplete={() => myPinnedTask && setCompletingTask(myPinnedTask)}
             onQuickMeeting={() => setShowQuickMeeting(true)}
             onStartTour={restartGuidedTour}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onSwitchWorkspace={switchWorkspace}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -8380,6 +8601,10 @@ export default function App() {
                 members={members} onChangeInsightsPermission={changeMemberInsightsPermission}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
                 effectiveIsAdmin={isAdmin}
+                workspaces={workspaces}
+                activeWorkspaceId={activeWorkspaceId}
+                onSwitchWorkspace={switchWorkspace}
+                onWorkspaceCreated={workspaceCreated}
               />
             )}
           </div>

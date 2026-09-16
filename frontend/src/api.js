@@ -73,6 +73,10 @@ export const api = {
   login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
   logout: () => request("/auth/logout", { method: "POST" }),
   getMe: () => request("/auth/me"),
+  getWorkspaces: () => request("/auth/workspaces"),
+  switchWorkspace: (tenantId) => request(`/auth/switch-workspace/${tenantId}`, { method: "POST" }),
+  getPlatformTenants: () => request("/platform/tenants"),
+  createPlatformTenant: (name, slug = "") => request("/platform/tenants", { method: "POST", body: JSON.stringify({ name, slug: slug || null }) }),
   setStaffTourCompleted: (completed = true) => request("/auth/tour", { method: "PATCH", body: JSON.stringify({ completed: !!completed }) }),
 
   getMembers: () => request("/members"),
