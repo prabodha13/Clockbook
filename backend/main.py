@@ -212,10 +212,14 @@ def run_multitenant_migration():
         "clients", "bank_accounts", "roles", "task_type_options", "tracked_metrics",
         "templates", "template_tasks", "tasks", "help_events", "inactivity_events",
     ]
-    inspector = inspect(engine)
-    tables = set(inspector.get_table_names())
-
     with engine.begin() as conn:
+        # IMPORTANT: inspect schema changes through the SAME connection that performs
+        # the ALTER TABLE statements. PostgreSQL holds an ACCESS EXCLUSIVE lock for
+        # ALTER TABLE until this transaction commits. Inspecting the same table through
+        # a second pooled connection here can block against our own uncommitted DDL and
+        # leave application startup stuck at "Waiting for application startup".
+        migration_inspector = inspect(conn)
+        tables = set(migration_inspector.get_table_names())
         # tenants/users/tenant_settings are created by metadata before this runs.
         existing_tenant = conn.execute(text("SELECT id FROM tenants WHERE id = :id"), {"id": AROUND_TENANT_ID}).first()
         if not existing_tenant:
@@ -227,17 +231,17 @@ def run_multitenant_migration():
         for table in tenant_tables:
             if table not in tables:
                 continue
-            columns = {c["name"] for c in inspect(engine).get_columns(table)}
+            columns = {c["name"] for c in inspect(conn).get_columns(table)}
             if "tenant_id" not in columns:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN tenant_id VARCHAR"))
             conn.execute(text(f"UPDATE {table} SET tenant_id = :tenant_id WHERE tenant_id IS NULL OR tenant_id = ''"), {"tenant_id": AROUND_TENANT_ID})
 
         if "members" in tables:
-            member_columns = {c["name"] for c in inspect(engine).get_columns("members")}
+            member_columns = {c["name"] for c in inspect(conn).get_columns("members")}
             if "user_id" not in member_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN user_id VARCHAR"))
         if "sessions" in tables:
-            session_columns = {c["name"] for c in inspect(engine).get_columns("sessions")}
+            session_columns = {c["name"] for c in inspect(conn).get_columns("sessions")}
             if "user_id" not in session_columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR"))
 
