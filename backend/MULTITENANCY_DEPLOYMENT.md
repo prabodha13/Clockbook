@@ -24,12 +24,12 @@ Tenant-owned uniqueness is scoped by tenant. For example, client code `ABC123` m
 
 Current Around Finance users continue to log in normally. Their default tenant is Around Finance.
 
-Backend endpoints are available for future multi-workspace users:
+Multi-workspace users are supported through:
 
 - `GET /api/auth/workspaces`
 - `POST /api/auth/switch-workspace/{tenant_id}`
 
-No workspace switcher is shown in the current UI, so the existing Around Finance experience is unchanged.
+ClockBook shows the active workspace in the top bar. If the signed-in user belongs to more than one workspace, that label becomes a workspace switcher. Switching is blocked while the user has a running timer, and a successful switch reloads the application with a new tenant-bound session so tenant-owned UI state cannot leak between workspaces.
 
 ## Platform administration
 
@@ -42,7 +42,7 @@ Those identities can use:
 - `GET /api/platform/tenants`
 - `POST /api/platform/tenants`
 
-Creating a tenant seeds its standard internal client, default template, roles, task types and tracked metrics, and gives the creating platform admin a Super Admin membership in the new tenant.
+They also see **Settings > Platform administration > Workspaces**, where a tenant can be created without manually calling the API. Creating a tenant seeds its standard internal client, default template, roles, task types and tracked metrics, gives the creating platform admin a Super Admin membership in the new tenant, and makes the new workspace available in the top-bar switcher.
 
 If `CLOCKBOOK_PLATFORM_ADMIN_EMAILS` is not set, platform tenant creation is unavailable; normal Around Finance usage is unaffected.
 
