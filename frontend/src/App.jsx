@@ -397,7 +397,7 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = false }) {
+function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = false, karbonConnected = false }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
@@ -405,7 +405,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     { id: "calendar", label: "Calendar", icon: CalendarIcon },
     { id: "insights", label: "Insights", icon: LayoutDashboard },
     { id: "export", label: "Export", icon: FileSpreadsheet },
-    { id: "reconcile", label: "Karbon Check", icon: CheckCircle2 },
+    ...(karbonConnected ? [{ id: "reconcile", label: "Karbon Check", icon: CheckCircle2 }] : []),
     { id: "staff", label: "Staff", icon: Users },
     ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
     ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
@@ -429,8 +429,28 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
   );
 }
 
+function WorkspaceLogo({ workspace, size = 22 }) {
+  const logo = workspace?.logo_data_url || "";
+  return logo ? (
+    <img src={logo} alt="" style={{ width: size, height: size, objectFit: "contain", borderRadius: 5, flexShrink: 0 }} />
+  ) : (
+    <span style={{ width: size, height: size, display: "inline-flex", alignItems: "center", justifyContent: "center", borderRadius: 5, background: "var(--paper-soft)", flexShrink: 0 }}>
+      <Building2 size={Math.max(12, size - 8)} />
+    </span>
+  );
+}
+
 function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace }) {
   const isAdmin = isAdminRole(currentUser.role);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const workspaceMenuRef = useRef(null);
+  const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) || workspaces[0] || null;
+  useEffect(() => {
+    if (!workspaceMenuOpen) return;
+    const close = (event) => { if (workspaceMenuRef.current && !workspaceMenuRef.current.contains(event.target)) setWorkspaceMenuOpen(false); };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [workspaceMenuOpen]);
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
   return (
@@ -456,36 +476,35 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
       <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        {workspaces.length > 0 && (
-          workspaces.length === 1 ? (
-            <div
-              title="Current workspace"
-              style={{
-                display: "flex", alignItems: "center", gap: 7, minHeight: 34, padding: "0 10px",
-                border: "1px solid var(--border)", borderRadius: 8, background: "var(--paper)",
-                color: "var(--ink-soft)", fontSize: 12.5, fontWeight: 650, whiteSpace: "nowrap",
-              }}
+        {activeWorkspace && (
+          <div ref={workspaceMenuRef} style={{ position: "relative" }}>
+            <button
+              type="button"
+              className="cb-btn cb-btn-sm"
+              title={workspaces.length > 1 ? "Switch workspace" : "Current workspace"}
+              onClick={() => workspaces.length > 1 && setWorkspaceMenuOpen((open) => !open)}
+              style={{ minHeight: 34, minWidth: workspaces.length > 1 ? 190 : undefined, justifyContent: "flex-start", gap: 8, paddingRight: 10 }}
             >
-              <Building2 size={13} />
-              {workspaces[0].name}
-            </div>
-          ) : (
-            <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
-              <Building2 size={13} style={{ position: "absolute", left: 10, pointerEvents: "none", color: "var(--ink-soft)" }} />
-              <select
-                className="cb-input"
-                aria-label="Current workspace"
-                title="Switch workspace"
-                value={activeWorkspaceId || ""}
-                onChange={(e) => onSwitchWorkspace && onSwitchWorkspace(e.target.value)}
-                style={{ minHeight: 34, width: 190, padding: "5px 28px 5px 30px", fontSize: 12.5, fontWeight: 650 }}
-              >
+              <WorkspaceLogo workspace={activeWorkspace} size={20} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 145 }}>{activeWorkspace.name}</span>
+              {workspaces.length > 1 && <ChevronDown size={13} style={{ marginLeft: "auto" }} />}
+            </button>
+            {workspaceMenuOpen && workspaces.length > 1 && (
+              <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 80, minWidth: 240, padding: 6, background: "var(--paper)", border: "1px solid var(--border)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)" }}>
                 {workspaces.map((workspace) => (
-                  <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                  <button
+                    key={workspace.id}
+                    type="button"
+                    onClick={() => { setWorkspaceMenuOpen(false); onSwitchWorkspace && onSwitchWorkspace(workspace.id); }}
+                    style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "8px 9px", border: 0, borderRadius: 7, background: workspace.id === activeWorkspace.id ? "var(--paper-soft)" : "transparent", color: "var(--ink)", cursor: "pointer", textAlign: "left", font: "inherit" }}
+                  >
+                    <WorkspaceLogo workspace={workspace} size={24} />
+                    <span style={{ minWidth: 0 }}><span style={{ display: "block", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{workspace.name}</span><span className="cb-hint">{roleLabel(workspace.role)}</span></span>
+                  </button>
                 ))}
-              </select>
-            </div>
-          )
+              </div>
+            )}
+          </div>
         )}
         <button className="cb-btn cb-btn-sm" data-tour="global-meeting" onClick={onQuickMeeting} title="Create a Google Meet now (Ctrl+Shift+M)">
           <Video size={13} />Meeting
@@ -2625,7 +2644,33 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
   );
 }
 
-function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated }) {
+function resizeWorkspaceLogo(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !String(file.type || "").startsWith("image/")) return reject(new Error("Choose an image file."));
+    if (file.size > 5 * 1024 * 1024) return reject(new Error("Choose an image smaller than 5 MB."));
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read that image."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Could not open that image."));
+      img.onload = () => {
+        const max = 256;
+        const scale = Math.min(max / img.width, max / img.height, 1);
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/webp", 0.88));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, canManageBranding = false, onBrandingUpdated }) {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0] || null;
   const [platformTenants, setPlatformTenants] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -2634,6 +2679,8 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
   const [newWorkspaceSlug, setNewWorkspaceSlug] = useState("");
   const [creatingWorkspace, setCreatingWorkspace] = useState(false);
   const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const [brandingBusy, setBrandingBusy] = useState(false);
+  const [brandingMessage, setBrandingMessage] = useState("");
 
   async function refreshPlatformTenants() {
     try {
@@ -2676,6 +2723,33 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
     }
   }
 
+  async function uploadWorkspaceLogo(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || brandingBusy) return;
+    setBrandingBusy(true); setBrandingMessage("");
+    try {
+      const dataUrl = await resizeWorkspaceLogo(file);
+      await api.updateWorkspaceBranding(dataUrl);
+      setBrandingMessage("Company logo updated.");
+      if (onBrandingUpdated) await onBrandingUpdated();
+    } catch (err) {
+      setBrandingMessage(err.message || "Could not update company logo");
+    } finally { setBrandingBusy(false); }
+  }
+
+  async function removeWorkspaceLogo() {
+    if (brandingBusy) return;
+    setBrandingBusy(true); setBrandingMessage("");
+    try {
+      await api.updateWorkspaceBranding("");
+      setBrandingMessage("Company logo removed.");
+      if (onBrandingUpdated) await onBrandingUpdated();
+    } catch (err) {
+      setBrandingMessage(err.message || "Could not remove company logo");
+    } finally { setBrandingBusy(false); }
+  }
+
   return (
     <>
       <div className="cb-tmpl-card">
@@ -2687,11 +2761,25 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
         </div>
         <div style={{ padding: 16 }}>
           {activeWorkspace ? (
-            <div style={{ display: "grid", gap: 10 }}>
-              <div>
-                <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
-                <div className="cb-hint" style={{ marginTop: 3 }}>Workspace ID: {activeWorkspace.id}</div>
+            <div style={{ display: "grid", gap: 12 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <WorkspaceLogo workspace={activeWorkspace} size={44} />
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
+                  <div className="cb-hint" style={{ marginTop: 3 }}>Workspace ID: {activeWorkspace.id}</div>
+                </div>
               </div>
+              {canManageBranding && (
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <label className="cb-btn cb-btn-sm" style={{ cursor: brandingBusy ? "default" : "pointer" }}>
+                    {brandingBusy ? "Updating..." : activeWorkspace.logo_data_url ? "Replace company logo" : "Upload company logo"}
+                    <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadWorkspaceLogo} disabled={brandingBusy} style={{ display: "none" }} />
+                  </label>
+                  {activeWorkspace.logo_data_url && <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={removeWorkspaceLogo} disabled={brandingBusy}>Remove logo</button>}
+                  <span className="cb-hint">PNG, JPEG or WebP. ClockBook resizes it for the workspace switcher.</span>
+                </div>
+              )}
+              {brandingMessage && <div className={brandingMessage.toLowerCase().includes("updated") || brandingMessage.toLowerCase().includes("removed") ? "cb-hint" : "cb-error"}>{brandingMessage}</div>}
               {workspaces.length > 1 && (
                 <div style={{ maxWidth: 360 }}>
                   <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Switch workspace</label>
@@ -2744,12 +2832,18 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
               <div style={{ marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
                 <div className="cb-label" style={{ marginBottom: 8 }}>Platform workspaces</div>
                 <div style={{ display: "grid", gap: 6, maxWidth: 620 }}>
-                  {platformTenants.map((tenant) => (
-                    <div key={tenant.id} style={{ display: "flex", justifyContent: "space-between", gap: 16, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 8 }}>
-                      <span style={{ fontWeight: 650 }}>{tenant.name}</span>
-                      <span className="cb-hint">{tenant.slug}</span>
-                    </div>
-                  ))}
+                  {platformTenants.map((tenant) => {
+                    const workspace = workspaces.find((row) => row.id === tenant.id) || tenant;
+                    return (
+                      <div key={tenant.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                          <WorkspaceLogo workspace={workspace} size={28} />
+                          <span style={{ fontWeight: 650 }}>{tenant.name}</span>
+                        </span>
+                        <span className="cb-hint">{tenant.slug}</span>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -2765,7 +2859,7 @@ function SettingsView({
   onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], onChangeInsightsPermission,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
-  workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated,
+  workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -2831,6 +2925,7 @@ function SettingsView({
       setKarbonApplicationId("");
       setKarbonAccessKey("");
       setKarbonMessage("Karbon connected successfully.");
+      if (onIntegrationChanged) await onIntegrationChanged();
     } catch (err) {
       setKarbonMessage(err.message);
     } finally {
@@ -2862,6 +2957,7 @@ function SettingsView({
       setKarbonApplicationId("");
       setKarbonAccessKey("");
       setKarbonMessage("Karbon disconnected.");
+      if (onIntegrationChanged) await onIntegrationChanged();
     } catch (err) {
       setKarbonMessage(err.message);
     } finally {
@@ -2880,6 +2976,7 @@ function SettingsView({
       setCalamariTenant(result.tenant || calamariTenant.trim());
       setCalamariApiKey("");
       setCalamariMessage("Calamari connected successfully.");
+      if (onIntegrationChanged) await onIntegrationChanged();
     } catch (err) {
       setCalamariMessage(err.message);
     } finally {
@@ -2910,6 +3007,7 @@ function SettingsView({
       setCalamariIntegration(result);
       setCalamariApiKey("");
       setCalamariMessage("Calamari disconnected.");
+      if (onIntegrationChanged) await onIntegrationChanged();
     } catch (err) {
       setCalamariMessage(err.message);
     } finally {
@@ -3020,6 +3118,8 @@ function SettingsView({
         activeWorkspaceId={activeWorkspaceId}
         onSwitchWorkspace={onSwitchWorkspace}
         onWorkspaceCreated={onWorkspaceCreated}
+        canManageBranding={realIsSuperAdmin && viewMode === "super_admin"}
+        onBrandingUpdated={onBrandingUpdated}
       />
       {realIsSuperAdmin && (
         <div className="cb-tmpl-card">
@@ -3070,7 +3170,7 @@ function SettingsView({
             >
               <div>
                 <div className="cb-tmpl-field">Permissions</div>
-                <div className="cb-tmpl-name">Leave &amp; capacity insights</div>
+                <div className="cb-tmpl-name">{integrationStatus.calamari_connected ? <>Leave &amp; capacity insights</> : <>Capacity insights</>}</div>
               </div>
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, color: "var(--ink-soft)" }}>
                 <span style={{ fontSize: 12.5 }}>{enabledMembers.length} {enabledMembers.length === 1 ? "person" : "people"} enabled</span>
@@ -3081,7 +3181,7 @@ function SettingsView({
             {permissionsOpen && (
               <div style={{ padding: "0 16px 16px" }}>
                 <div className="cb-hint" style={{ marginBottom: 12 }}>
-                  Choose who can view Leave Trends and Capacity &amp; Utilisation in Insights. Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
+                  {integrationStatus.calamari_connected ? "Choose who can view Leave Trends and Capacity & Utilisation in Insights." : "Choose who can view Capacity & Utilisation in Insights. Leave reporting stays hidden until this workspace connects Calamari."} Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
                 </div>
 
                 <div style={{ position: "relative", maxWidth: 460, marginBottom: 14 }}>
@@ -4409,7 +4509,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
 }
 
 
-function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, pods = [] }) {
+function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, pods = [], calamariConnected = false }) {
   const toDateKey = (d) => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -4705,8 +4805,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const capacityLabel = capacityView === "pod" ? "Pod capacity" : capacityView === "team" ? "Team capacity" : "Available capacity";
   const capacityTrackedPct = capacityData?.overall_utilization;
   const capacityBillablePct = capacityData?.client_utilization;
-  const personLeaveTrends = forceSelfOnly ? null : data?.leave_trends;
-  const leaveData = forceSelfOnly || podSelectionMissing ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends);
+  const personLeaveTrends = forceSelfOnly || !calamariConnected ? null : data?.leave_trends;
+  const leaveData = forceSelfOnly || !calamariConnected || podSelectionMissing ? null : ((capacityView === "team" || capacityView === "pod") && data?.team_leave_trends ? data.team_leave_trends : personLeaveTrends);
   const clientSeconds = Number(data?.summary?.billable_seconds || 0);
   const trackedSeconds = Number(data?.summary?.tracked_seconds || 0);
   const clientShare = trackedSeconds > 0 ? (clientSeconds / trackedSeconds) * 100 : 0;
@@ -4945,12 +5045,12 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                   <CapacityTrendChart rows={capacityData.trend || []}/>
                 </div>
               </div>
-              {capacityData?.calamari_adjustment_seconds > 0 && (
+              {calamariConnected && capacityData?.calamari_adjustment_seconds > 0 && (
                 <div className="cb-hint" style={{ marginTop: 10 }}>
                   {formatHM(capacityData.calamari_adjustment_seconds)} removed from available capacity for approved leave/public holidays from Calamari.
                 </div>
               )}
-              {capacityData?.calamari?.warnings?.length > 0 && (
+              {calamariConnected && capacityData?.calamari?.warnings?.length > 0 && (
                 <div className="cb-hint" style={{ marginTop: 6, color: "#8A5A00" }}>
                   Calamari sync warning: {capacityData.calamari.warnings[0]}{capacityData.calamari.warnings.length > 1 ? ` (+${capacityData.calamari.warnings.length - 1} more)` : ""}
                 </div>
@@ -7418,6 +7518,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState(null);
   const [workspaces, setWorkspaces] = useState([]);
   const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+  const [integrationStatus, setIntegrationStatus] = useState({ karbon_connected: false, calamari_connected: false });
   const [dataLoading, setDataLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [members, setMembers] = useState([]);
@@ -7632,6 +7733,17 @@ export default function App() {
     }
   }, []);
 
+  const loadIntegrationStatus = useCallback(async () => {
+    try {
+      const result = await api.getIntegrationStatus();
+      setIntegrationStatus({ karbon_connected: !!result?.karbon_connected, calamari_connected: !!result?.calamari_connected });
+      return result;
+    } catch (_) {
+      setIntegrationStatus({ karbon_connected: false, calamari_connected: false });
+      return null;
+    }
+  }, []);
+
   async function switchWorkspace(tenantId) {
     if (!tenantId || tenantId === activeWorkspaceId) return;
     if (myRunningTask) {
@@ -7681,7 +7793,8 @@ export default function App() {
   useEffect(() => {
     if (authState !== "ready") return;
     loadWorkspaces();
-  }, [authState, loadWorkspaces]);
+    loadIntegrationStatus();
+  }, [authState, loadWorkspaces, loadIntegrationStatus]);
 
   useEffect(() => {
     if (authState !== "ready") return;
@@ -7715,6 +7828,7 @@ export default function App() {
     setCurrentUser(null);
     setWorkspaces([]);
     setActiveWorkspaceId("");
+    setIntegrationStatus({ karbon_connected: false, calamari_connected: false });
     setMembers([]);
     setClients([]);
     setTemplates([]);
@@ -8786,7 +8900,7 @@ export default function App() {
   return (
     <div className="cb-root">
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} karbonConnected={integrationStatus.karbon_connected} />
         <div className="cb-main">
           <TopBar
             currentUser={effectiveCurrentUser}
@@ -8838,6 +8952,7 @@ export default function App() {
               <InsightsView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
+                calamariConnected={integrationStatus.calamari_connected}
               />
             )}
             {view === "export" && (
@@ -8848,7 +8963,7 @@ export default function App() {
                 onTogglePushed={togglePushed} onDeleteTask={deleteTask}
               />
             )}
-            {view === "reconcile" && (
+            {view === "reconcile" && integrationStatus.karbon_connected && (
               <KarbonReconciliationView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
@@ -8881,6 +8996,9 @@ export default function App() {
                 activeWorkspaceId={activeWorkspaceId}
                 onSwitchWorkspace={switchWorkspace}
                 onWorkspaceCreated={workspaceCreated}
+                onBrandingUpdated={loadWorkspaces}
+                integrationStatus={integrationStatus}
+                onIntegrationChanged={loadIntegrationStatus}
               />
             )}
           </div>
