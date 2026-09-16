@@ -2169,25 +2169,27 @@ function InviteMemberModal({ onClose, onInvite, currentUser }) {
                   {currentUser?.role === "super_admin" && <option value="super_admin">Super Admin</option>}
                 </select>
               </div>
-              <div className="cb-hint">ClockBook creates a secure invitation link valid for 7 days. The person chooses their own password. Existing ClockBook users keep their current login.</div>
+              <div className="cb-hint">ClockBook sends a secure invitation by email. The link is valid for 7 days. New users choose their own password; existing ClockBook users keep their current login.</div>
               {error && <div className="cb-error">{error}</div>}
             </div>
             <div className="cb-modal-foot">
               <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-              <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>{busy ? "Creating..." : "Create invitation"}</button>
+              <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>{busy ? "Sending..." : "Send invitation"}</button>
             </div>
           </form>
         ) : (
           <>
             <div className="cb-modal-body">
-              <div className="cb-notice" style={{ marginBottom: 12 }}>
-                Invitation ready for <strong>{created.email}</strong> · {roleLabel(created.role)}
+              <div className={created.email_status === "sent" ? "cb-notice" : "cb-error"} style={{ marginBottom: 12 }}>
+                {created.email_status === "sent"
+                  ? <>Invitation emailed to <strong>{created.email}</strong> · {roleLabel(created.role)}</>
+                  : <>Invitation created for <strong>{created.email}</strong>, but the email was not sent. {created.email_error || "Copy the link below instead."}</>}
               </div>
               <div className="cb-field">
                 <label className="cb-label">Invitation link</label>
                 <input className="cb-input" value={inviteUrl(created.token)} readOnly onFocus={(e) => e.target.select()} />
               </div>
-              <div className="cb-hint">Send this link to the teammate. ClockBook stores only a hash of the invitation token, so this exact link is shown only now unless you generate a new one later.</div>
+              <div className="cb-hint">You can also copy this link manually. ClockBook stores only a hash of the invitation token, so this exact link is shown only now unless you resend the invitation later.</div>
             </div>
             <div className="cb-modal-foot">
               <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Done</button>
@@ -5702,13 +5704,19 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, invitationRefre
   async function regenerateInvitation(invitation) {
     try {
       const updated = await api.regenerateTenantInvitation(invitation.id);
-      const url = invitationUrl(updated.token);
-      const copied = await copyToClipboard(url);
-      if (!copied) window.prompt("Copy invitation link", url);
-      setInvitationMessage(copied ? `New invitation link copied for ${updated.email}.` : `New invitation link created for ${updated.email}.`);
+      if (updated.email_status === "sent") {
+        setInvitationMessage(`Invitation email resent to ${updated.email}.`);
+      } else {
+        const url = invitationUrl(updated.token);
+        const copied = await copyToClipboard(url);
+        if (!copied) window.prompt("Copy invitation link", url);
+        setInvitationMessage(copied
+          ? `Email could not be sent. A new invitation link was copied for ${updated.email}.`
+          : `Email could not be sent. A new invitation link was created for ${updated.email}.`);
+      }
       await loadInvitations();
     } catch (err) {
-      setError(err.message || "Could not regenerate invitation");
+      setError(err.message || "Could not resend invitation");
     }
   }
 
@@ -5768,7 +5776,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, invitationRefre
                   <div className="cb-row-meta">{invitation.email} · {roleLabel(invitation.role)} · expires {formatDate(invitation.expires_at)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
-                  <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => regenerateInvitation(invitation)}>New link</button>
+                  <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => regenerateInvitation(invitation)}>Resend email</button>
                   <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => revokeInvitation(invitation)}>Revoke</button>
                 </div>
               </div>
