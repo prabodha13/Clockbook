@@ -283,6 +283,22 @@ async def lifespan(app: FastAPI):
             for name in DEFAULT_TRACKED_METRICS:
                 db.add(models.TrackedMetric(name=name))
             db.commit()
+
+        # Upgrade legacy Google refresh tokens to the same encrypted-at-rest storage already
+        # used by the other integrations. If the deployment key is not configured yet, keep
+        # the old token usable and retry on a later startup/request rather than taking
+        # ClockBook offline. New Google connections never write plaintext tokens.
+        google_tokens_changed = False
+        for member in db.query(models.Member).filter(models.Member.google_refresh_token.isnot(None)).all():
+            stored = member.google_refresh_token or ""
+            if stored and not stored.startswith("enc:v1:"):
+                try:
+                    member.google_refresh_token = "enc:v1:" + _encrypt_secret(stored)
+                    google_tokens_changed = True
+                except HTTPException:
+                    break
+        if google_tokens_changed:
+            db.commit()
     finally:
         db.close()
     yield
@@ -317,9 +333,13 @@ def get_current_member(authorization: str = Header(None), db: Session = Depends(
     token = authorization[len("Bearer "):]
     session = db.get(models.Session, token)
     if not session:
-        raise HTTPException(401, "Session expired, please log in again")
+        raise HTTPException(401, "Session no longer valid, please log in again")
     member = db.get(models.Member, session.member_id)
     if not member:
+        # Clear an orphaned server session as well as rejecting it. This covers accounts
+        # removed outside the normal ClockBook delete flow without creating a timeout.
+        db.delete(session)
+        db.commit()
         raise HTTPException(401, "Account no longer exists")
     return member
 
@@ -331,6 +351,57 @@ def require_admin(member):
 
 def is_admin_or_above(role):
     return role in ("admin", "super_admin")
+
+
+def _member_in_admin_scope(current_member, target_member):
+    """Server-side scope used for privileged mutations.
+
+    Super admins can manage everyone. Regular admins can never manage a super admin and,
+    when assigned to a pod, can only manage people in that same pod. Staff can only ever
+    match themselves. This mirrors the existing read-side Dashboard/Export visibility rules
+    instead of trusting whichever member/task ID the browser sends.
+    """
+    if not target_member:
+        return False
+    if current_member.role == "super_admin":
+        return True
+    if current_member.role == "admin":
+        if target_member.role == "super_admin":
+            return False
+        if current_member.pod_id and target_member.pod_id != current_member.pod_id:
+            return False
+        return True
+    return target_member.id == current_member.id
+
+
+def _require_member_in_scope(current_member, member_id, db: Session):
+    target = db.get(models.Member, member_id)
+    if not target:
+        raise HTTPException(404, "Member not found")
+    if not _member_in_admin_scope(current_member, target):
+        raise HTTPException(403, "You cannot manage that person")
+    return target
+
+
+def _require_task_in_scope(current_member, task, db: Session, owner_can_access=True):
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if owner_can_access and task.owner_id == current_member.id:
+        return task
+    if current_member.role not in ("admin", "super_admin"):
+        raise HTTPException(403, "This task belongs to someone else")
+    if not task.owner_id:
+        return task
+    owner = db.get(models.Member, task.owner_id)
+    if not owner or not _member_in_admin_scope(current_member, owner):
+        raise HTTPException(403, "You cannot manage that task")
+    return task
+
+
+def _revoke_member_sessions(db: Session, member_id: str):
+    # ClockBook deliberately has no inactivity/session timeout. Tokens live for the browser
+    # session, but security-sensitive account changes must be able to invalidate them now.
+    db.query(models.Session).filter(models.Session.member_id == member_id).delete(synchronize_session=False)
 
 
 def close_open_segment(segments, end_override=None):
@@ -516,8 +587,12 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
 
     member = db.get(models.Member, member_id)
     if member:
-        member.google_refresh_token = refresh_token
-        db.commit()
+        try:
+            member.google_refresh_token = "enc:v1:" + _encrypt_secret(refresh_token)
+            db.commit()
+        except HTTPException:
+            db.rollback()
+            return RedirectResponse(url="/?calendar=error")
 
     return RedirectResponse(url="/?calendar=connected")
 
@@ -530,12 +605,32 @@ def disconnect_google_calendar(current_member: models.Member = Depends(get_curre
     return current_member
 
 
-def get_google_access_token(member):
+def _google_refresh_token_value(member, db: Session = None):
+    stored = member.google_refresh_token
+    if not stored:
+        return None
+    if stored.startswith("enc:v1:"):
+        return _decrypt_secret(stored[len("enc:v1:"):])
+
+    # Backwards compatibility for tokens stored before encryption was introduced. Use the
+    # existing token for this request, then migrate it in place when secure integration
+    # storage is configured. No new Google token is ever written in plaintext.
+    if db is not None:
+        try:
+            member.google_refresh_token = "enc:v1:" + _encrypt_secret(stored)
+            db.commit()
+        except HTTPException:
+            db.rollback()
+    return stored
+
+
+def get_google_access_token(member, db: Session = None):
     if not member.google_refresh_token:
         return None
     try:
+        refresh_token = _google_refresh_token_value(member, db)
         resp = httpx.post("https://oauth2.googleapis.com/token", data={
-            "refresh_token": member.google_refresh_token,
+            "refresh_token": refresh_token,
             "client_id": GOOGLE_CLIENT_ID,
             "client_secret": GOOGLE_CLIENT_SECRET,
             "grant_type": "refresh_token",
@@ -552,7 +647,7 @@ def get_meeting_now(current_member: models.Member = Depends(get_current_member),
     # there is no way for this to see or reveal another person's calendar or meetings.
     if not current_member.google_refresh_token:
         return {"connected": False, "meeting": None}
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         return {"connected": True, "meeting": None}
 
@@ -606,7 +701,7 @@ def get_calendar_events(start: str = None, end: str = None, current_member: mode
     # moment for the background meeting-now check to fire.
     if not current_member.google_refresh_token:
         return {"connected": False, "events": []}
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         return {"connected": True, "events": [], "error": "Could not refresh access, try reconnecting"}
 
@@ -715,7 +810,7 @@ def create_calendar_event(payload: schemas.CalendarEventCreate, current_member: 
     summary = payload.summary.strip()
     if not summary:
         raise HTTPException(400, "Event name is required")
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
     attendees = _calendar_attendee_emails(payload, current_member, db)
@@ -750,7 +845,7 @@ def create_calendar_event(payload: schemas.CalendarEventCreate, current_member: 
 def update_calendar_event(event_id: str, payload: schemas.CalendarEventUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if not current_member.google_refresh_token:
         raise HTTPException(400, "Connect Google Calendar before editing an event")
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
     body = {}
@@ -786,7 +881,7 @@ def update_calendar_event(event_id: str, payload: schemas.CalendarEventUpdate, c
 def delete_calendar_event(event_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if not current_member.google_refresh_token:
         raise HTTPException(400, "Connect Google Calendar before deleting an event")
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
     try:
@@ -818,7 +913,7 @@ def create_quick_meeting(payload: schemas.QuickMeetingCreate, current_member: mo
     if payload.duration_minutes < 5 or payload.duration_minutes > 240:
         raise HTTPException(400, "Meeting duration must be between 5 and 240 minutes")
 
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         raise HTTPException(400, "Could not refresh Google Calendar access. Reconnect your calendar and try again")
 
@@ -933,7 +1028,7 @@ def get_suggested_tasks(current_member: models.Member = Depends(get_current_memb
     # because the task it already produced was submitted a while ago.
     if not current_member.google_refresh_token:
         return {"connected": False, "suggestions": []}
-    access_token = get_google_access_token(current_member)
+    access_token = get_google_access_token(current_member, db)
     if not access_token:
         return {"connected": True, "suggestions": [], "error": "Could not refresh access, try reconnecting"}
 
@@ -1041,17 +1136,21 @@ def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, curren
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
-    # An admin can always promote themselves to super admin, since otherwise nobody could
-    # ever become the first one. Touching anyone else's super admin status, granting it or
-    # taking it away, is reserved for an existing super admin.
-    acting_on_self = member_id == current_member.id
-    if not acting_on_self and (payload.role == "super_admin" or member.role == "super_admin") and current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can manage another person's super admin access")
+    if current_member.role != "super_admin" and not _member_in_admin_scope(current_member, member):
+        raise HTTPException(403, "You cannot manage that person's role")
+    # Super-admin authority is never self-grantable. A regular admin may continue managing
+    # ordinary Admin/Staff roles, but only an existing super admin can grant, remove, or
+    # otherwise touch super-admin status.
+    if current_member.role != "super_admin" and (payload.role == "super_admin" or member.role == "super_admin"):
+        raise HTTPException(403, "Only a super admin can manage super admin access")
     if is_admin_or_above(member.role) and not is_admin_or_above(payload.role):
         admin_count = db.query(models.Member).filter(models.Member.role.in_(["admin", "super_admin"])).count()
         if admin_count <= 1:
             raise HTTPException(400, "At least one admin is required")
+    role_changed = member.role != payload.role
     member.role = payload.role
+    if role_changed:
+        _revoke_member_sessions(db, member.id)
     db.commit()
     db.refresh(member)
     return member
@@ -1130,15 +1229,14 @@ def set_member_credentials(member_id: str, payload: schemas.LoginRequest, curren
     # password if they are locked out. There is no email delivery in this app, so whatever
     # password is set here needs to be shared with that person directly.
     require_admin(current_member)
-    member = db.get(models.Member, member_id)
-    if not member:
-        raise HTTPException(404, "Member not found")
+    member = _require_member_in_scope(current_member, member_id, db)
     email = payload.email.strip().lower()
     existing = db.query(models.Member).filter(models.Member.email == email, models.Member.id != member_id).first()
     if existing:
         raise HTTPException(400, "That email is already registered")
     member.email = email
     member.password_hash = hash_password(payload.password)
+    _revoke_member_sessions(db, member.id)
     db.commit()
     db.refresh(member)
     return member
@@ -1152,6 +1250,8 @@ def delete_member(member_id: str, current_member: models.Member = Depends(get_cu
     member = db.get(models.Member, member_id)
     if not member:
         return None
+    if not _member_in_admin_scope(current_member, member):
+        raise HTTPException(403, "You cannot delete that person")
     if member.role == "super_admin" and current_member.role != "super_admin":
         raise HTTPException(403, "Only a super admin can delete a super admin")
     if is_admin_or_above(member.role):
@@ -2688,8 +2788,10 @@ def list_tasks(current_member: models.Member = Depends(get_current_member), db: 
 @app.post("/api/tasks", response_model=schemas.TaskOut, status_code=201)
 def create_task(payload: schemas.TaskCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     owner_id = payload.owner_id or current_member.id
-    if owner_id != current_member.id and not is_admin_or_above(current_member.role):
-        raise HTTPException(403, "Only an admin can assign a task to someone else")
+    if owner_id != current_member.id:
+        if not is_admin_or_above(current_member.role):
+            raise HTTPException(403, "Only an admin can assign a task to someone else")
+        _require_member_in_scope(current_member, owner_id, db)
     client_id = payload.client_id or UNASSIGNED_CLIENT_ID
     client_name = payload.client_name or (UNASSIGNED_CLIENT_NAME if client_id == UNASSIGNED_CLIENT_ID else "")
     task = models.TaskInstance(
@@ -2836,7 +2938,7 @@ def pause_task_beacon(task_id: str, payload: schemas.TaskPauseBeacon, db: Sessio
     # that heartbeat-based check still exists underneath this as the real safety net.
     session = db.get(models.Session, payload.token)
     if not session:
-        raise HTTPException(401, "Session expired")
+        raise HTTPException(401, "Session no longer valid")
     current_member = db.get(models.Member, session.member_id)
     if not current_member:
         raise HTTPException(401, "Account no longer exists")
@@ -2864,8 +2966,7 @@ def reset_task(task_id: str, current_member: models.Member = Depends(get_current
     task = db.get(models.TaskInstance, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
-    if task.owner_id and task.owner_id != current_member.id and not is_admin_or_above(current_member.role):
-        raise HTTPException(403, "This task belongs to someone else")
+    _require_task_in_scope(current_member, task, db, owner_can_access=True)
     if task.status not in ("running", "paused"):
         raise HTTPException(400, "Only a running or paused task can be reset")
     task.segments = []
@@ -2977,10 +3078,10 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
 def reassign_task(task_id: str, payload: schemas.TaskReassign, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     task = db.get(models.TaskInstance, task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
+    _require_task_in_scope(current_member, task, db, owner_can_access=True)
     if task.status == "running":
         raise HTTPException(400, "Pause the timer before reassigning this task")
+    _require_member_in_scope(current_member, payload.owner_id, db)
     task.owner_id = payload.owner_id
     db.commit()
     db.refresh(task)
@@ -2990,8 +3091,7 @@ def reassign_task(task_id: str, payload: schemas.TaskReassign, current_member: m
 @app.patch("/api/tasks/{task_id}/toggle-pushed", response_model=schemas.TaskOut)
 def toggle_pushed(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     task = db.get(models.TaskInstance, task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
+    _require_task_in_scope(current_member, task, db, owner_can_access=True)
     task.pushed_to_karbon = not task.pushed_to_karbon
     db.commit()
     db.refresh(task)
@@ -3004,7 +3104,9 @@ def delete_task(task_id: str, current_member: models.Member = Depends(get_curren
     if not task:
         return None
     linked_help_event = db.query(models.HelpEvent).filter(models.HelpEvent.task_id == task_id).first()
-    if not is_admin_or_above(current_member.role):
+    if is_admin_or_above(current_member.role):
+        _require_task_in_scope(current_member, task, db, owner_can_access=True)
+    else:
         if task.owner_id != current_member.id:
             raise HTTPException(403, "This task belongs to someone else")
         if task.status == "submitted":
@@ -3038,6 +3140,12 @@ def scan_corrupted_tasks(current_member: models.Member = Depends(get_current_mem
     require_admin(current_member)
     results = []
     for task in db.query(models.TaskInstance).all():
+        try:
+            _require_task_in_scope(current_member, task, db, owner_can_access=True)
+        except HTTPException as exc:
+            if exc.status_code == 403:
+                continue
+            raise
         orphaned = find_orphaned_open_segments(task.segments)
         last_segment_open = bool(task.segments) and not task.segments[-1].get("end")
         stuck_last_segment = last_segment_open and task.status != "running"
@@ -3060,8 +3168,7 @@ def repair_task_segments(task_id: str, current_member: models.Member = Depends(g
     # paused one, since there is no way to recover the true original moment.
     require_admin(current_member)
     task = db.get(models.TaskInstance, task_id)
-    if not task:
-        raise HTTPException(404, "Task not found")
+    _require_task_in_scope(current_member, task, db, owner_can_access=True)
     segments = list(task.segments or [])
     before_hours = round(elapsed_seconds(segments) / 3600, 2)
     for i in find_orphaned_open_segments(segments):
@@ -3980,6 +4087,15 @@ def get_export(client_id: str = "all", pushed: str = "pending", date_from: str =
     return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids)
 
 
+def _csv_safe_text(value):
+    text_value = "" if value is None else str(value)
+    # Excel/Sheets can execute cells beginning with these characters as formulas. Prefixing
+    # an apostrophe keeps user-controlled names/notes literal without changing stored data.
+    if text_value.startswith(("=", "+", "-", "@")):
+        return "'" + text_value
+    return text_value
+
+
 @app.get("/api/export.csv")
 def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     exclude_owner_ids = None
@@ -3999,10 +4115,11 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     ])
     for r in rows:
         writer.writerow([
-            r["date"], r["client"], r["template_name"] or "", r["task"], r["role"], r["task_type"], r["period"],
+            r["date"], _csv_safe_text(r["client"]), _csv_safe_text(r["template_name"] or ""), _csv_safe_text(r["task"]),
+            _csv_safe_text(r["role"]), _csv_safe_text(r["task_type"]), _csv_safe_text(r["period"]),
             r["hours"], r["tracked_hours"] if r["tracked_hours"] is not None else "",
-            r["note"], r["tracked_by"], "Yes" if r["pushed"] else "No",
-            r["bank_account"], r["metric"],
+            _csv_safe_text(r["note"]), _csv_safe_text(r["tracked_by"]), "Yes" if r["pushed"] else "No",
+            _csv_safe_text(r["bank_account"]), _csv_safe_text(r["metric"]),
             r["start_count"] if r["start_count"] is not None else "",
             r["end_count"] if r["end_count"] is not None else "",
             r["change"] if r["change"] is not None else "",
