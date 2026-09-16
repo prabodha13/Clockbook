@@ -4,6 +4,7 @@ import secrets
 import base64
 import hashlib
 import hmac
+import html
 import bcrypt
 import httpx
 import time
@@ -29,6 +30,15 @@ import schemas
 
 CLOCKBOOK_VERSION = (os.environ.get("CLOCKBOOK_VERSION") or os.environ.get("RAILWAY_GIT_COMMIT_SHA") or "unknown").strip()
 STARTUP_MIGRATION_LOCK_KEY = 424242017
+
+# Transactional invitation email. These are deployment settings, not tenant-owned data.
+# RESEND_FROM_EMAIL should use a verified Resend domain in production, for example:
+# ClockBook <invites@clockbook.example>
+RESEND_API_KEY = (os.environ.get("RESEND_API_KEY") or "").strip()
+RESEND_FROM_EMAIL = (os.environ.get("RESEND_FROM_EMAIL") or "").strip()
+RESEND_REPLY_TO = (os.environ.get("RESEND_REPLY_TO") or "").strip()
+CLOCKBOOK_PUBLIC_URL = (os.environ.get("CLOCKBOOK_PUBLIC_URL") or "").strip().rstrip("/")
+RESEND_EMAIL_ENDPOINT = "https://api.resend.com/emails"
 
 logger = logging.getLogger("clockbook")
 if not logger.handlers:
@@ -1903,6 +1913,81 @@ def _invitation_token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _invitation_url(request: Request, token: str) -> str:
+    # Production serves the frontend from this FastAPI app. CLOCKBOOK_PUBLIC_URL is
+    # preferred so invitation links remain correct behind proxies/custom domains.
+    base = CLOCKBOOK_PUBLIC_URL or str(request.base_url).rstrip("/")
+    return f"{base}/?invite={token}"
+
+
+def _send_invitation_email(*, request: Request, token: str, invitation: models.TenantInvitation, tenant: models.Tenant, inviter: models.Member):
+    """Send one tenant invitation through Resend.
+
+    Invitation creation never depends on email availability. If Resend is unavailable or
+    misconfigured, the secure invitation remains valid and the UI can still copy its link.
+    Raw invitation tokens are never written to logs.
+    """
+    if not RESEND_API_KEY or not RESEND_FROM_EMAIL:
+        return {"status": "not_configured", "error": "Invitation email is not configured."}
+
+    invite_url = _invitation_url(request, token)
+    workspace_name = tenant.name if tenant else "your ClockBook workspace"
+    recipient_name = invitation.name or invitation.email
+    role_label = {"member": "Staff", "admin": "Admin", "super_admin": "Super Admin"}.get(invitation.role, invitation.role)
+    safe_name = html.escape(recipient_name)
+    safe_workspace = html.escape(workspace_name)
+    safe_inviter = html.escape(inviter.name or "A ClockBook administrator")
+    safe_role = html.escape(role_label)
+    safe_url = html.escape(invite_url, quote=True)
+
+    payload = {
+        "from": RESEND_FROM_EMAIL,
+        "to": [invitation.email],
+        "subject": f"You're invited to {workspace_name} on ClockBook",
+        "html": (
+            '<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#171717">'
+            "<h2 style='margin-bottom:8px'>You're invited to ClockBook</h2>"
+            f'<p>Hi {safe_name},</p>'
+            f'<p>{safe_inviter} invited you to join <strong>{safe_workspace}</strong> as <strong>{safe_role}</strong>.</p>'
+            f'<p style="margin:28px 0"><a href="{safe_url}" style="background:#171717;color:#fff;text-decoration:none;padding:11px 18px;border-radius:7px;display:inline-block">Accept invitation</a></p>'
+            '<p>This invitation expires in 7 days. If you already use ClockBook, you can join with your existing login.</p>'
+            f'<p style="font-size:12px;color:#666;word-break:break-all">If the button does not work, open: {safe_url}</p>'
+            '<p style="font-size:12px;color:#888">If you were not expecting this invitation, you can ignore this email.</p>'
+            '</div>'
+        ),
+    }
+    if RESEND_REPLY_TO:
+        payload["reply_to"] = RESEND_REPLY_TO
+
+    try:
+        response = httpx.post(
+            RESEND_EMAIL_ENDPOINT,
+            headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json", "Idempotency-Key": f"clockbook-invite/{invitation.id}/{_invitation_token_hash(token)[:20]}"},
+            json=payload,
+            timeout=10.0,
+        )
+        response.raise_for_status()
+        data = response.json() if response.content else {}
+        _log_event(
+            "tenant_invitation_email_sent",
+            tenant_id=invitation.tenant_id,
+            invitation_id=invitation.id,
+            recipient_hash=_rate_limit_identity(invitation.email.lower())[:16],
+            provider="resend",
+        )
+        return {"status": "sent", "provider_message_id": data.get("id")}
+    except Exception as exc:
+        _log_event(
+            "tenant_invitation_email_failed",
+            tenant_id=invitation.tenant_id,
+            invitation_id=invitation.id,
+            recipient_hash=_rate_limit_identity(invitation.email.lower())[:16],
+            provider="resend",
+            error_type=type(exc).__name__,
+        )
+        return {"status": "failed", "error": "Resend could not deliver the invitation email. You can still copy the invitation link."}
+
+
 def _invite_role_allowed(current_member: models.Member, role: str) -> bool:
     if role not in ("member", "admin", "super_admin"):
         return False
@@ -2020,7 +2105,7 @@ def list_tenant_invitations(current_member: models.Member = Depends(get_current_
 
 
 @app.post("/api/tenant-invitations", response_model=schemas.TenantInvitationCreated, status_code=201)
-def create_tenant_invitation(payload: schemas.TenantInvitationCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+def create_tenant_invitation(payload: schemas.TenantInvitationCreate, request: Request, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     email = payload.email.strip().lower()
     name = payload.name.strip()
@@ -2063,6 +2148,8 @@ def create_tenant_invitation(payload: schemas.TenantInvitationCreate, current_me
         db.rollback()
         raise HTTPException(400, "There is already a pending invitation for that email")
     db.refresh(invitation)
+    tenant = db.get(models.Tenant, current_member.tenant_id)
+    delivery = _send_invitation_email(request=request, token=raw_token, invitation=invitation, tenant=tenant, inviter=current_member)
     return schemas.TenantInvitationCreated(
         id=invitation.id,
         email=invitation.email,
@@ -2072,11 +2159,14 @@ def create_tenant_invitation(payload: schemas.TenantInvitationCreate, current_me
         created_at=invitation.created_at,
         expires_at=invitation.expires_at,
         token=raw_token,
+        email_status=delivery.get("status", "failed"),
+        email_error=delivery.get("error"),
+        provider_message_id=delivery.get("provider_message_id"),
     )
 
 
 @app.post("/api/tenant-invitations/{invitation_id}/regenerate", response_model=schemas.TenantInvitationCreated)
-def regenerate_tenant_invitation(invitation_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+def regenerate_tenant_invitation(invitation_id: str, request: Request, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     invitation = db.get(models.TenantInvitation, invitation_id)
     if not invitation:
@@ -2092,6 +2182,8 @@ def regenerate_tenant_invitation(invitation_id: str, current_member: models.Memb
     invitation.expires_at = datetime.utcnow() + timedelta(days=INVITATION_TTL_DAYS)
     db.commit()
     db.refresh(invitation)
+    tenant = db.get(models.Tenant, current_member.tenant_id)
+    delivery = _send_invitation_email(request=request, token=raw_token, invitation=invitation, tenant=tenant, inviter=current_member)
     return schemas.TenantInvitationCreated(
         id=invitation.id,
         email=invitation.email,
@@ -2101,6 +2193,9 @@ def regenerate_tenant_invitation(invitation_id: str, current_member: models.Memb
         created_at=invitation.created_at,
         expires_at=invitation.expires_at,
         token=raw_token,
+        email_status=delivery.get("status", "failed"),
+        email_error=delivery.get("error"),
+        provider_message_id=delivery.get("provider_message_id"),
     )
 
 

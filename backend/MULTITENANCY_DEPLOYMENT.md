@@ -71,11 +71,22 @@ Invitation flow:
 - The invitation is bound to the current tenant, email address and requested tenant role.
 - Invitation links expire after 7 days.
 - Only a SHA-256 hash of the invitation token is stored in the database; the raw token is shown only when the invitation is created or regenerated.
-- Pending invitations can be regenerated or revoked from the Staff page.
+- Pending invitations can be resent (which rotates the secure token) or revoked from the Staff page.
 - A regular Admin can invite Staff or Admin users. Only a Super Admin can invite another Super Admin.
 - If the invited email already has a ClockBook login in another tenant, the person verifies that existing password and ClockBook creates only a new membership. Their existing password is not changed.
 - If the email is new to ClockBook, the invitee chooses their own password while accepting the invitation.
 - Accepting an invitation creates a tenant-bound session and opens the invited workspace immediately.
 - An email address that already belongs to the current tenant cannot be invited again.
 
-ClockBook currently generates a secure invitation link for the administrator to send through their normal communication channel. No outbound email provider is required for the invitation system itself.
+### Resend email delivery
+
+ClockBook can send tenant invitations automatically through Resend. Configure these Railway variables on the backend service:
+
+- `RESEND_API_KEY` — Resend API key.
+- `RESEND_FROM_EMAIL` — sender identity on a verified Resend domain, for example `ClockBook <invites@example.com>`.
+- `CLOCKBOOK_PUBLIC_URL` — recommended public ClockBook URL, for example `https://clockbook.example.com`. This is used in invitation links. If omitted, ClockBook falls back to the incoming request origin.
+- `RESEND_REPLY_TO` — optional reply-to address.
+
+Email delivery is deliberately fail-safe: the invitation is committed before ClockBook calls Resend. If Resend is unavailable or not configured, the invitation remains valid and the administrator is shown the secure link for manual sharing instead of losing the invitation or creating duplicates on retry. Resending an invitation rotates the token, extends the expiry by 7 days, and sends the new link. Raw invitation tokens and Resend API keys are never logged.
+
+For Resend production delivery, verify the sender domain in Resend. Resend's test sender can be used only within Resend's current testing restrictions; use a verified domain before inviting real customer users.

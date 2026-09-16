@@ -136,6 +136,9 @@ class TenantInvitationOut(BaseModel):
 
 class TenantInvitationCreated(TenantInvitationOut):
     token: str
+    email_status: str = "not_configured"
+    email_error: Optional[str] = None
+    provider_message_id: Optional[str] = None
 
 
 class TenantInvitationPublic(BaseModel):
