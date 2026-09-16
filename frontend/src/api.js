@@ -18,6 +18,10 @@ async function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
+  if (res.status === 401 && token) {
+    clearToken();
+    window.dispatchEvent(new Event("clockbook-session-revoked"));
+  }
   if (!res.ok) {
     let message = `Request failed (${res.status})`;
     try {

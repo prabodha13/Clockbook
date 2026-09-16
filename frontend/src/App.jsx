@@ -6942,6 +6942,25 @@ export default function App() {
     })();
   }, []);
 
+  // The login token intentionally lives only for the browser session; there is no
+  // inactivity timeout. If the server explicitly revokes it after a security-sensitive
+  // account change (password reset, role change, deletion), move back to Login cleanly.
+  useEffect(() => {
+    function handleSessionRevoked() {
+      clearToken();
+      setCurrentUser(null);
+      setMembers([]);
+      setClients([]);
+      setTemplates([]);
+      setTasks([]);
+      setPods([]);
+      setDataLoading(true);
+      setAuthState("login");
+    }
+    window.addEventListener("clockbook-session-revoked", handleSessionRevoked);
+    return () => window.removeEventListener("clockbook-session-revoked", handleSessionRevoked);
+  }, []);
+
   const loadAll = useCallback(async () => {
     try {
       const [m, c, t, tk, b, r, tt, tm] = await Promise.all([
