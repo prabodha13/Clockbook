@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, StreamingResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, or_, func
+from sqlalchemy.exc import IntegrityError
 
 from database import get_db, engine, Base
 import models
@@ -253,6 +254,51 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE help_events ADD COLUMN inactivity_event_id VARCHAR"))
 
 
+
+def _ensure_one_running_timer_invariant(db: Session):
+    """Repair any legacy duplicate running timers, then add the database invariant.
+
+    PostgreSQL is the production target and SQLite is useful for local/test installs; both
+    support the partial unique index below. The repair only runs for an already-impossible
+    state left by older code: keep the most recently active timer running and pause the rest
+    at server time so deployment does not fail while adding the constraint.
+    """
+    running = db.query(models.TaskInstance).filter(
+        models.TaskInstance.owner_id.isnot(None),
+        models.TaskInstance.status == "running",
+    ).all()
+    by_owner = {}
+    for task in running:
+        by_owner.setdefault(task.owner_id, []).append(task)
+    repaired = 0
+    for owner_tasks in by_owner.values():
+        if len(owner_tasks) <= 1:
+            continue
+        keeper = max(
+            owner_tasks,
+            key=lambda t: (t.last_heartbeat_at or t.created_at or datetime.min, t.created_at or datetime.min),
+        )
+        for task in owner_tasks:
+            if task.id == keeper.id:
+                continue
+            task.segments = close_open_segment(task.segments)
+            task.status = "paused"
+            repaired += 1
+    if repaired:
+        db.commit()
+        print(f"[timer-integrity] repaired {repaired} duplicate running timer(s) before enabling invariant")
+
+    dialect = engine.dialect.name
+    if dialect in ("postgresql", "sqlite"):
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_tasks_one_running_per_owner "
+                "ON tasks (owner_id) WHERE status = 'running' AND owner_id IS NOT NULL"
+            ))
+    else:
+        print(f"[timer-integrity] database-level one-running-timer index not installed for dialect={dialect}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
@@ -299,6 +345,11 @@ async def lifespan(app: FastAPI):
                     break
         if google_tokens_changed:
             db.commit()
+
+        # Phase 2 timer integrity: make the existing one-running-timer business rule a real
+        # database invariant as well as application logic. This does not change normal timer
+        # behaviour; it closes the millisecond race where two tabs could both start at once.
+        _ensure_one_running_timer_invariant(db)
     finally:
         db.close()
     yield
@@ -402,6 +453,57 @@ def _revoke_member_sessions(db: Session, member_id: str):
     # ClockBook deliberately has no inactivity/session timeout. Tokens live for the browser
     # session, but security-sensitive account changes must be able to invalidate them now.
     db.query(models.Session).filter(models.Session.member_id == member_id).delete(synchronize_session=False)
+
+
+def _lock_timer_owner(db: Session, member_id: str):
+    # Serialize Start operations for the same person across tabs, workers and app instances.
+    # The partial unique index remains the final database backstop. SQLite serializes writes
+    # itself, so the explicit advisory lock is only needed on PostgreSQL.
+    bind = db.get_bind()
+    if bind is not None and bind.dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:member_id))"), {"member_id": member_id})
+
+
+def _get_task_for_update(db: Session, task_id: str):
+    # Row-lock state transitions so Pause/Submit/Reset/Start requests arriving from two tabs
+    # cannot overwrite each other after reading the same stale task state.
+    return db.query(models.TaskInstance).filter(
+        models.TaskInstance.id == task_id
+    ).with_for_update().one_or_none()
+
+
+def _validated_pause_end_at(task, requested_end_at=None):
+    # Ordinary pauses are always stamped by the server. A supplied timestamp is reserved for
+    # ClockBook's existing sleep/lock/stale-heartbeat recovery flows, which intentionally
+    # backdate to when the machine actually went away. Bound that recovery timestamp using
+    # server-known state so a manipulated API request cannot arbitrarily rewrite tracked time.
+    if not requested_end_at:
+        return None
+    try:
+        requested = parse_utc_naive(requested_end_at)
+    except Exception:
+        raise HTTPException(400, "Invalid pause timestamp")
+
+    now = datetime.utcnow()
+    if requested > now + timedelta(seconds=5):
+        raise HTTPException(400, "Pause timestamp cannot be in the future")
+
+    segments = list(task.segments or [])
+    if not segments or segments[-1].get("end"):
+        return None
+    try:
+        segment_start = parse_utc_naive(segments[-1]["start"])
+    except Exception:
+        raise HTTPException(409, "The running timer has an invalid start timestamp")
+    if requested < segment_start:
+        raise HTTPException(400, "Pause timestamp cannot be before the timer started")
+
+    # Heartbeats are server timestamps. Allow one heartbeat interval plus tolerance for an
+    # in-flight request crossing the exact sleep/lock boundary, but reject older arbitrary
+    # backdating. The current client sends heartbeats every 45 seconds.
+    if task.last_heartbeat_at and requested < task.last_heartbeat_at - timedelta(seconds=90):
+        raise HTTPException(400, "Pause timestamp is older than the server's last active signal")
+    return requested.isoformat() + "Z"
 
 
 def close_open_segment(segments, end_override=None):
@@ -2829,7 +2931,10 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
 
 @app.post("/api/tasks/{task_id}/start", response_model=schemas.TaskOut)
 def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    task = db.get(models.TaskInstance, task_id)
+    # Treat Start as one serialized state transition per person. This keeps the existing
+    # behaviour (starting B pauses A) while making two-tab starts deterministic.
+    _lock_timer_owner(db, current_member.id)
+    task = _get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
@@ -2842,30 +2947,36 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
             raise HTTPException(400, f"Enter the starting {task.tracks_number_label.lower()} before starting the timer")
         task.start_count = payload.start_count
 
-    # Enforce the one running timer per person rule on the server, not just in the browser
+    if not task.owner_id:
+        task.owner_id = current_member.id
+
+    # Lock all other running timers before changing them. PostgreSQL advisory locking above
+    # ensures another Start for this same member cannot interleave with this operation.
     others = db.query(models.TaskInstance).filter(
         models.TaskInstance.owner_id == current_member.id,
         models.TaskInstance.status == "running",
         models.TaskInstance.id != task_id,
-    ).all()
+    ).with_for_update().all()
     for other in others:
         other.segments = close_open_segment(other.segments)
         other.status = "paused"
+    # Persist pauses before setting the new row to running so the partial unique index can
+    # never see two running rows even temporarily within this transaction's flush order.
+    if others:
+        db.flush()
 
-    if not task.owner_id:
-        task.owner_id = current_member.id
     already_running_with_open_segment = (
         task.status == "running" and bool(task.segments) and not task.segments[-1].get("end")
     )
     if not already_running_with_open_segment:
+        # Normal Start is server-authoritative. start_at remains only for the existing
+        # explicit forgot-to-track recovery flow and is tightly bounded to the previous hour.
         start_iso = datetime.utcnow().isoformat() + "Z"
         if payload.start_at:
             try:
                 parsed = datetime.fromisoformat(payload.start_at.replace("Z", "+00:00")).replace(tzinfo=None)
-                # Never allow a backdated start in the future, or further back than the "forgot
-                # to track" flow would ever ask for, this only exists to backdate a genuinely
-                # missed short window, not to let an arbitrary historical time be entered here
-                if parsed <= datetime.utcnow() and (datetime.utcnow() - parsed).total_seconds() <= 3600:
+                now = datetime.utcnow()
+                if parsed <= now and (now - parsed).total_seconds() <= 3600:
                     start_iso = parsed.isoformat() + "Z"
             except ValueError:
                 pass
@@ -2876,10 +2987,14 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
             event_started = datetime.utcnow()
         db.add(models.ClockStartEvent(member_id=current_member.id, task_id=task.id, started_at=event_started))
     task.status = "running"
-    # Seeds this so a task isn't immediately eligible to be treated as stale the moment it
-    # starts, before the browser has had a chance to send its first periodic heartbeat
     task.last_heartbeat_at = datetime.utcnow()
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Final backstop for non-PostgreSQL concurrency or any unexpected race around the
+        # unique index. Never turn it into a 500 or allow two active timers.
+        db.rollback()
+        raise HTTPException(409, "Another timer was started at the same time. Refresh and try again")
     db.refresh(task)
     print(f"[timer-diagnostic] start task={task.id} status={task.status} "
           f"last_segment_start={task.segments[-1]['start'] if task.segments else None} "
@@ -2910,12 +3025,19 @@ def heartbeat_task(task_id: str, current_member: models.Member = Depends(get_cur
 
 @app.post("/api/tasks/{task_id}/pause", response_model=schemas.TaskOut)
 def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    task = db.get(models.TaskInstance, task_id)
+    task = _get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
-    task.segments = close_open_segment(task.segments, payload.end_at)
+    # Retry/double-click safety: if another tab already paused or submitted it, the requested
+    # end state is already achieved and must not reopen or rewrite the task.
+    if task.status in ("paused", "submitted"):
+        return task
+    if task.status != "running":
+        raise HTTPException(400, "Only a running task can be paused")
+    validated_end = _validated_pause_end_at(task, payload.end_at)
+    task.segments = close_open_segment(task.segments, validated_end)
     task.status = "paused"
     db.commit()
     db.refresh(task)
@@ -2929,27 +3051,26 @@ def pause_task(task_id: str, payload: schemas.TaskPause = schemas.TaskPause(), c
 
 @app.post("/api/tasks/{task_id}/pause-beacon", response_model=schemas.TaskOut)
 def pause_task_beacon(task_id: str, payload: schemas.TaskPauseBeacon, db: Session = Depends(get_db)):
-    # A dedicated endpoint for navigator.sendBeacon, fired as the page is unloading (a tab
-    # closing, a browser quitting, or the OS shutting down). Beacons cannot set custom
-    # headers, so the session token travels in the body instead of the usual Authorization
-    # header, everything else about the auth check is identical to normal requests. This is
-    # a best-effort attempt to pause instantly rather than waiting for the next login to
-    # notice via the heartbeat, it is not guaranteed to always arrive, which is exactly why
-    # that heartbeat-based check still exists underneath this as the real safety net.
+    # navigator.sendBeacon cannot set the normal Authorization header, so authenticate the
+    # supplied session token exactly as before, then use the same locked/idempotent transition
+    # as a normal pause. The timestamp remains bounded by server-known timer state.
     session = db.get(models.Session, payload.token)
     if not session:
         raise HTTPException(401, "Session no longer valid")
     current_member = db.get(models.Member, session.member_id)
     if not current_member:
         raise HTTPException(401, "Account no longer exists")
-    task = db.get(models.TaskInstance, task_id)
+    task = _get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
+    if task.status in ("paused", "submitted"):
+        return task
     if task.status != "running":
-        return task  # Already paused or submitted elsewhere, nothing to do, not an error
-    task.segments = close_open_segment(task.segments, payload.end_at)
+        raise HTTPException(400, "Only a running task can be paused")
+    validated_end = _validated_pause_end_at(task, payload.end_at)
+    task.segments = close_open_segment(task.segments, validated_end)
     task.status = "paused"
     db.commit()
     db.refresh(task)
@@ -2963,10 +3084,13 @@ def reset_task(task_id: str, current_member: models.Member = Depends(get_current
     # For a mistaken click, wipes all tracked time back to zero and returns the task to
     # To do, rather than deleting the task itself. The owner can fix their own mistake, and
     # an admin can step in too if someone needs help undoing it.
-    task = db.get(models.TaskInstance, task_id)
+    task = _get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     _require_task_in_scope(current_member, task, db, owner_can_access=True)
+    # A retry after a successful Reset is a no-op rather than a misleading failure.
+    if task.status == "todo" and not (task.segments or []) and task.start_count is None and task.end_count is None:
+        return task
     if task.status not in ("running", "paused"):
         raise HTTPException(400, "Only a running or paused task can be reset")
     task.segments = []
@@ -2989,11 +3113,15 @@ def is_bookkeeping_task(task):
 
 @app.post("/api/tasks/{task_id}/submit", response_model=schemas.TaskOut)
 def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    task = db.get(models.TaskInstance, task_id)
+    task = _get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.owner_id and task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
+    # Complete/Submit is idempotent. If a retry or second tab arrives after the first commit,
+    # return the already-submitted record without changing its timestamp, metrics or note.
+    if task.status == "submitted":
+        return task
     if task.tracks_number_label and payload.end_count is None:
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
     if task.client_id == UNASSIGNED_CLIENT_ID:
