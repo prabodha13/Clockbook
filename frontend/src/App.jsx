@@ -483,7 +483,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
               className="cb-btn cb-btn-sm"
               title={workspaces.length > 1 ? "Switch workspace" : "Current workspace"}
               onClick={() => workspaces.length > 1 && setWorkspaceMenuOpen((open) => !open)}
-              style={{ minHeight: 34, minWidth: workspaces.length > 1 ? 190 : undefined, justifyContent: "flex-start", gap: 8, paddingRight: 10 }}
+              style={{ minHeight: 34, minWidth: workspaces.length > 1 ? 170 : undefined, justifyContent: "flex-start", gap: 8, paddingRight: 9 }}
             >
               <WorkspaceLogo workspace={activeWorkspace} size={20} />
               <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 145 }}>{activeWorkspace.name}</span>
