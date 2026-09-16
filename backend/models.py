@@ -215,9 +215,11 @@ class TaskInstance(Base):
     source_calendar_event_id = Column(String, nullable=True)  # ties this task back to the Google Calendar event it came from, so that event stops being suggested again once it has produced a task
     quick_meeting_request_id = Column(String, nullable=True)  # client-generated idempotency key so retries cannot create a second Calendar event/task
     calendar_event_deleted_at = Column(DateTime, nullable=True)  # preserves historical linkage while recording that the source Calendar event was deleted
-    source_template_name = Column(String, nullable=True)  # which template this task came from, if any, kept in sync if that template is later renamed
+    source_template_task_id = Column(String, nullable=True)  # immutable snapshot reference to the template-task id used at creation; no FK so history survives template deletion
+    source_template_name = Column(String, nullable=True)  # immutable template-name snapshot from creation time
     source_template_field = Column(String, nullable=True)  # legacy template field copied for compatibility
     source_template_category = Column(String, nullable=True)  # optional broad Insights category copied from the template
+    submitted_pod_id = Column(String, nullable=True)  # pod snapshot at submission; intentionally no FK so historical access survives pod deletion
     last_heartbeat_at = Column(DateTime, nullable=True)  # updated periodically while running, a stale value means the browser tracking it is gone (closed, crashed, or the machine shut down)
 
 

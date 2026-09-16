@@ -203,12 +203,16 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN quick_meeting_request_id VARCHAR"))
             if "calendar_event_deleted_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN calendar_event_deleted_at TIMESTAMP"))
+            if "source_template_task_id" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_task_id VARCHAR"))
             if "source_template_name" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_name VARCHAR"))
             if "source_template_field" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_field VARCHAR"))
             if "source_template_category" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN source_template_category VARCHAR"))
+            if "submitted_pod_id" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN submitted_pod_id VARCHAR"))
             if "last_heartbeat_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
     # Normalize the old payroll-only requirement into the generic Work period model.
@@ -248,6 +252,15 @@ def run_startup_migrations():
             if not getattr(task_instance, "source_template_field", None) and task_instance.source_template_name in unique_template_fields:
                 task_instance.source_template_field = unique_template_fields[task_instance.source_template_name]
                 changed = True
+            # Historical pod membership was not previously stored. For legacy submitted rows
+            # we can only seed the snapshot from the person's current pod. From Phase 4 onward
+            # every submission records the exact pod at that moment, so later pod moves cannot
+            # grant a new admin access to earlier work.
+            if task_instance.status == "submitted" and not getattr(task_instance, "submitted_pod_id", None) and task_instance.submitted_by_id:
+                submitted_member = migration_db.get(models.Member, task_instance.submitted_by_id)
+                if submitted_member:
+                    task_instance.submitted_pod_id = submitted_member.pod_id
+                    changed = True
         if changed:
             migration_db.commit()
 
@@ -474,6 +487,9 @@ def _require_task_in_scope(current_member, task, db: Session, owner_can_access=T
     owner = db.get(models.Member, task.owner_id)
     if not owner or not _member_in_admin_scope(current_member, owner):
         raise HTTPException(403, "You cannot manage that task")
+    if current_member.role == "admin" and current_member.pod_id and task.status == "submitted":
+        if getattr(task, "submitted_pod_id", None) != current_member.pod_id:
+            raise HTTPException(403, "You cannot manage historical work from another pod")
     return task
 
 
@@ -1739,6 +1755,7 @@ def finish_ad_hoc_meeting(task_id: str, payload: schemas.AdHocMeetingFinish, cur
     task.status = "submitted"
     task.submitted_at = datetime.utcnow()
     task.submitted_by_id = current_member.id
+    task.submitted_pod_id = current_member.pod_id
     task.pushed_to_karbon = False
     task.note = context
 
@@ -1810,6 +1827,7 @@ def create_help_event(payload: schemas.HelpEventCreate, current_member: models.M
         note=context,
         submitted_at=now,
         submitted_by_id=current_member.id,
+        submitted_pod_id=current_member.pod_id,
     )
     db.add(task)
     db.flush()
@@ -2202,6 +2220,10 @@ def get_insights(
         models.TaskInstance.status == "submitted",
         models.TaskInstance.submitted_by_id == target_id,
     ).all()
+    if current_member.role == "admin" and current_member.pod_id:
+        # Current pod membership grants access to the person, but not retroactively to work
+        # they submitted while they belonged to another pod.
+        all_tasks = [t for t in all_tasks if _submitted_task_visible_to_admin_pod(t, current_member)]
 
     def in_range(task, start, end):
         dt = _insights_task_work_date(task)
@@ -2403,6 +2425,8 @@ def get_insights(
                 models.TaskInstance.status == "submitted",
                 models.TaskInstance.submitted_by_id.in_(staff_ids),
             ).all()
+        if current_member.role == "admin" and current_member.pod_id:
+            staff_tasks = [t for t in staff_tasks if _submitted_task_visible_to_admin_pod(t, current_member)]
 
         def task_key(task):
             return "|".join([
@@ -2489,6 +2513,10 @@ def get_insights(
                 models.TaskInstance.status == "submitted",
                 models.TaskInstance.submitted_by_id.in_(team_ids),
             ).all()
+            if selected_capacity_pod is not None:
+                team_tasks_all = [t for t in team_tasks_all if getattr(t, "submitted_pod_id", None) == selected_capacity_pod.id]
+            elif current_member.role == "admin" and current_member.pod_id:
+                team_tasks_all = [t for t in team_tasks_all if _submitted_task_visible_to_admin_pod(t, current_member)]
             member_rows = []
             aggregate_week = {}
             total_capacity = total_utilization_capacity = total_tracked = total_billable = 0.0
@@ -2765,6 +2793,12 @@ def delete_role(role_id: str, current_member: models.Member = Depends(get_curren
     require_admin(current_member)
     role = db.get(models.Role, role_id)
     if role:
+        used_by_template = db.query(models.TemplateTask).filter(models.TemplateTask.role == role.name).count()
+        used_by_active_task = db.query(models.TaskInstance).filter(
+            models.TaskInstance.role == role.name, models.TaskInstance.status != "submitted"
+        ).count()
+        if used_by_template or used_by_active_task:
+            raise HTTPException(400, "This role is used by a standard template or active task. Update that work first")
         db.delete(role)
         db.commit()
     return None
@@ -2862,6 +2896,12 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
     require_admin(current_member)
     task_type = db.get(models.TaskTypeOption, task_type_id)
     if task_type:
+        used_by_template = db.query(models.TemplateTask).filter(models.TemplateTask.task_type == task_type.name).count()
+        used_by_active_task = db.query(models.TaskInstance).filter(
+            models.TaskInstance.task_type == task_type.name, models.TaskInstance.status != "submitted"
+        ).count()
+        if used_by_template or used_by_active_task:
+            raise HTTPException(400, "This task type is used by a standard template or active task. Update that work first")
         db.delete(task_type)
         db.commit()
     return None
@@ -2890,6 +2930,12 @@ def delete_tracked_metric(metric_id: str, current_member: models.Member = Depend
     require_admin(current_member)
     metric = db.get(models.TrackedMetric, metric_id)
     if metric:
+        used_by_template = db.query(models.TemplateTask).filter(models.TemplateTask.tracks_number_label == metric.name).count()
+        used_by_active_task = db.query(models.TaskInstance).filter(
+            models.TaskInstance.tracks_number_label == metric.name, models.TaskInstance.status != "submitted"
+        ).count()
+        if used_by_template or used_by_active_task:
+            raise HTTPException(400, "This metric is used by a standard template or active task. Update that work first")
         db.delete(metric)
         db.commit()
     return None
@@ -2925,16 +2971,12 @@ def update_template(template_id: str, payload: schemas.TemplateCreate, current_m
     name = payload.name.strip()
     if not field or not name:
         raise HTTPException(400, "Enter both a field and a template name")
-    old_name = tpl.name
-    old_field = tpl.field
-    old_category = getattr(tpl, "category", None)
     tpl.field = field
     tpl.category = category
     tpl.name = name
-    if old_name != name or old_field != field or old_category != category:
-        db.query(models.TaskInstance).filter(models.TaskInstance.source_template_name == old_name).update(
-            {"source_template_name": name, "source_template_field": field, "source_template_category": category}, synchronize_session=False
-        )
+    # Existing TaskInstance source_template_* values are snapshots. Renaming or recategorising
+    # a template changes future work only; historical/in-progress generated tasks retain the
+    # template identity they were created with so reports do not rewrite themselves.
     db.commit()
     db.refresh(tpl)
     return tpl
@@ -2950,12 +2992,24 @@ def delete_template(template_id: str, current_member: models.Member = Depends(ge
     return None
 
 
+def _validate_template_task_config(payload: schemas.TemplateTaskCreate, db: Session):
+    _validate_configured_role_and_task_type(db, payload.role, payload.task_type)
+    period_types = _normalise_period_types(payload.period_types)
+    if payload.period_required and not period_types:
+        raise HTTPException(400, "Choose at least one allowed period when a period is required")
+    label = (payload.tracks_number_label or "").strip()
+    if label and not db.query(models.TrackedMetric).filter(models.TrackedMetric.name == label).first():
+        raise HTTPException(400, "Select a valid tracked metric")
+    return period_types, label
+
+
 @app.post("/api/templates/{template_id}/tasks", response_model=schemas.TemplateTaskOut, status_code=201)
 def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     tpl = db.get(models.Template, template_id)
     if not tpl:
         raise HTTPException(404, "Template not found")
+    period_types, tracks_label = _validate_template_task_config(payload, db)
     last_position = db.query(func.max(models.TemplateTask.position)).filter(models.TemplateTask.template_id == template_id).scalar()
     task = models.TemplateTask(
         template_id=template_id,
@@ -2963,9 +3017,9 @@ def add_template_task(template_id: str, payload: schemas.TemplateTaskCreate, cur
         role=payload.role.strip(),
         task_type=payload.task_type.strip(),
         requires_bank_account=payload.requires_bank_account,
-        tracks_number_label=payload.tracks_number_label.strip(),
+        tracks_number_label=tracks_label,
         needs_pay_period=False,
-        period_types=payload.period_types,
+        period_types=period_types,
         period_required=payload.period_required,
         position=(last_position + 1) if last_position is not None else 0,
     )
@@ -2981,13 +3035,14 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     task = db.get(models.TemplateTask, task_id)
     if not task or task.template_id != template_id:
         raise HTTPException(404, "Task not found")
+    period_types, tracks_label = _validate_template_task_config(payload, db)
     task.name = payload.name.strip()
     task.role = payload.role.strip()
     task.task_type = payload.task_type.strip()
     task.requires_bank_account = payload.requires_bank_account
-    task.tracks_number_label = payload.tracks_number_label.strip()
+    task.tracks_number_label = tracks_label
     task.needs_pay_period = False
-    task.period_types = payload.period_types
+    task.period_types = period_types
     task.period_required = payload.period_required
     db.commit()
     db.refresh(task)
@@ -3051,7 +3106,78 @@ def list_tasks(current_member: models.Member = Depends(get_current_member), db: 
             query = query.filter(models.TaskInstance.owner_id.in_(pod_member_ids))
     else:
         query = query.filter(models.TaskInstance.owner_id == current_member.id)
-    return query.order_by(models.TaskInstance.created_at.desc()).all()
+    rows = query.order_by(models.TaskInstance.created_at.desc()).all()
+    if current_member.role == "admin" and current_member.pod_id:
+        rows = [
+            task for task in rows
+            if task.status != "submitted" or getattr(task, "submitted_pod_id", None) == current_member.pod_id
+        ]
+    return rows
+
+
+VALID_PERIOD_TYPES = {"daily", "weekly", "fortnightly", "monthly", "bi_monthly", "quarterly", "year", "custom"}
+
+
+def _validate_configured_role_and_task_type(db: Session, role: str = "", task_type: str = ""):
+    role = (role or "").strip()
+    task_type = (task_type or "").strip()
+    if role and not db.query(models.Role).filter(models.Role.name == role).first():
+        raise HTTPException(400, "Select a valid role")
+    if task_type and not db.query(models.TaskTypeOption).filter(models.TaskTypeOption.name == task_type).first():
+        raise HTTPException(400, "Select a valid task type")
+
+
+def _normalise_period_types(values):
+    values = list(values or [])
+    cleaned = []
+    for value in values:
+        value = (value or "").strip()
+        if value not in VALID_PERIOD_TYPES:
+            raise HTTPException(400, "Template contains an invalid period type")
+        if value not in cleaned:
+            cleaned.append(value)
+    return cleaned
+
+
+def _validate_period_selection(period_type, period_year, period_number, period_start, period_end, allowed_types, required=False, bookkeeping=False):
+    allowed_types = list(allowed_types or [])
+    if not period_type:
+        if required:
+            raise HTTPException(400, "Select a valid period")
+        return
+    if period_type not in allowed_types:
+        raise HTTPException(400, "Select a valid period")
+    if period_year is not None and not 1900 <= period_year <= 2100:
+        raise HTTPException(400, "Select a valid period year")
+    if period_type == "daily":
+        if not period_start:
+            raise HTTPException(400, "Select the date this work relates to")
+    elif period_type == "custom":
+        if not period_start or not period_end:
+            raise HTTPException(400, "Select both dates for the custom period")
+        if period_end < period_start:
+            raise HTTPException(400, "Period end cannot be before period start")
+    elif period_type == "year":
+        if not period_year:
+            raise HTTPException(400, "Select the year this work relates to")
+    else:
+        if not period_year or period_number is None:
+            raise HTTPException(400, "Select the period and year this work relates to")
+        if period_type == "weekly" and bookkeeping:
+            if not period_start:
+                raise HTTPException(400, "Select the bookkeeping month")
+            if not 1 <= period_number <= 5:
+                raise HTTPException(400, "Select Week 1 to Week 5 for weekly bookkeeping")
+        else:
+            limits = {"weekly": 52, "fortnightly": 26, "monthly": 12, "bi_monthly": 6, "quarterly": 4}
+            if period_type in limits and not 1 <= period_number <= limits[period_type]:
+                raise HTTPException(400, "Select a valid period")
+
+
+def _submitted_task_visible_to_admin_pod(task: models.TaskInstance, current_member: models.Member):
+    if current_member.role != "admin" or not current_member.pod_id:
+        return True
+    return getattr(task, "submitted_pod_id", None) == current_member.pod_id
 
 
 @app.post("/api/tasks", response_model=schemas.TaskOut, status_code=201)
@@ -3061,40 +3187,120 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         if not is_admin_or_above(current_member.role):
             raise HTTPException(403, "Only an admin can assign a task to someone else")
         _require_member_in_scope(current_member, owner_id, db)
+
     client_id = payload.client_id or UNASSIGNED_CLIENT_ID
-    client_name = payload.client_name or (UNASSIGNED_CLIENT_NAME if client_id == UNASSIGNED_CLIENT_ID else "")
+    if client_id == UNASSIGNED_CLIENT_ID:
+        client_name = UNASSIGNED_CLIENT_NAME
+    else:
+        client = db.get(models.Client, client_id)
+        if not client:
+            raise HTTPException(404, "Client not found")
+        client_name = client.name
+
+    role = (payload.role or "").strip()
+    task_type = (payload.task_type or "").strip()
+    _validate_configured_role_and_task_type(db, role, task_type)
+
+    source_template_task_id = payload.source_template_task_id
+    # Backward compatibility for an already-open browser tab from the previous deployment:
+    # resolve its template-name + task-name pair to the real server-side TemplateTask id.
+    # Ambiguous/missing matches are rejected rather than trusting browser-supplied rules.
+    if not source_template_task_id and payload.source_template_name:
+        template_matches = db.query(models.Template).filter(models.Template.name == payload.source_template_name).all()
+        if len(template_matches) == 1:
+            task_matches = db.query(models.TemplateTask).filter(
+                models.TemplateTask.template_id == template_matches[0].id,
+                models.TemplateTask.name == payload.name.strip(),
+            ).all()
+            if len(task_matches) == 1:
+                source_template_task_id = task_matches[0].id
+        if not source_template_task_id:
+            raise HTTPException(400, "Selected template changed. Refresh templates and try again")
+    source_template_name = None
+    source_template_field = None
+    source_template_category = None
+    tracks_number_label = ""
+    period_types = []
+    period_required = False
+    bank_account_id = payload.bank_account_id
+    bank_account_name = ""
+    task_name = payload.name.strip()
+
+    if source_template_task_id:
+        template_task = db.get(models.TemplateTask, source_template_task_id)
+        if not template_task:
+            raise HTTPException(400, "Selected template task no longer exists. Refresh templates and try again")
+        template = db.get(models.Template, template_task.template_id)
+        if not template:
+            raise HTTPException(400, "Selected template no longer exists. Refresh templates and try again")
+        # Template-defined business rules are authoritative on the server. The browser may
+        # choose the assignee, configured role/task type and an allowed period value, but it
+        # cannot weaken metrics/period requirements or spoof template metadata.
+        task_name = template_task.name
+        tracks_number_label = (template_task.tracks_number_label or "").strip()
+        period_types = _normalise_period_types(template_task.period_types)
+        period_required = bool(template_task.period_required)
+        source_template_name = template.name
+        source_template_field = template.field
+        source_template_category = template.category
+        if template_task.requires_bank_account and not bank_account_id:
+            raise HTTPException(400, f'Select a bank account for "{template_task.name}"')
+    else:
+        if payload.source_template_name or payload.source_template_field or payload.source_template_category:
+            raise HTTPException(400, "A template task reference is required for template-created work")
+        # Custom/calendar tasks do not get to invent template-only metric or period rules.
+        if payload.tracks_number_label or list(payload.period_types or []) or payload.period_required or payload.needs_pay_period:
+            raise HTTPException(400, "Metric and period requirements must come from a standard template")
+
+    if bank_account_id:
+        account = db.get(models.BankAccount, bank_account_id)
+        if not account or account.client_id != client_id:
+            raise HTTPException(400, "Select a bank account belonging to this client")
+        bank_account_name = account.name
+
+    if not task_name:
+        raise HTTPException(400, "Enter a task name")
+
+    if payload.period_type:
+        _validate_period_selection(
+            payload.period_type, payload.period_year, payload.period_number,
+            payload.period_start, payload.period_end, period_types,
+            required=False,
+            bookkeeping="bookkeep" in " ".join(filter(None, [task_name, task_type, source_template_name])).lower(),
+        )
+
     task = models.TaskInstance(
         client_id=client_id,
         client_name=client_name,
-        name=payload.name.strip(),
-        role=payload.role.strip(),
-        task_type=payload.task_type.strip(),
+        name=task_name,
+        role=role,
+        task_type=task_type,
         owner_id=owner_id,
         status="todo",
         segments=[],
-        bank_account_id=payload.bank_account_id,
-        bank_account_name=payload.bank_account_name.strip(),
-        tracks_number_label=payload.tracks_number_label.strip(),
-        needs_pay_period=payload.needs_pay_period,
-        period_types=payload.period_types,
-        period_required=payload.period_required,
+        bank_account_id=bank_account_id,
+        bank_account_name=bank_account_name,
+        tracks_number_label=tracks_number_label,
+        needs_pay_period=False,
+        period_types=period_types,
+        period_required=period_required,
         period_type=payload.period_type,
         period_year=payload.period_year,
         period_number=payload.period_number,
         period_start=payload.period_start,
         period_end=payload.period_end,
-        pay_period_type=payload.period_type if payload.needs_pay_period and not list(payload.period_types or []) else payload.pay_period_type,
-        pay_period_number=payload.period_number if payload.needs_pay_period and not list(payload.period_types or []) else payload.pay_period_number,
+        pay_period_type=None,
+        pay_period_number=None,
         source_calendar_event_id=payload.source_calendar_event_id,
-        source_template_name=payload.source_template_name,
-        source_template_field=payload.source_template_field,
-        source_template_category=payload.source_template_category,
+        source_template_task_id=source_template_task_id,
+        source_template_name=source_template_name,
+        source_template_field=source_template_field,
+        source_template_category=source_template_category,
     )
     db.add(task)
     db.commit()
     db.refresh(task)
     return task
-
 
 @app.post("/api/tasks/{task_id}/start", response_model=schemas.TaskOut)
 def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
@@ -3112,6 +3318,8 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
     if task.tracks_number_label and task.start_count is None:
         if payload.start_count is None:
             raise HTTPException(400, f"Enter the starting {task.tracks_number_label.lower()} before starting the timer")
+        if payload.start_count < 0:
+            raise HTTPException(400, "Starting metric cannot be negative")
         task.start_count = payload.start_count
 
     if not task.owner_id:
@@ -3291,6 +3499,8 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         return task
     if task.tracks_number_label and payload.end_count is None:
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
+    if payload.end_count is not None and payload.end_count < 0:
+        raise HTTPException(400, "Ending metric cannot be negative")
     if task.client_id == UNASSIGNED_CLIENT_ID:
         if not payload.client_id or payload.client_id == UNASSIGNED_CLIENT_ID:
             raise HTTPException(400, "Select a client before completing this meeting")
@@ -3312,45 +3522,22 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     task.status = "submitted"
     task.note = payload.note
     task.end_count = payload.end_count
+    proposed_role = payload.role if payload.role is not None else task.role
+    proposed_task_type = payload.task_type if payload.task_type is not None else task.task_type
+    _validate_configured_role_and_task_type(db, proposed_role, proposed_task_type)
     if payload.role is not None:
-        task.role = payload.role
+        task.role = payload.role.strip()
     if payload.task_type is not None:
-        task.task_type = payload.task_type
+        task.task_type = payload.task_type.strip()
 
     allowed_period_types = list(task.period_types or []) if list(task.period_types or []) else (["weekly", "fortnightly", "monthly"] if task.needs_pay_period else [])
     period_required = bool(task.period_required or (task.needs_pay_period and not list(task.period_types or [])))
-    if period_required and (not payload.period_type or payload.period_type not in allowed_period_types):
-        raise HTTPException(400, "Select a valid period before submitting")
+    _validate_period_selection(
+        payload.period_type, payload.period_year, payload.period_number,
+        payload.period_start, payload.period_end, allowed_period_types,
+        required=period_required, bookkeeping=is_bookkeeping_task(task),
+    )
     if payload.period_type:
-        if payload.period_type not in allowed_period_types:
-            raise HTTPException(400, "Select a valid period")
-        if payload.period_type == "daily":
-            if not payload.period_start:
-                raise HTTPException(400, "Select the date this work relates to")
-        elif payload.period_type == "custom":
-            if not payload.period_start or not payload.period_end:
-                raise HTTPException(400, "Select both dates for the custom period")
-            if payload.period_end < payload.period_start:
-                raise HTTPException(400, "Period end cannot be before period start")
-        elif payload.period_type == "year":
-            if not payload.period_year:
-                raise HTTPException(400, "Select the year this work relates to")
-        else:
-            if not payload.period_year or not payload.period_number:
-                raise HTTPException(400, "Select the period and year this work relates to")
-
-        if payload.period_year is not None and not 1900 <= payload.period_year <= 2100:
-            raise HTTPException(400, "Select a valid period year")
-        if payload.period_type == "weekly" and is_bookkeeping_task(task):
-            if not payload.period_start:
-                raise HTTPException(400, "Select the bookkeeping month")
-            if not 1 <= payload.period_number <= 5:
-                raise HTTPException(400, "Select Week 1 to Week 5 for weekly bookkeeping")
-        else:
-            limits = {"weekly": 52, "fortnightly": 26, "monthly": 12, "bi_monthly": 6, "quarterly": 4}
-            if payload.period_type in limits and not 1 <= payload.period_number <= limits[payload.period_type]:
-                raise HTTPException(400, "Select a valid period")
-
         task.period_type = payload.period_type
         task.period_year = payload.period_year
         task.period_number = payload.period_number
@@ -3363,6 +3550,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
 
     task.submitted_at = datetime.utcnow()
     task.submitted_by_id = current_member.id
+    task.submitted_pod_id = current_member.pod_id
     task.pushed_to_karbon = False
     db.commit()
     db.refresh(task)
@@ -4286,7 +4474,7 @@ def period_key(task):
     ])
 
 
-def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None, include_owner_ids=None):
+def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None, include_owner_ids=None, submitted_pod_id=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
         query = query.filter(models.TaskInstance.client_id == client_id)
@@ -4296,6 +4484,8 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
         query = query.filter(~models.TaskInstance.submitted_by_id.in_(exclude_owner_ids))
     if include_owner_ids is not None:
         query = query.filter(models.TaskInstance.submitted_by_id.in_(include_owner_ids))
+    if submitted_pod_id is not None:
+        query = query.filter(models.TaskInstance.submitted_pod_id == submitted_pod_id)
     if pushed == "pending":
         query = query.filter(models.TaskInstance.pushed_to_karbon.is_(False))
     elif pushed == "pushed":
@@ -4304,25 +4494,10 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
     to_dt = parse_utc_naive(date_to)
     tasks = query.order_by(models.TaskInstance.submitted_at.desc()).all()
 
-    def first_work_start(task):
-        starts = []
-        for seg in (task.segments or []):
-            value = seg.get("start") if isinstance(seg, dict) else None
-            if not value:
-                continue
-            try:
-                dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
-                if dt.tzinfo is not None:
-                    dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-                starts.append(dt)
-            except Exception:
-                continue
-        return min(starts) if starts else task.submitted_at
-
     members = {m.id: m.name for m in db.query(models.Member).all()}
     rows = []
     for t in tasks:
-        work_started_at = first_work_start(t)
+        work_started_at = _insights_task_work_date(t)
         if from_dt and (work_started_at is None or work_started_at < from_dt):
             continue
         if to_dt and (work_started_at is None or work_started_at > to_dt):
@@ -4373,13 +4548,15 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
 def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     exclude_owner_ids = None
     include_owner_ids = None
+    submitted_pod_id = None
     if current_member.role == "member":
         submitted_by = current_member.id
     elif current_member.role == "admin":
         exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
         if current_member.pod_id:
             include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
-    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids)
+            submitted_pod_id = current_member.pod_id
+    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
 
 
 def _csv_safe_text(value):
@@ -4395,13 +4572,15 @@ def _csv_safe_text(value):
 def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     exclude_owner_ids = None
     include_owner_ids = None
+    submitted_pod_id = None
     if current_member.role == "member":
         submitted_by = current_member.id
     elif current_member.role == "admin":
         exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
         if current_member.pod_id:
             include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
-    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids)
+            submitted_pod_id = current_member.pod_id
+    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
     buffer = StringIO()
     writer = csv.writer(buffer)
     writer.writerow([

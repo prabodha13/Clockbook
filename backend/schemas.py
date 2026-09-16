@@ -246,9 +246,11 @@ class TaskOut(BaseModel):
     period_start: Optional[str] = None
     period_end: Optional[str] = None
     source_calendar_event_id: Optional[str] = None
+    source_template_task_id: Optional[str] = None
     source_template_name: Optional[str] = None
     source_template_field: Optional[str] = None
     source_template_category: Optional[str] = None
+    submitted_pod_id: Optional[str] = None
     last_heartbeat_at: Optional[datetime] = None
 
     @field_serializer("created_at", "submitted_at", "last_heartbeat_at")
@@ -281,6 +283,7 @@ class TaskCreate(BaseModel):
     period_start: Optional[str] = None
     period_end: Optional[str] = None
     source_calendar_event_id: Optional[str] = None
+    source_template_task_id: Optional[str] = None
     source_template_name: Optional[str] = None
     source_template_field: Optional[str] = None
     source_template_category: Optional[str] = None
