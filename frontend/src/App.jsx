@@ -5894,6 +5894,13 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
+  // One stable key for this modal attempt. If a slow response/retry causes the same
+  // Create action to reach the backend twice, both requests refer to the same meeting.
+  const requestIdRef = useRef(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `qm-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
   const options = members.filter((m) => m.id !== currentUser.id);
 
   function toggleMember(id) {
@@ -5907,6 +5914,7 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
     try {
       const external_emails = externalGuests.split(/[;,\n]/).map((x) => x.trim()).filter(Boolean);
       const created = await onCreate({
+        request_id: requestIdRef.current,
         summary: summary.trim(),
         attendee_member_ids: selectedIds,
         external_emails,
