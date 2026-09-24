@@ -6503,8 +6503,8 @@ function InactivityAuditView({ members }) {
       <div className="cb-group-head" style={{ marginTop: 18, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Daily start activity</div><div className="cb-group-count">{filteredActivityRows.length}</div></div>
       {activityRows === null ? <TableSkeleton rows={3} /> : filteredActivityRows.length === 0 ? <div className="cb-empty">No login or clock-start activity was recorded in this period.</div> : (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
-          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "25%" }} /><col style={{ width: "17%" }} /><col style={{ width: "18%" }} /><col style={{ width: "15%" }} /><col style={{ width: "25%" }} /></colgroup><thead><tr><th>Person</th><th>Date</th><th>Time zone</th><th className="num">First login</th><th className="num">First clock started</th></tr></thead>
-          <tbody>{filteredActivityRows.map((r) => <tr key={`${r.member_id}-${r.date}`}><td>{r.member_name}</td><td>{formatDate(`${r.date}T12:00:00`)}</td><td>{r.timezone_name}</td><td className="num cb-mono">{r.first_login_at ? new Date(r.first_login_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.first_clock_at ? new Date(r.first_clock_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td></tr>)}</tbody></table>
+          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup><col style={{ width: "18%" }} /><col style={{ width: "13%" }} /><col style={{ width: "15%" }} /><col style={{ width: "13%" }} /><col style={{ width: "15%" }} /><col style={{ width: "13%" }} /><col style={{ width: "13%" }} /></colgroup><thead><tr><th>Person</th><th>Date</th><th>Time zone</th><th className="num">First login</th><th className="num">First clock started</th><th className="num">Laptop turned off</th><th className="num">First login to shutdown</th></tr></thead>
+          <tbody>{filteredActivityRows.map((r) => <tr key={`${r.member_id}-${r.date}`}><td>{r.member_name}</td><td>{formatDate(`${r.date}T12:00:00`)}</td><td>{r.timezone_name}</td><td className="num cb-mono">{r.first_login_at ? new Date(r.first_login_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.first_clock_at ? new Date(r.first_clock_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.laptop_turned_off_at ? new Date(r.laptop_turned_off_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.first_login_to_shutdown_seconds != null ? formatHM(r.first_login_to_shutdown_seconds) : "—"}</td></tr>)}</tbody></table>
         </div>
       )}
       {enabled === false && <div className="cb-notice">Audit recording is currently off. A super admin can turn it on from Settings.</div>}
@@ -7795,6 +7795,20 @@ export default function App() {
     loadWorkspaces();
     loadIntegrationStatus();
   }, [authState, loadWorkspaces, loadIntegrationStatus]);
+
+  // Silent presence heartbeat for the Daily start activity report. This is deliberately
+  // independent of timer, lock/sleep and notification logic. A missing signal for 3+ hours
+  // can be shown to Super Admins as an inferred laptop/browser-off time.
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser) return;
+    let cancelled = false;
+    const send = async () => {
+      try { await api.sendPresenceHeartbeat(); } catch (_) { /* report-only signal; never interrupt the user */ }
+    };
+    send();
+    const iv = setInterval(() => { if (!cancelled) send(); }, 5 * 60 * 1000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [authState, currentUser?.id]);
 
   useEffect(() => {
     if (authState !== "ready") return;
