@@ -6503,20 +6503,23 @@ function HelpReportView() {
         </div>
       </div>
 
-      <div className="cb-card" style={{ padding: 14, marginBottom: 18 }}>
-        <div className="cb-label" style={{ marginBottom: 8 }}>Period</div>
-        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
-          <div className="cb-tabs" style={{ width: "fit-content" }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap" }}>
+        <div style={{ flex: "0 0 auto" }}>
+          <div className="cb-label">Period</div>
+          <div className="cb-tabs">
             {[['today','Today'],['this_week','This week'],['last_week','Last week'],['this_month','This month'],['last_month','Last month'],['custom','Custom']].map(([value, label]) => (
               <button key={value} className={`cb-tab ${periodMode === value ? "active" : ""}`} onClick={() => setPeriodMode(value)}>{label}</button>
             ))}
           </div>
-          {periodMode === "custom" && <>
-            <div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ width: 150 }} /></div>
-            <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 150 }} /></div>
-          </>}
-          <button className="cb-btn cb-btn-sm" onClick={loadReports} style={{ height: 36 }}><RotateCcw size={13} />Refresh</button>
         </div>
+
+        {periodMode === "custom" && <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flex: "0 0 auto" }}>
+          <div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ width: 145 }} /></div>
+          <span style={{ color: "var(--ink-faint)", paddingBottom: 10 }}>to</span>
+          <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 145 }} /></div>
+        </div>}
+
+        <button className="cb-btn cb-btn-sm" onClick={loadReports} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
       </div>
 
       {detailsError && <div className="cb-empty">Could not load this right now.</div>}
@@ -6565,9 +6568,9 @@ function HelpReportView() {
         </div>
 
         <div className="cb-group-head" style={{ marginTop: 30, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Individual entries</div><div className="cb-group-count">{filteredDetails.length}</div></div>
-        <div className="cb-table-wrap">
-          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
-            <colgroup><col style={{ width: "11%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /><col style={{ width: "43%" }} /><col style={{ width: "8%" }} /><col style={{ width: "10%" }} /><col style={{ width: "2%" }} /></colgroup>
+        <div className="cb-table-wrap" style={{ overflowX: "hidden" }}>
+          <table className="cb-table" style={{ tableLayout: "fixed", width: "100%", minWidth: 0 }}>
+            <colgroup><col style={{ width: "11%" }} /><col style={{ width: "13%" }} /><col style={{ width: "12%" }} /><col style={{ width: "42%" }} /><col style={{ width: "8%" }} /><col style={{ width: "11%" }} /><col style={{ width: "3%" }} /></colgroup>
             <thead><tr><th>Person</th><th>Action</th><th>Colleague</th><th>Context</th><th className="num">Duration</th><th>When</th><th></th></tr></thead>
             <tbody>{filteredDetails.map((d) => <tr key={d.id}>
               <td>{d.member_name}</td><td>{d.direction === "helped" ? "Helped" : "Received"}</td><td>{d.colleague_name}</td><td>{d.context || "—"}</td><td className="num cb-mono">{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td><td>{formatDate(d.created_at)}</td><td><button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => deleteEntry(d)}><Trash2 size={13} /></button></td>
