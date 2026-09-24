@@ -2894,7 +2894,6 @@ function SettingsView({
   const [savingCalamari, setSavingCalamari] = useState(false);
   const [testingCalamari, setTestingCalamari] = useState(false);
   const [calamariMessage, setCalamariMessage] = useState("");
-  const [permissionsOpen, setPermissionsOpen] = useState(false);
   const [permissionSearch, setPermissionSearch] = useState("");
 
   useEffect(() => {
@@ -3170,25 +3169,17 @@ function SettingsView({
           : [];
         return (
           <div className="cb-tmpl-card">
-            <button
-              type="button"
-              className="cb-tmpl-head"
-              onClick={() => setPermissionsOpen((v) => !v)}
-              aria-expanded={permissionsOpen}
-              style={{ width: "100%", border: 0, background: "transparent", textAlign: "left", cursor: "pointer" }}
-            >
+            <div className="cb-tmpl-head">
               <div>
                 <div className="cb-tmpl-field">Permissions</div>
                 <div className="cb-tmpl-name">{integrationStatus.calamari_connected ? <>Leave &amp; capacity insights</> : <>Capacity insights</>}</div>
               </div>
               <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, color: "var(--ink-soft)" }}>
                 <span style={{ fontSize: 12.5 }}>{enabledMembers.length} {enabledMembers.length === 1 ? "person" : "people"} enabled</span>
-                {permissionsOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
               </div>
-            </button>
+            </div>
 
-            {permissionsOpen && (
-              <div style={{ padding: "0 16px 16px" }}>
+            <div style={{ padding: "0 16px 16px" }}>
                 <div className="cb-hint" style={{ marginBottom: 12 }}>
                   {integrationStatus.calamari_connected ? "Choose who can view Leave Trends and Capacity & Utilisation in Insights." : "Choose who can view Capacity & Utilisation in Insights. Leave reporting stays hidden until this workspace connects Calamari."} Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
                 </div>
@@ -3279,7 +3270,6 @@ function SettingsView({
                   <div className="cb-hint" style={{ marginTop: 9 }}>Super Admins always have access and do not need to be added.</div>
                 </div>
               </div>
-            )}
           </div>
         );
       })()}
@@ -5153,6 +5143,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   // Team View to specific people without changing the underlying reconciliation logic.
   // Admin/Staff demo modes ignore this filter entirely and continue to use their normal scope.
   const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState(null);
+  const [teamPickerOpen, setTeamPickerOpen] = useState(false);
+  const teamPickerRef = useRef(null);
   const [expandedMembers, setExpandedMembers] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [teamProgress, setTeamProgress] = useState("");
@@ -5181,6 +5173,26 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     if (!canSelectTeamMembers || selectedTeamMemberIds === null) return teamOptions;
     return teamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
   }, [teamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
+
+  useEffect(() => {
+    if (!teamPickerOpen) return;
+    const closeOnOutside = (event) => {
+      if (teamPickerRef.current && !teamPickerRef.current.contains(event.target)) setTeamPickerOpen(false);
+    };
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setTeamPickerOpen(false);
+    };
+    document.addEventListener("mousedown", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [teamPickerOpen]);
+
+  useEffect(() => {
+    if (!canSelectTeamMembers || viewMode !== "team") setTeamPickerOpen(false);
+  }, [canSelectTeamMembers, viewMode]);
 
   useEffect(() => {
     if ((!isAdmin || forceSelfOnly) && currentUser?.id) {
@@ -5303,15 +5315,22 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         {viewMode === "team" && <div style={{ minWidth: canSelectTeamMembers ? 280 : 220 }}>
           <div className="cb-label">Team</div>
           {canSelectTeamMembers ? (
-            <details style={{ position: "relative" }}>
-              <summary className="cb-input" style={{ display: "flex", alignItems: "center", minHeight: 38, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+            <div ref={teamPickerRef} style={{ position: "relative" }}>
+              <button
+                type="button"
+                className="cb-input"
+                aria-haspopup="listbox"
+                aria-expanded={teamPickerOpen}
+                onClick={() => setTeamPickerOpen((open) => !open)}
+                style={{ width: "100%", display: "flex", alignItems: "center", minHeight: 38, cursor: "pointer", userSelect: "none", textAlign: "left" }}
+              >
                 <span>{selectedTeamOptions.length} of {teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"} selected</span>
-                <ChevronDown size={14} style={{ marginLeft: "auto" }} />
-              </summary>
-              <div style={{ position: "absolute", zIndex: 80, top: "calc(100% + 5px)", left: 0, minWidth: 300, maxHeight: 320, overflowY: "auto", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)", padding: 8 }}>
+                <ChevronDown size={14} style={{ marginLeft: "auto", transform: teamPickerOpen ? "rotate(180deg)" : "none", transition: "transform 120ms ease" }} />
+              </button>
+              {teamPickerOpen && <div role="listbox" aria-multiselectable="true" style={{ position: "absolute", zIndex: 80, top: "calc(100% + 5px)", left: 0, minWidth: 300, maxHeight: 320, overflowY: "auto", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)", padding: 8 }}>
                 <div style={{ display: "flex", gap: 6, padding: "2px 2px 8px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
-                  <button type="button" className="cb-btn cb-btn-sm" onClick={(e) => { e.preventDefault(); setSelectedTeamMemberIds(null); setTeamData(null); }}>Select all</button>
-                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={(e) => { e.preventDefault(); setSelectedTeamMemberIds(new Set()); setTeamData(null); }}>Clear</button>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setSelectedTeamMemberIds(null); setTeamData(null); }}>Select all</button>
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => { setSelectedTeamMemberIds(new Set()); setTeamData(null); }}>Clear</button>
                 </div>
                 {teamOptions.map((member) => {
                   const checked = selectedTeamMemberIds === null || selectedTeamMemberIds.has(member.id);
@@ -5327,8 +5346,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                     <span>{member.name}</span>
                   </label>;
                 })}
-              </div>
-            </details>
+              </div>}
+            </div>
           ) : (
             <div className="cb-input" style={{ display: "flex", alignItems: "center", minHeight: 38 }}>{teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"}</div>
           )}
