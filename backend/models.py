@@ -139,6 +139,19 @@ class LoginEvent(TenantScopedMixin, Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class DailyPresenceEvent(TenantScopedMixin, Base):
+    __tablename__ = "daily_presence_events"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "member_id", "work_date", name="uq_daily_presence_tenant_member_date"),
+        Index("ix_daily_presence_tenant_member_date", "tenant_id", "member_id", "work_date"),
+    )
+    id = Column(String, primary_key=True, default=lambda: gen_id("presence"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    work_date = Column(Date, nullable=False)
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class ClockStartEvent(TenantScopedMixin, Base):
     __tablename__ = "clock_start_events"
     id = Column(String, primary_key=True, default=lambda: gen_id("clk"))

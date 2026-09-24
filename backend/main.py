@@ -5469,6 +5469,42 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
     return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": note_text}
 
 
+@app.post("/api/audit/presence-heartbeat", status_code=204)
+def audit_presence_heartbeat(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Silent presence signal used only to infer the final laptop/browser-off time in the
+    # Daily start activity report. It does not affect timers, inactivity detection or notifications.
+    now_utc = datetime.utcnow()
+    local_now = _utc_naive_to_local(now_utc, current_member)
+    work_date = local_now.date()
+    row = db.query(models.DailyPresenceEvent).filter(
+        models.DailyPresenceEvent.member_id == current_member.id,
+        models.DailyPresenceEvent.work_date == work_date,
+    ).first()
+    if row is None:
+        row = models.DailyPresenceEvent(
+            member_id=current_member.id,
+            work_date=work_date,
+            first_seen_at=now_utc,
+            last_seen_at=now_utc,
+        )
+        db.add(row)
+        try:
+            db.commit()
+            return None
+        except IntegrityError:
+            # Multiple tabs can send the first heartbeat for the same local day at once.
+            db.rollback()
+            row = db.query(models.DailyPresenceEvent).filter(
+                models.DailyPresenceEvent.member_id == current_member.id,
+                models.DailyPresenceEvent.work_date == work_date,
+            ).first()
+            if row is None:
+                raise
+    row.last_seen_at = now_utc
+    db.commit()
+    return None
+
+
 @app.get("/api/audit/activity-summary")
 def audit_activity_summary(date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
@@ -5487,29 +5523,64 @@ def audit_activity_summary(date_from: str = None, date_to: str = None, current_m
     utc_end = datetime.combine(end_date + timedelta(days=2), datetime.min.time())
     login_events = db.query(models.LoginEvent).filter(models.LoginEvent.created_at >= utc_start, models.LoginEvent.created_at < utc_end).all()
     clock_events = db.query(models.ClockStartEvent).filter(models.ClockStartEvent.started_at >= utc_start, models.ClockStartEvent.started_at < utc_end).all()
+    # Pull one extra local day of presence so a heartbeat just after midnight can prove the
+    # previous day was continuous rather than incorrectly marking 23:xx as a shutdown.
+    presence_rows = db.query(models.DailyPresenceEvent).filter(
+        models.DailyPresenceEvent.work_date >= start_date,
+        models.DailyPresenceEvent.work_date <= end_date + timedelta(days=1),
+    ).all()
     logins_by_member = {}
     clocks_by_member = {}
+    presence_by_member = {}
     for event in login_events:
         logins_by_member.setdefault(event.member_id, []).append(event.created_at)
     for event in clock_events:
         clocks_by_member.setdefault(event.member_id, []).append(event.started_at)
+    for event in presence_rows:
+        presence_by_member.setdefault(event.member_id, []).append(event)
 
     rows = []
+    now_utc = datetime.utcnow()
+    shutdown_gap = timedelta(hours=3)
     for member in members:
         per_day = {}
         for dt in logins_by_member.get(member.id, []):
             local = _utc_naive_to_local(dt, member)
             if local and start_date <= local.date() <= end_date:
-                bucket = per_day.setdefault(local.date().isoformat(), {"first_login": None, "first_clock": None})
+                bucket = per_day.setdefault(local.date().isoformat(), {"first_login": None, "first_clock": None, "presence": None})
                 if bucket["first_login"] is None or local < bucket["first_login"]:
                     bucket["first_login"] = local
         for dt in clocks_by_member.get(member.id, []):
             local = _utc_naive_to_local(dt, member)
             if local and start_date <= local.date() <= end_date:
-                bucket = per_day.setdefault(local.date().isoformat(), {"first_login": None, "first_clock": None})
+                bucket = per_day.setdefault(local.date().isoformat(), {"first_login": None, "first_clock": None, "presence": None})
                 if bucket["first_clock"] is None or local < bucket["first_clock"]:
                     bucket["first_clock"] = local
+
+        member_presence = sorted(presence_by_member.get(member.id, []), key=lambda r: (r.work_date, r.first_seen_at))
+        for presence in member_presence:
+            if start_date <= presence.work_date <= end_date:
+                bucket = per_day.setdefault(presence.work_date.isoformat(), {"first_login": None, "first_clock": None, "presence": None})
+                bucket["presence"] = presence
+
         for day, bucket in sorted(per_day.items()):
+            shutdown_utc = None
+            presence = bucket.get("presence")
+            if presence and presence.last_seen_at:
+                next_seen_utc = None
+                for candidate in member_presence:
+                    if candidate.work_date > presence.work_date:
+                        next_seen_utc = candidate.first_seen_at
+                        break
+                gap_end = next_seen_utc or now_utc
+                if gap_end - presence.last_seen_at >= shutdown_gap:
+                    shutdown_utc = presence.last_seen_at
+
+            shutdown_local = _utc_naive_to_local(shutdown_utc, member) if shutdown_utc else None
+            first_login_to_shutdown_seconds = None
+            if bucket["first_login"] and shutdown_local and shutdown_local >= bucket["first_login"]:
+                first_login_to_shutdown_seconds = (shutdown_local - bucket["first_login"]).total_seconds()
+
             rows.append({
                 "member_id": member.id,
                 "member_name": member.name,
@@ -5517,6 +5588,8 @@ def audit_activity_summary(date_from: str = None, date_to: str = None, current_m
                 "timezone_name": member.timezone_name or "UTC",
                 "first_login_at": bucket["first_login"].isoformat() if bucket["first_login"] else None,
                 "first_clock_at": bucket["first_clock"].isoformat() if bucket["first_clock"] else None,
+                "laptop_turned_off_at": shutdown_local.isoformat() if shutdown_local else None,
+                "first_login_to_shutdown_seconds": first_login_to_shutdown_seconds,
             })
     return rows
 
