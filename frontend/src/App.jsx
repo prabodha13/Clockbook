@@ -2928,6 +2928,10 @@ function resizeWorkspaceLogo(file) {
   });
 }
 
+const SETTINGS_CARD_STYLE = { marginBottom: 12 };
+const SETTINGS_HEAD_STYLE = { padding: "10px 16px", minHeight: 0 };
+const SETTINGS_BODY_STYLE = { padding: "12px 16px" };
+
 function SettingsLoadingBlock({ rows = 3, minHeight = 96 }) {
   return (
     <div aria-hidden="true" style={{ minHeight, display: "grid", alignContent: "start", gap: 10, paddingTop: 2 }}>
@@ -3034,18 +3038,18 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
 
   return (
     <>
-      <div className="cb-tmpl-card">
-        <div className="cb-tmpl-head">
+      <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+        <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
           <div>
             <div className="cb-tmpl-field">Organisation</div>
             <div className="cb-tmpl-name">Workspace</div>
           </div>
         </div>
-        <div style={{ padding: 16, minHeight: 116 }}>
+        <div style={{ ...SETTINGS_BODY_STYLE, minHeight: 0 }}>
           {activeWorkspace ? (
-            <div style={{ display: "grid", gap: 12 }}>
+            <div style={{ display: "grid", gap: 8 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <WorkspaceLogo workspace={activeWorkspace} size={44} />
+                <WorkspaceLogo workspace={activeWorkspace} size={38} />
                 <div>
                   <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
                   <div className="cb-hint" style={{ marginTop: 3 }}>Workspace ID: {activeWorkspace.id}</div>
@@ -3063,8 +3067,8 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
               )}
               {brandingMessage && <div className={brandingMessage.toLowerCase().includes("updated") || brandingMessage.toLowerCase().includes("removed") ? "cb-hint" : "cb-error"}>{brandingMessage}</div>}
               {workspaces.length > 1 && (
-                <div style={{ maxWidth: 360 }}>
-                  <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Switch workspace</label>
+                <div style={{ maxWidth: 320 }}>
+                  <label className="cb-label" style={{ display: "block", marginBottom: 4 }}>Switch workspace</label>
                   <select
                     className="cb-input"
                     value={activeWorkspaceId || ""}
@@ -3085,8 +3089,8 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
       </div>
 
       {(!platformChecked || isPlatformAdmin) && (
-        <div className="cb-tmpl-card" aria-busy={!platformChecked ? "true" : undefined}>
-          <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE} aria-busy={!platformChecked ? "true" : undefined}>
+          <div className="cb-tmpl-head" style={{ ...SETTINGS_HEAD_STYLE, minHeight: !platformChecked ? 50 : 0 }}>
             {!platformChecked ? (
               <div aria-hidden="true" style={{ width: "100%", display: "grid", gap: 8 }}>
                 <div style={{ height: 11, width: 150, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
@@ -3099,12 +3103,12 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
               </div>
             )}
           </div>
-          <div style={{ padding: 16, minHeight: 230 }}>
+          <div style={{ ...SETTINGS_BODY_STYLE, minHeight: !platformChecked ? 180 : 0 }}>
             {!platformChecked ? (
               <SettingsLoadingBlock rows={5} minHeight={198} />
             ) : (
               <>
-            <div className="cb-hint" style={{ marginBottom: 14 }}>
+            <div className="cb-hint" style={{ marginBottom: 9 }}>
               Create a separate company workspace. Each workspace has its own clients, tasks, staff, templates, settings and integrations.
             </div>
             <form onSubmit={createWorkspace} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.2fr) minmax(180px,1fr) auto", gap: 10, alignItems: "end", maxWidth: 820 }}>
@@ -3122,13 +3126,13 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
             </form>
             {workspaceMessage && <div className="cb-hint" style={{ marginTop: 10 }}>{workspaceMessage}</div>}
             {platformTenants.length > 0 && (
-              <div style={{ marginTop: 18, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                 <div className="cb-label" style={{ marginBottom: 8 }}>Platform workspaces</div>
-                <div style={{ display: "grid", gap: 6, maxWidth: 620 }}>
+                <div style={{ display: "grid", gap: 4, maxWidth: 620 }}>
                   {platformTenants.map((tenant) => {
                     const workspace = workspaces.find((row) => row.id === tenant.id) || tenant;
                     return (
-                      <div key={tenant.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "8px 10px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <div key={tenant.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "6px 9px", border: "1px solid var(--border)", borderRadius: 8 }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
                           <WorkspaceLogo workspace={workspace} size={28} />
                           <span style={{ fontWeight: 650 }}>{tenant.name}</span>
@@ -3402,7 +3406,7 @@ function SettingsView({
 
   return (
     <div style={{ position: "relative" }}>
-      <div className="cb-page-head">
+      <div className="cb-page-head" style={{ marginBottom: 12 }}>
         <div>
           <div className="cb-page-title cb-serif">Settings</div>
           <div className="cb-page-sub">The fixed lists everyone picks from when setting up templates or logging a task.</div>
@@ -3419,15 +3423,15 @@ function SettingsView({
         onPlatformResolved={() => setPlatformSettingsReady(true)}
       />
       {realIsSuperAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
               <div className="cb-tmpl-field">Demo</div>
               <div className="cb-tmpl-name">View mode</div>
             </div>
           </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 8 }}>
               Preview Clockbook as a normal staff member or admin without changing your real Super Admin role. Settings stays available so you can always switch back.
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -3457,8 +3461,8 @@ function SettingsView({
           ? members.filter((m) => m.role !== "super_admin" && !m.can_view_leave_capacity_insights && m.name.toLowerCase().includes(search))
           : [];
         return (
-          <div className="cb-tmpl-card">
-            <div className="cb-tmpl-head">
+          <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+            <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
               <div>
                 <div className="cb-tmpl-field">Permissions</div>
                 <div className="cb-tmpl-name">{integrationStatus.calamari_connected ? <>Leave &amp; capacity insights</> : <>Capacity insights</>}</div>
@@ -3468,12 +3472,12 @@ function SettingsView({
               </div>
             </div>
 
-            <div style={{ padding: "0 16px 16px" }}>
-                <div className="cb-hint" style={{ marginBottom: 12 }}>
+            <div style={{ padding: "0 16px 12px" }}>
+                <div className="cb-hint" style={{ marginBottom: 9 }}>
                   {integrationStatus.calamari_connected ? "Choose who can view Leave Trends and Capacity & Utilisation in Insights." : "Choose who can view Capacity & Utilisation in Insights. Leave reporting stays hidden until this workspace connects Calamari."} Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
                 </div>
 
-                <div style={{ position: "relative", maxWidth: 460, marginBottom: 14 }}>
+                <div style={{ position: "relative", maxWidth: 460, marginBottom: 10 }}>
                   <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
                   <input
                     className="cb-input"
@@ -3497,13 +3501,13 @@ function SettingsView({
                 </div>
 
                 {search && (
-                  <div style={{ maxWidth: 620, marginBottom: 16, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
+                  <div style={{ maxWidth: 620, marginBottom: 12, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
                     {searchResults.length ? searchResults.map((m, index) => (
                       <div
                         key={m.id}
                         style={{
                           display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                          padding: "9px 11px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
+                          padding: "7px 10px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
                         }}
                       >
                         <div style={{ minWidth: 0 }}>
@@ -3536,7 +3540,7 @@ function SettingsView({
                           key={m.id}
                           style={{
                             display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                            padding: "9px 11px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
+                            padding: "7px 10px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
                           }}
                         >
                           <div style={{ minWidth: 0 }}>
@@ -3564,14 +3568,14 @@ function SettingsView({
       })()}
 
       {effectiveIsAdmin && (
-      <div className="cb-tmpl-card">
-        <div className="cb-tmpl-head">
+      <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+        <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
           <div>
             <div className="cb-tmpl-field">Setup</div>
             <div className="cb-tmpl-name">Roles, task types, and tracked numbers</div>
           </div>
         </div>
-        <div style={{ padding: 16, display: "flex", gap: 24, flexWrap: "wrap" }}>
+        <div style={{ ...SETTINGS_BODY_STYLE, display: "flex", gap: 16, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Roles</div>
             {roles.map((r) => (
@@ -3649,15 +3653,15 @@ function SettingsView({
       )}
 
       {effectiveIsAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
               <div className="cb-tmpl-field">Teams</div>
               <div className="cb-tmpl-name">Pods</div>
             </div>
           </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 8 }}>
               Assign an admin to a pod on the Staff page and they will only see time and task data for people in that same pod. An admin with no pod keeps seeing everyone, and super admins always see everyone regardless of pod.
               {!isSuperAdmin && " Pod creation, deletion, and assignment are managed by a Super Admin."}
             </div>
@@ -3671,7 +3675,7 @@ function SettingsView({
             ))}
             {pods.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No pods created yet.</div>}
             {isSuperAdmin && (
-              <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 360 }}>
+              <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 6, maxWidth: 360 }}>
                 <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
                 <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
               </form>
@@ -3681,34 +3685,34 @@ function SettingsView({
       )}
 
       {realIsSuperAdmin && viewMode === "super_admin" && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
               <div className="cb-tmpl-field">Settings</div>
               <div className="cb-tmpl-name">Integrations</div>
             </div>
           </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 18 }}>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 12 }}>
               Manage external services connected to this ClockBook workspace. Saved credentials are encrypted on the server and are never returned to the browser after saving.
             </div>
 
-            <div style={{ minHeight: 218 }}>
+            <div>
               <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Karbon</div>
-              <div className="cb-hint" style={{ marginBottom: 12 }}>
+              <div className="cb-hint" style={{ marginBottom: 8 }}>
                 Connect this ClockBook workspace to its Karbon account.
               </div>
               {karbonIntegration == null ? (
                 <SettingsLoadingBlock rows={3} minHeight={72} />
               ) : karbonIntegration?.connected ? (
                 <>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
                     <span className="cb-hint">Application ID ••••{karbonIntegration.application_id_hint || ""}</span>
                     <span className="cb-hint">Access Key ••••{karbonIntegration.access_key_hint || ""}</span>
                     {karbonIntegration.source === "environment" && <span className="cb-hint">Legacy environment configuration</span>}
                   </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                     <button type="button" className="cb-btn cb-btn-sm" onClick={testKarbonIntegration} disabled={testingKarbon || savingKarbon}>
                       {testingKarbon ? "Testing..." : "Test connection"}
                     </button>
@@ -3734,27 +3738,27 @@ function SettingsView({
                   </button>
                 </div>
               </form>
-              <div className="cb-hint" style={{ marginTop: 8 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
+              <div className="cb-hint" style={{ marginTop: 6 }}>The saved values are not displayed again. Karbon Check uses this workspace connection for authorised staff.</div>
               {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
             </div>
 
-            <div style={{ borderTop: "1px solid var(--border)", margin: "22px 0" }} />
+            <div style={{ borderTop: "1px solid var(--border)", margin: "14px 0" }} />
 
-            <div style={{ minHeight: 226 }}>
+            <div>
               <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Calamari</div>
-              <div className="cb-hint" style={{ marginBottom: 12 }}>
+              <div className="cb-hint" style={{ marginBottom: 8 }}>
                 Uses approved time off and employee public holidays to reduce available capacity. Remote-work requests do not reduce capacity. Staff are matched by their ClockBook email address.
               </div>
               {calamariIntegration == null ? (
                 <SettingsLoadingBlock rows={3} minHeight={72} />
               ) : calamariIntegration?.connected ? (
                 <>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
                     <span className="cb-hint">{calamariIntegration.tenant}.calamari.io</span>
                     <span className="cb-hint">API key ••••{calamariIntegration.api_key_hint || ""}</span>
                   </div>
-                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
                     <button type="button" className="cb-btn cb-btn-sm" onClick={testCalamariIntegration} disabled={testingCalamari || savingCalamari}>
                       {testingCalamari ? "Testing..." : "Test connection"}
                     </button>
@@ -3778,7 +3782,7 @@ function SettingsView({
                   {savingCalamari ? "Connecting..." : calamariIntegration?.connected ? "Replace" : "Connect Calamari"}
                 </button>
               </form>
-              <div className="cb-hint" style={{ marginTop: 8 }}>Enter the workspace portion of your Calamari URL (for example, "your-workspace" from your-workspace.calamari.io). Create the Calamari key with Absence Requests and Holidays access. The saved key is encrypted and is not displayed again.</div>
+              <div className="cb-hint" style={{ marginTop: 6 }}>Enter the workspace portion of your Calamari URL (for example, "your-workspace" from your-workspace.calamari.io). Create the Calamari key with Absence Requests and Holidays access. The saved key is encrypted and is not displayed again.</div>
               {calamariMessage && <div className={calamariMessage.toLowerCase().includes("successful") || calamariMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{calamariMessage}</div>}
             </div>
           </div>
@@ -3786,15 +3790,15 @@ function SettingsView({
       )}
 
       {isSuperAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
               <div className="cb-tmpl-field">Audit</div>
               <div className="cb-tmpl-name">Audit recording</div>
             </div>
           </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 8 }}>
               Records supported screen-lock and sleep/inactive-browser periods for the super-admin Audit report. Turning this off stops new audit events from being recorded.
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -3814,15 +3818,15 @@ function SettingsView({
       )}
 
       {isSuperAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
               <div className="cb-tmpl-field">Diagnostics</div>
               <div className="cb-tmpl-name">Time tracking check</div>
             </div>
           </div>
-          <div style={{ padding: 16 }}>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 8 }}>
               Finds any task whose tracked time is stuck growing because of a leftover unclosed period from before a recent fix. Fixing one only ever shortens its time to what was actually tracked, never lengthens it.
             </div>
             <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
@@ -3873,25 +3877,25 @@ function SettingsView({
             paddingTop: 2,
           }}
         >
-          <div className="cb-tmpl-card">
-            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+          <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+            <div className="cb-tmpl-head" style={{ ...SETTINGS_HEAD_STYLE, minHeight: 50 }}>
               <div style={{ width: "100%", display: "grid", gap: 8 }}>
                 <div style={{ height: 11, width: 120, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
                 <div style={{ height: 16, width: 92, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
               </div>
             </div>
-            <div style={{ padding: 16 }}>
+            <div style={SETTINGS_BODY_STYLE}>
               <SettingsLoadingBlock rows={4} minHeight={142} />
             </div>
           </div>
-          <div className="cb-tmpl-card">
-            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+          <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+            <div className="cb-tmpl-head" style={{ ...SETTINGS_HEAD_STYLE, minHeight: 50 }}>
               <div style={{ width: "100%", display: "grid", gap: 8 }}>
                 <div style={{ height: 11, width: 105, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
                 <div style={{ height: 16, width: 118, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
               </div>
             </div>
-            <div style={{ padding: 16 }}>
+            <div style={SETTINGS_BODY_STYLE}>
               <SettingsLoadingBlock rows={5} minHeight={198} />
             </div>
           </div>
@@ -4163,7 +4167,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
               </button>
             </div>
           )}
-          {error && <div className="cb-error" style={{ marginTop: 8 }}>{error}</div>}
+          {error && <div className="cb-error" style={{ marginTop: 6 }}>{error}</div>}
         </div>
       )}
     </div>
@@ -4284,7 +4288,7 @@ function ClientImportModal({ onClose, onImport }) {
             Use the ClockBook CSV template. Client name and client code are required. Bank account columns are optional; add more columns as Bank account 4, Bank account 5, and so on if needed.
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
             <button type="button" className="cb-btn" onClick={downloadTemplate}><Download size={14} />Download template</button>
             <label className="cb-btn cb-btn-primary" style={{ cursor: busy ? "default" : "pointer" }}>
               <FileSpreadsheet size={14} />Choose CSV
