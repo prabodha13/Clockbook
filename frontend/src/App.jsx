@@ -6929,14 +6929,16 @@ function ManualOverridesReportView() {
           {rows.length === 0 ? <div className="cb-empty">No manually overridden entries were submitted in this period.</div> : <>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.35fr)", gap: 16, marginBottom: 24 }}>
               <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16 }}>
-                <div className="cb-group-title">Manual adjustment volume by user</div>
-                <div className="cb-hint" style={{ margin: "3px 0 16px" }}>Total time manually changed, including both additions and reductions. Net change is shown separately.</div>
-                {topUsers.map((u) => <div key={u.name} style={{ display: "grid", gridTemplateColumns: "minmax(170px, 0.95fr) minmax(80px, 1.5fr) 150px", alignItems: "center", gap: 10, marginBottom: 11 }}>
+                <div className="cb-group-title">Manual adjustment activity by user</div>
+                <div className="cb-hint" style={{ margin: "3px 0 16px" }}>
+                  The bar and “total changed” show all time touched by manual edits (time added + time reduced). They do not mean the user's recorded time increased by that amount. Net change shows the final effect on recorded time.
+                </div>
+                {topUsers.map((u) => <div key={u.name} style={{ display: "grid", gridTemplateColumns: "minmax(170px, 0.95fr) minmax(80px, 1.5fr) 165px", alignItems: "center", gap: 10, marginBottom: 11 }}>
                   <div style={{ lineHeight: 1.25, overflowWrap: "anywhere" }}>{u.name}</div>
-                  <div style={{ height: 9, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, (u.absolute / maxUserSeconds) * 100)}%`, height: "100%", background: "var(--green)", borderRadius: 999 }} /></div>
+                  <div style={{ height: 9, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }} title={`${formatHM(u.absolute)} total changed`}><div style={{ width: `${Math.max(3, (u.absolute / maxUserSeconds) * 100)}%`, height: "100%", background: "var(--green)", borderRadius: 999 }} /></div>
                   <div style={{ textAlign: "right", minWidth: 0 }}>
-                    <div className="cb-mono">{formatHM(u.absolute)}</div>
-                    <div className="cb-hint" style={{ marginTop: 2, whiteSpace: "nowrap" }}>Net {signedDuration(u.net)}</div>
+                    <div style={{ fontSize: 16, fontWeight: 750, lineHeight: 1.15 }} className="cb-mono">Net {signedDuration(u.net)}</div>
+                    <div className="cb-hint" style={{ marginTop: 3, whiteSpace: "nowrap" }}>{formatHM(u.absolute)} total changed</div>
                   </div>
                 </div>)}
               </div>
