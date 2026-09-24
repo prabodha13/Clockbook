@@ -45,9 +45,9 @@ export const api = {
   getPods: () => request("/pods"),
   createPod: (name) => request("/pods", { method: "POST", body: JSON.stringify({ name }) }),
   deletePod: (id) => request(`/pods/${id}`, { method: "DELETE" }),
-  updateMemberPod: (memberId, podId) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId }) }),
-  updateMemberTimezone: (memberId, timezoneName) => request(`/members/${memberId}/timezone`, { method: "PATCH", body: JSON.stringify({ timezone_name: timezoneName }) }),
-  updateMemberInsightsPermission: (memberId, enabled) => request(`/members/${memberId}/insights-permission`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
+  updateMemberPod: (memberId, podId, expectedVersion) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId, expected_version: expectedVersion }) }),
+  updateMemberTimezone: (memberId, timezoneName, expectedVersion) => request(`/members/${memberId}/timezone`, { method: "PATCH", body: JSON.stringify({ timezone_name: timezoneName, expected_version: expectedVersion }) }),
+  updateMemberInsightsPermission: (memberId, enabled, expectedVersion) => request(`/members/${memberId}/insights-permission`, { method: "PATCH", body: JSON.stringify({ enabled, expected_version: expectedVersion }) }),
   disconnectGoogleCalendar: () => request("/auth/google/disconnect", { method: "POST" }),
   connectSlack: (memberId, slackEmail) => request(`/members/${memberId}/slack`, { method: "PATCH", body: JSON.stringify({ slack_email: slackEmail }) }),
   disconnectSlack: (memberId) => request(`/members/${memberId}/slack/disconnect`, { method: "POST" }),
@@ -90,10 +90,10 @@ export const api = {
   getMembers: () => request("/members"),
   createMember: (name, email, password) =>
     request("/members", { method: "POST", body: JSON.stringify({ name, email, password }) }),
-  updateMemberRole: (memberId, role) =>
-    request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role }) }),
-  updateMemberCapacity: (memberId, weeklyCapacityHours, capacityEffectiveFrom = null) =>
-    request(`/members/${memberId}/capacity`, { method: "PATCH", body: JSON.stringify({ weekly_capacity_hours: weeklyCapacityHours, capacity_effective_from: capacityEffectiveFrom || null }) }),
+  updateMemberRole: (memberId, role, expectedVersion) =>
+    request(`/members/${memberId}/role`, { method: "PATCH", body: JSON.stringify({ role, expected_version: expectedVersion }) }),
+  updateMemberCapacity: (memberId, weeklyCapacityHours, capacityEffectiveFrom = null, expectedVersion) =>
+    request(`/members/${memberId}/capacity`, { method: "PATCH", body: JSON.stringify({ weekly_capacity_hours: weeklyCapacityHours, capacity_effective_from: capacityEffectiveFrom || null, expected_version: expectedVersion }) }),
   setMemberCredentials: (memberId, email, password) =>
     request(`/members/${memberId}/credentials`, { method: "PATCH", body: JSON.stringify({ email, password }) }),
   deleteMember: (memberId) => request(`/members/${memberId}`, { method: "DELETE" }),
@@ -101,7 +101,7 @@ export const api = {
   getClients: () => request("/clients"),
   createClient: (name, code) => request("/clients", { method: "POST", body: JSON.stringify({ name, code }) }),
   importClients: (rows) => request("/clients/import", { method: "POST", body: JSON.stringify({ rows }) }),
-  updateClient: (id, name, code) => request(`/clients/${id}`, { method: "PATCH", body: JSON.stringify({ name, code }) }),
+  updateClient: (id, name, code, expectedVersion) => request(`/clients/${id}`, { method: "PATCH", body: JSON.stringify({ name, code, expected_version: expectedVersion }) }),
   mergeClients: (keepId, duplicateId) => request(`/clients/${keepId}/merge/${duplicateId}`, { method: "POST" }),
   deleteClient: (id) => request(`/clients/${id}`, { method: "DELETE" }),
 
@@ -116,7 +116,7 @@ export const api = {
 
   getTaskTypes: () => request("/task-types"),
   createTaskType: (name, isBillable = false) => request("/task-types", { method: "POST", body: JSON.stringify({ name, is_billable: !!isBillable }) }),
-  updateTaskTypeBilling: (id, isBillable) => request(`/task-types/${id}/billing`, { method: "PATCH", body: JSON.stringify({ is_billable: !!isBillable }) }),
+  updateTaskTypeBilling: (id, isBillable, expectedVersion) => request(`/task-types/${id}/billing`, { method: "PATCH", body: JSON.stringify({ is_billable: !!isBillable, expected_version: expectedVersion }) }),
   deleteTaskType: (id) => request(`/task-types/${id}`, { method: "DELETE" }),
 
   getTrackedMetrics: () => request("/tracked-metrics"),
@@ -125,12 +125,12 @@ export const api = {
 
   getTemplates: () => request("/templates"),
   createTemplate: (field, name, category = "") => request("/templates", { method: "POST", body: JSON.stringify({ field, name, category: category || null }) }),
-  updateTemplate: (id, field, name, category = "") => request(`/templates/${id}`, { method: "PATCH", body: JSON.stringify({ field, name, category: category || null }) }),
+  updateTemplate: (id, field, name, category = "", expectedVersion) => request(`/templates/${id}`, { method: "PATCH", body: JSON.stringify({ field, name, category: category || null, expected_version: expectedVersion }) }),
   deleteTemplate: (id) => request(`/templates/${id}`, { method: "DELETE" }),
   addTemplateTask: (templateId, task) =>
     request(`/templates/${templateId}/tasks`, { method: "POST", body: JSON.stringify(task) }),
-  updateTemplateTask: (templateId, taskId, task) =>
-    request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify(task) }),
+  updateTemplateTask: (templateId, taskId, task, expectedVersion) =>
+    request(`/templates/${templateId}/tasks/${taskId}`, { method: "PUT", body: JSON.stringify({ ...task, expected_version: expectedVersion }) }),
   reorderTemplateTasks: (templateId, taskIds) =>
     request(`/templates/${templateId}/tasks-order`, { method: "PUT", body: JSON.stringify({ task_ids: taskIds }) }),
   deleteTemplateTask: (templateId, taskId) =>
@@ -169,13 +169,13 @@ export const api = {
   saveKarbonReconciliationNote: (memberId, date, note) => request("/karbon/reconciliation/note", { method: "PUT", body: JSON.stringify({ member_id: memberId, date, note }) }),
   getIntegrationStatus: () => request("/integrations/status"),
   getKarbonIntegration: () => request("/integrations/karbon"),
-  saveKarbonIntegration: (applicationId, accessKey) => request("/integrations/karbon", { method: "PUT", body: JSON.stringify({ application_id: applicationId, access_key: accessKey }) }),
+  saveKarbonIntegration: (applicationId, accessKey, expectedVersion = null) => request("/integrations/karbon", { method: "PUT", body: JSON.stringify({ application_id: applicationId, access_key: accessKey, expected_version: expectedVersion }) }),
   testKarbonIntegration: () => request("/integrations/karbon/test", { method: "POST" }),
-  disconnectKarbonIntegration: () => request("/integrations/karbon", { method: "DELETE" }),
+  disconnectKarbonIntegration: (expectedVersion = null) => request(`/integrations/karbon${expectedVersion == null ? "" : `?expected_version=${encodeURIComponent(expectedVersion)}`}`, { method: "DELETE" }),
   getCalamariIntegration: () => request("/integrations/calamari"),
-  saveCalamariIntegration: (tenant, apiKey) => request("/integrations/calamari", { method: "PUT", body: JSON.stringify({ tenant, api_key: apiKey }) }),
+  saveCalamariIntegration: (tenant, apiKey, expectedVersion = null) => request("/integrations/calamari", { method: "PUT", body: JSON.stringify({ tenant, api_key: apiKey, expected_version: expectedVersion }) }),
   testCalamariIntegration: () => request("/integrations/calamari/test", { method: "POST" }),
-  disconnectCalamariIntegration: () => request("/integrations/calamari", { method: "DELETE" }),
+  disconnectCalamariIntegration: (expectedVersion = null) => request(`/integrations/calamari${expectedVersion == null ? "" : `?expected_version=${encodeURIComponent(expectedVersion)}`}`, { method: "DELETE" }),
   setInactivityAuditStatus: (enabled) => request("/inactivity-events/status", { method: "PUT", body: JSON.stringify({ enabled }) }),
   getInactivityEvents: (dateFrom = "", dateTo = "") => {
     const params = new URLSearchParams();
