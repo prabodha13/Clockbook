@@ -8996,7 +8996,7 @@ export default function App() {
               <KarbonReconciliationView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
-                showLoginToShutdown={realIsSuperAdmin}
+                showLoginToShutdown={effectiveIsSuperAdmin}
               />
             )}
             {view === "staff" && (
