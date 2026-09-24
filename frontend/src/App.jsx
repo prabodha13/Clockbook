@@ -228,7 +228,23 @@ function AuthBackdrop() {
         borderRadius: "50%",
         border: "22px solid rgba(36, 92, 67, 0.038)",
         filter: "blur(1.5px)",
-      }} />
+      }}>
+        <div style={{
+          position: "absolute", left: "50%", top: "50%", width: 8, height: 118,
+          marginLeft: -4, marginTop: -112, borderRadius: 999,
+          background: "rgba(36, 92, 67, 0.022)", transform: "rotate(-24deg)", transformOrigin: "50% 100%",
+        }} />
+        <div style={{
+          position: "absolute", left: "50%", top: "50%", width: 8, height: 82,
+          marginLeft: -4, marginTop: -78, borderRadius: 999,
+          background: "rgba(36, 92, 67, 0.018)", transform: "rotate(54deg)", transformOrigin: "50% 100%",
+        }} />
+        <div style={{
+          position: "absolute", left: "50%", top: "50%", width: 18, height: 18,
+          marginLeft: -9, marginTop: -9, borderRadius: "50%",
+          background: "rgba(36, 92, 67, 0.022)",
+        }} />
+      </div>
       <div aria-hidden="true" style={{
         position: "absolute",
         right: -225,
@@ -238,7 +254,18 @@ function AuthBackdrop() {
         borderRadius: "50%",
         border: "18px solid rgba(36, 92, 67, 0.024)",
         filter: "blur(2px)",
-      }} />
+      }}>
+        <div style={{
+          position: "absolute", left: "50%", top: "50%", width: 7, height: 92,
+          marginLeft: -3.5, marginTop: -88, borderRadius: 999,
+          background: "rgba(36, 92, 67, 0.016)", transform: "rotate(18deg)", transformOrigin: "50% 100%",
+        }} />
+        <div style={{
+          position: "absolute", left: "50%", top: "50%", width: 7, height: 66,
+          marginLeft: -3.5, marginTop: -62, borderRadius: 999,
+          background: "rgba(36, 92, 67, 0.014)", transform: "rotate(104deg)", transformOrigin: "50% 100%",
+        }} />
+      </div>
       <div aria-hidden="true" style={{
         position: "absolute",
         left: "8%",
