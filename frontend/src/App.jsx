@@ -2679,6 +2679,26 @@ function resizeWorkspaceLogo(file) {
   });
 }
 
+function SettingsLoadingBlock({ rows = 3, minHeight = 96 }) {
+  return (
+    <div aria-hidden="true" style={{ minHeight, display: "grid", alignContent: "start", gap: 10, paddingTop: 2 }}>
+      {Array.from({ length: rows }).map((_, index) => (
+        <div
+          key={index}
+          style={{
+            height: index === 0 ? 14 : 11,
+            width: index === 0 ? "34%" : index % 2 ? "62%" : "48%",
+            maxWidth: 420,
+            borderRadius: 999,
+            background: "var(--border)",
+            opacity: 0.55,
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
 function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, canManageBranding = false, onBrandingUpdated }) {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0] || null;
   const [platformTenants, setPlatformTenants] = useState([]);
@@ -2768,7 +2788,7 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
             <div className="cb-tmpl-name">Workspace</div>
           </div>
         </div>
-        <div style={{ padding: 16 }}>
+        <div style={{ padding: 16, minHeight: 116 }}>
           {activeWorkspace ? (
             <div style={{ display: "grid", gap: 12 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -2819,7 +2839,7 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
               <div className="cb-tmpl-name">Workspaces</div>
             </div>
           </div>
-          <div style={{ padding: 16 }}>
+          <div style={{ padding: 16, minHeight: 154 }}>
             <div className="cb-hint" style={{ marginBottom: 14 }}>
               Create a separate company workspace. Each workspace has its own clients, tasks, staff, templates, settings and integrations.
             </div>
@@ -3393,12 +3413,14 @@ function SettingsView({
               Manage external services connected to this ClockBook workspace. Saved credentials are encrypted on the server and are never returned to the browser after saving.
             </div>
 
-            <div>
+            <div style={{ minHeight: 218 }}>
               <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Karbon</div>
               <div className="cb-hint" style={{ marginBottom: 12 }}>
                 Connect this ClockBook workspace to its Karbon account.
               </div>
-              {karbonIntegration?.connected ? (
+              {karbonIntegration == null ? (
+                <SettingsLoadingBlock rows={3} minHeight={72} />
+              ) : karbonIntegration?.connected ? (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
@@ -3438,12 +3460,14 @@ function SettingsView({
 
             <div style={{ borderTop: "1px solid var(--border)", margin: "22px 0" }} />
 
-            <div>
+            <div style={{ minHeight: 226 }}>
               <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Calamari</div>
               <div className="cb-hint" style={{ marginBottom: 12 }}>
                 Uses approved time off and employee public holidays to reduce available capacity. Remote-work requests do not reduce capacity. Staff are matched by their ClockBook email address.
               </div>
-              {calamariIntegration?.connected ? (
+              {calamariIntegration == null ? (
+                <SettingsLoadingBlock rows={3} minHeight={72} />
+              ) : calamariIntegration?.connected ? (
                 <>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 12 }}>
                     <span style={{ fontSize: 13.5, fontWeight: 650, color: "var(--green)" }}>Connected</span>
