@@ -6899,12 +6899,15 @@ function ManualOverridesReportView() {
           {rows.length === 0 ? <div className="cb-empty">No manually overridden entries were submitted in this period.</div> : <>
             <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1.35fr)", gap: 16, marginBottom: 24 }}>
               <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16 }}>
-                <div className="cb-group-title">Overrides by user</div>
-                <div className="cb-hint" style={{ margin: "3px 0 16px" }}>Total amount of time changed, ignoring whether the adjustment was up or down.</div>
-                {topUsers.map((u) => <div key={u.name} style={{ display: "grid", gridTemplateColumns: "minmax(170px, 0.95fr) minmax(80px, 1.5fr) 70px", alignItems: "center", gap: 10, marginBottom: 11 }}>
+                <div className="cb-group-title">Manual adjustment volume by user</div>
+                <div className="cb-hint" style={{ margin: "3px 0 16px" }}>Total time manually changed, including both additions and reductions. Net change is shown separately.</div>
+                {topUsers.map((u) => <div key={u.name} style={{ display: "grid", gridTemplateColumns: "minmax(170px, 0.95fr) minmax(80px, 1.5fr) 150px", alignItems: "center", gap: 10, marginBottom: 11 }}>
                   <div style={{ lineHeight: 1.25, overflowWrap: "anywhere" }}>{u.name}</div>
                   <div style={{ height: 9, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, (u.absolute / maxUserSeconds) * 100)}%`, height: "100%", background: "var(--green)", borderRadius: 999 }} /></div>
-                  <div className="cb-mono" style={{ textAlign: "right" }}>{formatHM(u.absolute)}</div>
+                  <div style={{ textAlign: "right", minWidth: 0 }}>
+                    <div className="cb-mono">{formatHM(u.absolute)}</div>
+                    <div className="cb-hint" style={{ marginTop: 2, whiteSpace: "nowrap" }}>Net {signedDuration(u.net)}</div>
+                  </div>
                 </div>)}
               </div>
 
