@@ -5692,6 +5692,33 @@ def audit_activity_summary(date_from: str = None, date_to: str = None, current_m
         models.DailyPresenceEvent.work_date >= start_date,
         models.DailyPresenceEvent.work_date <= end_date + timedelta(days=1),
     ).all()
+
+    # Reporting-only inactivity context for the Daily start activity table. Keep the
+    # original gross login-to-shutdown span intact, and derive a separate net span by
+    # subtracting recorded unexplained inactivity. Help already classified from a
+    # sleep/lock prompt is treated as explained time and is not deducted again.
+    inactivity_rows = db.query(models.InactivityEvent).filter(
+        models.InactivityEvent.started_at < utc_end,
+        models.InactivityEvent.ended_at >= utc_start,
+    ).all()
+    inactivity_by_member = {}
+    for event in inactivity_rows:
+        inactivity_by_member.setdefault(event.member_id, []).append(event)
+
+    inactivity_help_seconds = {}
+    inactivity_ids = [event.id for event in inactivity_rows]
+    if inactivity_ids:
+        for inactivity_event_id, help_seconds in (
+            db.query(models.HelpEvent.inactivity_event_id, models.HelpEvent.seconds)
+            .filter(
+                models.HelpEvent.source == "sleep_alert",
+                models.HelpEvent.inactivity_event_id.in_(inactivity_ids),
+            )
+            .all()
+        ):
+            if inactivity_event_id:
+                inactivity_help_seconds[inactivity_event_id] = inactivity_help_seconds.get(inactivity_event_id, 0.0) + max(float(help_seconds or 0), 0.0)
+
     logins_by_member = {}
     clocks_by_member = {}
     presence_by_member = {}
@@ -5741,8 +5768,27 @@ def audit_activity_summary(date_from: str = None, date_to: str = None, current_m
 
             shutdown_local = _utc_naive_to_local(shutdown_utc, member) if shutdown_utc else None
             first_login_to_shutdown_seconds = None
+            inactivity_seconds = None
+            net_first_login_to_shutdown_seconds = None
             if bucket["first_login"] and shutdown_local and shutdown_local >= bucket["first_login"]:
                 first_login_to_shutdown_seconds = (shutdown_local - bucket["first_login"]).total_seconds()
+
+                inactive = 0.0
+                for event in inactivity_by_member.get(member.id, []):
+                    event_start_local = _utc_naive_to_local(event.started_at, member)
+                    event_end_local = _utc_naive_to_local(event.ended_at, member)
+                    if not event_start_local or not event_end_local:
+                        continue
+                    overlap_start = max(bucket["first_login"], event_start_local)
+                    overlap_end = min(shutdown_local, event_end_local)
+                    if overlap_end <= overlap_start:
+                        continue
+                    overlap_seconds = (overlap_end - overlap_start).total_seconds()
+                    explained_help = min(overlap_seconds, inactivity_help_seconds.get(event.id, 0.0))
+                    inactive += max(overlap_seconds - explained_help, 0.0)
+
+                inactivity_seconds = inactive
+                net_first_login_to_shutdown_seconds = max(first_login_to_shutdown_seconds - inactive, 0.0)
 
             rows.append({
                 "member_id": member.id,
@@ -5753,6 +5799,8 @@ def audit_activity_summary(date_from: str = None, date_to: str = None, current_m
                 "first_clock_at": bucket["first_clock"].isoformat() if bucket["first_clock"] else None,
                 "laptop_turned_off_at": shutdown_local.isoformat() if shutdown_local else None,
                 "first_login_to_shutdown_seconds": first_login_to_shutdown_seconds,
+                "inactivity_seconds": inactivity_seconds,
+                "net_first_login_to_shutdown_seconds": net_first_login_to_shutdown_seconds,
             })
     return rows
 
