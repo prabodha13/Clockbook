@@ -170,13 +170,45 @@ DEFAULT_TEMPLATE = {
 }
 
 DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
-DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query"]
+BUILTIN_HELPING_TASK_TYPE = "Helping"
+DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query", BUILTIN_HELPING_TASK_TYPE]
 DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
 UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__"
 UNASSIGNED_CLIENT_NAME = "No client assigned"
 AROUND_TENANT_ID = "tenant_around_finance"
 AROUND_TENANT_NAME = "Around Finance"
 AROUND_TENANT_SLUG = "around-finance"
+
+
+def _is_builtin_task_type_name(value: str) -> bool:
+    return (value or "").strip().lower() == BUILTIN_HELPING_TASK_TYPE.lower()
+
+
+def _ensure_builtin_helping_task_type_for_current_tenant(db: Session):
+    existing = db.query(models.TaskTypeOption).filter(
+        func.lower(models.TaskTypeOption.name) == BUILTIN_HELPING_TASK_TYPE.lower()
+    ).first()
+    if existing is None:
+        db.add(models.TaskTypeOption(name=BUILTIN_HELPING_TASK_TYPE, is_billable=False))
+        db.flush()
+    elif existing.is_billable:
+        # Helping is a ClockBook built-in internal support category and is always non-billable.
+        existing.is_billable = False
+        db.flush()
+
+
+def _ensure_builtin_task_types_for_all_tenants(db: Session):
+    previous = db.info.get("tenant_id")
+    tenant_ids = [row[0] for row in db.query(models.Tenant.id).all()]
+    try:
+        for tenant_id in tenant_ids:
+            db.info["tenant_id"] = tenant_id
+            _ensure_builtin_helping_task_type_for_current_tenant(db)
+    finally:
+        if previous is None:
+            db.info.pop("tenant_id", None)
+        else:
+            db.info["tenant_id"] = previous
 
 
 def _unassigned_client_id(tenant_id: str) -> str:
@@ -669,6 +701,11 @@ async def lifespan(app: FastAPI):
             for name in DEFAULT_TRACKED_METRICS:
                 db.add(models.TrackedMetric(name=name))
             db.commit()
+
+        # Built-in task types are platform defaults, so also backfill them into every
+        # existing tenant instead of only seeding newly-created workspaces.
+        _ensure_builtin_task_types_for_all_tenants(db)
+        db.commit()
 
         # Upgrade legacy Google refresh tokens to the same encrypted-at-rest storage already
         # used by the other integrations. If the deployment key is not configured yet, keep
@@ -3925,6 +3962,8 @@ def list_task_types(current_member: models.Member = Depends(get_current_member),
 def create_task_type(payload: schemas.TaskTypeCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     name = payload.name.strip()
+    if _is_builtin_task_type_name(name):
+        raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is a built-in task type")
     if db.query(models.TaskTypeOption).filter(models.TaskTypeOption.name == name).first():
         raise HTTPException(400, "That task type already exists")
     task_type = models.TaskTypeOption(name=name, is_billable=bool(payload.is_billable))
@@ -3940,6 +3979,8 @@ def update_task_type_billing(task_type_id: str, payload: schemas.TaskTypeBilling
     task_type = db.get(models.TaskTypeOption, task_type_id)
     if not task_type:
         raise HTTPException(404, "Task type not found")
+    if _is_builtin_task_type_name(task_type.name):
+        raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is built in and cannot be changed")
     task_type.is_billable = bool(payload.is_billable)
     db.commit()
     db.refresh(task_type)
@@ -3951,6 +3992,8 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
     require_admin(current_member)
     task_type = db.get(models.TaskTypeOption, task_type_id)
     if task_type:
+        if _is_builtin_task_type_name(task_type.name):
+            raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is built in and cannot be deleted")
         used_by_template = db.query(models.TemplateTask).filter(models.TemplateTask.task_type == task_type.name).count()
         used_by_active_task = db.query(models.TaskInstance).filter(
             models.TaskInstance.task_type == task_type.name, models.TaskInstance.status != "submitted"
