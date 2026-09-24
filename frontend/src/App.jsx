@@ -5,6 +5,7 @@ import {
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
   Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake, Search, HelpCircle,
+  Mail, Lock, Eye, EyeOff, ShieldCheck,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -210,11 +211,106 @@ function LoadingScreen() {
   );
 }
 
+function AuthBackdrop() {
+  return (
+    <>
+      <div style={{
+        position: "absolute",
+        inset: 0,
+        background: "radial-gradient(circle at 18% 18%, rgba(36, 92, 67, 0.06), transparent 30%), radial-gradient(circle at 88% 10%, rgba(36, 92, 67, 0.05), transparent 24%), linear-gradient(180deg, #f7faf8 0%, #f3f7f4 100%)",
+      }} />
+      <div aria-hidden="true" style={{
+        position: "absolute",
+        left: -140,
+        bottom: -170,
+        width: 520,
+        height: 520,
+        borderRadius: "50%",
+        border: "28px solid rgba(36, 92, 67, 0.08)",
+      }} />
+      <div aria-hidden="true" style={{
+        position: "absolute",
+        right: -120,
+        top: -150,
+        width: 380,
+        height: 380,
+        borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(36, 92, 67, 0.06) 0%, rgba(36, 92, 67, 0.035) 48%, rgba(36, 92, 67, 0) 72%)",
+        filter: "blur(4px)",
+      }} />
+      <div aria-hidden="true" style={{
+        position: "absolute",
+        left: -8,
+        bottom: 104,
+        width: 56,
+        height: 194,
+        borderRadius: 999,
+        background: "rgba(36, 92, 67, 0.08)",
+      }} />
+      <div aria-hidden="true" style={{
+        position: "absolute",
+        left: 56,
+        bottom: -28,
+        width: 46,
+        height: 202,
+        borderRadius: 999,
+        background: "rgba(36, 92, 67, 0.08)",
+        transform: "rotate(-32deg)",
+        transformOrigin: "top center",
+      }} />
+    </>
+  );
+}
+
+function AuthCard({ children, maxWidth = 620 }) {
+  return (
+    <div className="cb-center-screen" style={{ position: "relative", overflow: "hidden", background: "#f6faf7", alignItems: "center", justifyContent: "center", padding: "48px 24px" }}>
+      <AuthBackdrop />
+      <div style={{ position: "relative", zIndex: 1, width: "100%", maxWidth }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function AuthField({ label, type = "text", value, onChange, placeholder, autoFocus = false, required = false, icon = null, trailing = null, minLength, autoComplete }) {
+  return (
+    <div className="cb-field" style={{ textAlign: "left", marginBottom: 18 }}>
+      <label className="cb-label" style={{ fontSize: 14, fontWeight: 700, color: "#334155", marginBottom: 8 }}>{label}</label>
+      <div style={{
+        display: "flex", alignItems: "center", gap: 12,
+        border: "1px solid #d7dee6", borderRadius: 12, background: "#fff",
+        minHeight: 58, padding: "0 16px", boxShadow: "inset 0 1px 0 rgba(255,255,255,0.3)",
+      }}>
+        {icon && <div style={{ color: "#64748b", display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto" }}>{icon}</div>}
+        <input
+          className="cb-input"
+          type={type}
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          autoFocus={autoFocus}
+          required={required}
+          minLength={minLength}
+          autoComplete={autoComplete}
+          style={{
+            border: "none", outline: "none", boxShadow: "none",
+            minHeight: 56, padding: 0, background: "transparent",
+            flex: 1, color: "#0f172a", fontSize: 16,
+          }}
+        />
+        {trailing && <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: "0 0 auto" }}>{trailing}</div>}
+      </div>
+    </div>
+  );
+}
+
 function LoginScreen({ onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   async function submit(e) {
     e.preventDefault();
@@ -229,27 +325,68 @@ function LoginScreen({ onLogin }) {
   }
 
   return (
-    <div className="cb-center-screen">
-      <div className="cb-welcome">
-        <div className="cb-welcome-mark"><Clock size={22} /></div>
-        <div className="cb-welcome-title cb-serif">Log in to Clockbook</div>
-        <div className="cb-welcome-sub">Time tracking built around clients and tasks, with a clean handoff into Karbon.</div>
-        <form onSubmit={submit}>
-          <div className="cb-field" style={{ textAlign: "left" }}>
-            <label className="cb-label">Email</label>
-            <input className="cb-input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus required />
-          </div>
-          <div className="cb-field" style={{ textAlign: "left" }}>
-            <label className="cb-label">Password</label>
-            <input className="cb-input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-          </div>
-          {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
-          <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center" }} disabled={busy}>
-            Log in
+    <AuthCard maxWidth={650}>
+      <div className="cb-welcome" style={{
+        maxWidth: 650,
+        margin: "0 auto",
+        background: "rgba(255,255,255,0.96)",
+        border: "1px solid rgba(206, 216, 224, 0.92)",
+        borderRadius: 22,
+        boxShadow: "0 24px 50px rgba(15, 23, 42, 0.08)",
+        padding: "36px 48px 28px",
+        textAlign: "center",
+        backdropFilter: "blur(10px)",
+      }}>
+        <div className="cb-welcome-mark" style={{
+          width: 84,
+          height: 84,
+          margin: "0 auto 20px",
+          borderRadius: 20,
+          background: "linear-gradient(145deg, #2b6b4d 0%, #245c43 100%)",
+          color: "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          boxShadow: "0 14px 28px rgba(36, 92, 67, 0.18)",
+        }}><Clock size={40} strokeWidth={2.2} /></div>
+        <div className="cb-welcome-title" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", color: "#0f172a", marginBottom: 22 }}>ClockBook</div>
+        <div style={{ fontSize: 56, lineHeight: 1.02, fontWeight: 800, letterSpacing: "-0.05em", color: "#071321", marginBottom: 12 }}>Welcome back</div>
+        <div className="cb-welcome-sub" style={{ fontSize: 18, color: "#64748b", maxWidth: 420, margin: "0 auto 34px", lineHeight: 1.45 }}>Sign in to continue to your workspace.</div>
+        <form onSubmit={submit} style={{ maxWidth: 530, margin: "0 auto" }}>
+          <AuthField
+            label="Email"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="Enter your email"
+            autoFocus
+            required
+            autoComplete="email"
+            icon={<Mail size={22} strokeWidth={2} />}
+          />
+          <AuthField
+            label="Password"
+            type={showPassword ? "text" : "password"}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Enter your password"
+            required
+            autoComplete="current-password"
+            icon={<Lock size={22} strokeWidth={2} />}
+            trailing={<button type="button" onClick={() => setShowPassword((v) => !v)} aria-label={showPassword ? "Hide password" : "Show password"} style={{ background: "transparent", border: "none", padding: 0, display: "flex", alignItems: "center", color: "#64748b", cursor: "pointer" }}>{showPassword ? <EyeOff size={22} strokeWidth={2} /> : <Eye size={22} strokeWidth={2} />}</button>}
+          />
+          {error && <div className="cb-error" style={{ marginBottom: 16, textAlign: "left" }}>{error}</div>}
+          <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center", minHeight: 58, borderRadius: 12, fontSize: 17, fontWeight: 800, background: "linear-gradient(135deg, #2b6b4d 0%, #245c43 100%)", boxShadow: "0 12px 22px rgba(36, 92, 67, 0.18)", borderColor: "#245c43", marginTop: 12 }} disabled={busy}>
+            {busy ? "Signing in..." : "Sign in"}
           </button>
         </form>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "26px auto 16px", maxWidth: 530 }}>
+          <div style={{ height: 1, flex: 1, background: "#e7edf2" }} />
+        </div>
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 10, color: "#64748b", fontSize: 16, fontWeight: 500 }}>
+          <ShieldCheck size={19} strokeWidth={2.1} />
+          <span>Secure workspace access</span>
+        </div>
       </div>
-    </div>
+    </AuthCard>
   );
 }
 
