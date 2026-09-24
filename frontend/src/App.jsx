@@ -4849,14 +4849,19 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
                     {items.map((ev, evIdx) => {
                       const pos = eventPosition(ev);
                       const meet = ev.has_meet_link;
+                      const cardHeight = Math.max(22, pos.height - 4);
+                      const compactEvent = cardHeight < 42;
+                      const tinyEvent = cardHeight < 30;
+                      const eventTooltip = `${ev.summary} • ${formatEventTime(ev.start, false)}`;
                       return <div key={ev.id} draggable
+                        title={eventTooltip}
                         onDragStart={(e) => { setDraggingId(ev.id); e.dataTransfer.setData("text/calendar-event-id", ev.id); e.dataTransfer.effectAllowed = "move"; }}
                         onDragEnd={() => setDraggingId(null)}
                         onClick={(e) => { e.stopPropagation(); setEditor({ mode: "edit", event: ev }); }}
-                        style={{ position: "absolute", top: pos.top + 2, left: 4, right: 4, height: Math.max(22, pos.height - 4), zIndex: draggingId === ev.id ? 10 : 3, borderRadius: 8, padding: "5px 8px 8px", overflow: "hidden", cursor: "grab", background: meet ? "rgba(36,92,67,.075)" : ["rgba(93,127,163,.075)", "rgba(92,74,140,.065)", "rgba(181,89,15,.065)"][evIdx % 3], borderLeft: `3px solid ${meet ? "#3B7A57" : "#5D7FA3"}`, boxShadow: "0 1px 3px rgba(20,37,29,.07)", opacity: draggingId === ev.id ? .6 : 1 }}>
-                        <div style={{ fontSize: 11, fontWeight: 750, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.summary}</div>
-                        <div style={{ fontSize: 10, color: "var(--muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 4 }}>{formatEventTime(ev.start, false)}{meet && <><Video size={10} />Meet</>}</div>
-                        <div onPointerDown={(e) => beginResize(ev, e)} title="Drag to resize" style={{ position: "absolute", left: 10, right: 10, bottom: 1, height: 6, cursor: "ns-resize", borderBottom: "2px solid rgba(36,92,67,.35)" }} />
+                        style={{ position: "absolute", top: pos.top + 2, left: 4, right: 4, height: cardHeight, zIndex: draggingId === ev.id ? 10 : 3, borderRadius: 8, padding: compactEvent ? (tinyEvent ? "3px 7px 5px" : "4px 7px 6px") : "5px 8px 8px", overflow: "hidden", cursor: "grab", background: meet ? "rgba(36,92,67,.075)" : ["rgba(93,127,163,.075)", "rgba(92,74,140,.065)", "rgba(181,89,15,.065)"][evIdx % 3], borderLeft: `3px solid ${meet ? "#3B7A57" : "#5D7FA3"}`, boxShadow: "0 1px 3px rgba(20,37,29,.07)", opacity: draggingId === ev.id ? .6 : 1 }}>
+                        <div style={{ fontSize: compactEvent ? 10.5 : 11, lineHeight: compactEvent ? 1.15 : 1.25, fontWeight: 750, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{ev.summary}</div>
+                        {!compactEvent && <div style={{ fontSize: 10, lineHeight: 1.15, color: "var(--muted)", marginTop: 2, display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap", overflow: "hidden" }}>{formatEventTime(ev.start, false)}{meet && <><Video size={10} />Meet</>}</div>}
+                        <div onPointerDown={(e) => beginResize(ev, e)} title="Drag to resize" style={{ position: "absolute", left: 10, right: 10, bottom: 1, height: 5, cursor: "ns-resize", borderBottom: "2px solid rgba(36,92,67,.35)" }} />
                       </div>;
                     })}
                   </div>;
