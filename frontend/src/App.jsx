@@ -5247,6 +5247,9 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const teamClockBookMinutes = successfulTeamRows.reduce((sum, entry) => sum + (entry.data.clockbook_minutes || 0), 0);
   const teamKarbonMinutes = successfulTeamRows.reduce((sum, entry) => sum + (entry.data.karbon_minutes || 0), 0);
   const teamDifferenceMinutes = teamKarbonMinutes - teamClockBookMinutes;
+  const teamLoginToShutdownSeconds = showLoginToShutdown ? successfulTeamRows.reduce((sum, entry) => {
+    return sum + (entry.data.rows || []).reduce((daySum, row) => daySum + (row.first_login_to_shutdown_seconds || 0), 0);
+  }, 0) : 0;
   const teamReviewDays = successfulTeamRows.reduce((sum, entry) => {
     const tolerance = entry.data.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
     return sum + (entry.data.rows || []).filter((row) => !isMatched(row.difference_minutes, tolerance)).length;
@@ -5419,6 +5422,11 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
             <div className="cb-mono" style={{ ...styles.summaryValue, color: teamReviewDays === 0 ? "#166534" : "#92400e" }}>{signed(teamDifferenceMinutes)}</div>
             <div style={{ fontSize: 11.5, color: teamReviewDays === 0 ? "var(--ink-faint)" : "#92400e", marginTop: 5 }}>{teamReviewDays === 0 ? "All compared days matched" : `${teamReviewDays} day${teamReviewDays === 1 ? "" : "s"} to review`}</div>
           </div>
+          {showLoginToShutdown && <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>First login to shutdown</div>
+            <div className="cb-mono" style={styles.summaryValue}>{teamLoginToShutdownSeconds > 0 ? formatHM(teamLoginToShutdownSeconds) : "—"}</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 5 }}>Sum of daily login-to-shutdown spans</div>
+          </div>}
         </div>
 
         <div className="cb-group-head" style={{ marginBottom: 10 }}>
@@ -5428,11 +5436,14 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
           </div>
         </div>
 
-        <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th><th style={{ width: 72 }}></th></tr></thead><tbody>
+        <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 72 }}></th></tr></thead><tbody>
           {teamData.map((entry) => {
             const memberData = entry.data;
             const tolerance = memberData?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
             const memberOk = memberData ? isMatched(memberData.difference_minutes, tolerance) : false;
+            const memberLoginToShutdownSeconds = showLoginToShutdown && memberData
+              ? (memberData.rows || []).reduce((sum, row) => sum + (row.first_login_to_shutdown_seconds || 0), 0)
+              : 0;
             const expanded = expandedMembers.has(entry.member.id);
             return <Fragment key={entry.member.id}>
               <tr style={memberData && !memberOk ? styles.reviewRow : undefined}>
@@ -5440,10 +5451,11 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 <td className="num cb-mono">{memberData ? formatHM(memberData.clockbook_minutes * 60) : "—"}</td>
                 <td className="num cb-mono">{memberData ? formatHM(memberData.karbon_minutes * 60) : "—"}</td>
                 <td className="num cb-mono" style={memberData ? (memberOk ? styles.differenceGood : styles.differenceReview) : undefined}>{memberData ? signed(memberData.difference_minutes) : "—"}</td>
+                {showLoginToShutdown && <td className="num cb-mono">{memberData && memberLoginToShutdownSeconds > 0 ? formatHM(memberLoginToShutdownSeconds) : "—"}</td>}
                 <td>{memberData ? <span style={styles.statusPill(memberOk)}><span style={styles.statusDot(memberOk)} />{memberOk ? "Matched" : "Review"}</span> : <span className="cb-hint">Unavailable</span>}</td>
                 <td className="num">{memberData && <button type="button" className="cb-icon-btn" title={expanded ? "Hide daily detail" : "Show daily detail"} onClick={() => toggleMember(entry.member.id)}>{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>}</td>
               </tr>
-              {expanded && memberData && <tr><td colSpan={6} style={{ padding: 0, background: "var(--paper-soft)" }}>
+              {expanded && memberData && <tr><td colSpan={showLoginToShutdown ? 7 : 6} style={{ padding: 0, background: "var(--paper-soft)" }}>
                 <div style={{ padding: "10px 14px 14px" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{entry.member.name} · Daily comparison</div>
                   <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
