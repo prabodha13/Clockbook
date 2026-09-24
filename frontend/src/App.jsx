@@ -6702,6 +6702,8 @@ function ManualOverridesReportView() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [entryUserFilter, setEntryUserFilter] = useState("all");
+  const [entryDayFilter, setEntryDayFilter] = useState("all");
 
   const activeRange = useMemo(() => {
     const now = new Date();
@@ -6839,6 +6841,23 @@ function ManualOverridesReportView() {
     return buckets;
   }, [rows, activeRange, trendUser, trendGranularity]);
 
+  const entryFilterUsers = useMemo(() => userRows.map((u) => u.name).sort((a, b) => a.localeCompare(b)), [userRows]);
+  const entryFilterDays = useMemo(() => Array.from(new Set((rows || []).map((row) => row.date).filter(Boolean))).sort((a, b) => b.localeCompare(a)), [rows]);
+  const filteredEntryRows = useMemo(() => (rows || []).filter((row) => {
+    const name = row.tracked_by || "Unknown";
+    if (entryUserFilter !== "all" && name !== entryUserFilter) return false;
+    if (entryDayFilter !== "all" && row.date !== entryDayFilter) return false;
+    return true;
+  }), [rows, entryUserFilter, entryDayFilter]);
+
+  useEffect(() => {
+    if (entryUserFilter !== "all" && !entryFilterUsers.includes(entryUserFilter)) setEntryUserFilter("all");
+  }, [entryFilterUsers, entryUserFilter]);
+
+  useEffect(() => {
+    if (entryDayFilter !== "all" && !entryFilterDays.includes(entryDayFilter)) setEntryDayFilter("all");
+  }, [entryFilterDays, entryDayFilter]);
+
   const topUsers = userRows.slice(0, 5);
   const maxUserSeconds = Math.max(1, ...topUsers.map((u) => u.absolute));
   const trendMax = Math.max(1, ...trend.flatMap((d) => [d.added, d.reduced]));
@@ -6958,17 +6977,36 @@ function ManualOverridesReportView() {
               </table>
             </div>
 
-            <div className="cb-group-head" style={{ justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Override entries</div><div className="cb-group-count">{rows.length}</div></div>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>An override is an existing submitted task where the final duration differs from the duration ClockBook tracked.</div>
+            <div className="cb-group-head" style={{ alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginRight: "auto" }}><div className="cb-group-title">Override entries</div><div className="cb-group-count">{filteredEntryRows.length}{filteredEntryRows.length !== rows.length ? ` / ${rows.length}` : ""}</div></div>
+              <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <div>
+                  <div className="cb-label">Day</div>
+                  <select className="cb-select" value={entryDayFilter} onChange={(e) => setEntryDayFilter(e.target.value)} style={{ width: 170 }}>
+                    <option value="all">All days</option>
+                    {entryFilterDays.map((day) => <option key={day} value={day}>{formatDate(`${day}T12:00:00`)}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <div className="cb-label">User</div>
+                  <select className="cb-select" value={entryUserFilter} onChange={(e) => setEntryUserFilter(e.target.value)} style={{ width: 220 }}>
+                    <option value="all">All users</option>
+                    {entryFilterUsers.map((name) => <option key={name} value={name}>{name}</option>)}
+                  </select>
+                </div>
+              </div>
+            </div>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>An override is an existing submitted task where the final duration differs from the duration ClockBook tracked. Note shows the note already submitted with that entry.</div>
             <div className="cb-table-wrap" style={{ overflowX: "hidden" }}>
               <table className="cb-table" style={{ tableLayout: "fixed", width: "100%", minWidth: 0 }}>
-                <colgroup><col style={{ width: "10%" }} /><col style={{ width: "13%" }} /><col style={{ width: "16%" }} /><col style={{ width: "21%" }} /><col style={{ width: "11%" }} /><col style={{ width: "11%" }} /><col style={{ width: "9%" }} /><col style={{ width: "9%" }} /></colgroup>
-                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th className="num">Tracked</th><th className="num">Final</th><th className="num">Difference</th><th>Submitted</th></tr></thead>
-                <tbody>{rows.map((row) => {
+                <colgroup><col style={{ width: "9%" }} /><col style={{ width: "12%" }} /><col style={{ width: "13%" }} /><col style={{ width: "16%" }} /><col style={{ width: "20%" }} /><col style={{ width: "8%" }} /><col style={{ width: "8%" }} /><col style={{ width: "7%" }} /><col style={{ width: "7%" }} /></colgroup>
+                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th>Note</th><th className="num">Tracked</th><th className="num">Final</th><th className="num">Difference</th><th>Submitted</th></tr></thead>
+                <tbody>{filteredEntryRows.map((row) => {
                   const delta = Number(row.seconds || 0) - Number(row.tracked_seconds || 0);
-                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td title={row.note || ""}>{row.task || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined }}>{signedDuration(delta)}</td><td>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
+                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td>{row.task || "—"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{row.note || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined }}>{signedDuration(delta)}</td><td>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
                 })}</tbody>
               </table>
+              {filteredEntryRows.length === 0 && <div className="cb-empty">No override entries match these filters.</div>}
             </div>
           </>}
         </>
