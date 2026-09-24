@@ -23,6 +23,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import inspect, text, or_, func
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm.exc import StaleDataError
 
 from database import get_db, engine, Base, SessionLocal
 import models
@@ -39,6 +40,7 @@ RESEND_FROM_EMAIL = (os.environ.get("RESEND_FROM_EMAIL") or "").strip()
 RESEND_REPLY_TO = (os.environ.get("RESEND_REPLY_TO") or "").strip()
 CLOCKBOOK_PUBLIC_URL = (os.environ.get("CLOCKBOOK_PUBLIC_URL") or "").strip().rstrip("/")
 RESEND_EMAIL_ENDPOINT = "https://api.resend.com/emails"
+MAX_REQUEST_BYTES = int(os.environ.get("CLOCKBOOK_MAX_REQUEST_BYTES", str(2 * 1024 * 1024)))
 
 logger = logging.getLogger("clockbook")
 if not logger.handlers:
@@ -288,10 +290,17 @@ def run_multitenant_migration():
         # tenants/users/tenant_settings are created by metadata before this runs.
         existing_tenant = conn.execute(text("SELECT id FROM tenants WHERE id = :id"), {"id": AROUND_TENANT_ID}).first()
         if not existing_tenant:
-            conn.execute(text(
-                "INSERT INTO tenants (id, name, slug, status, created_at) "
-                "VALUES (:id, :name, :slug, 'active', :created_at)"
-            ), {"id": AROUND_TENANT_ID, "name": AROUND_TENANT_NAME, "slug": AROUND_TENANT_SLUG, "created_at": datetime.utcnow()})
+            tenant_columns = {c["name"] for c in inspect(conn).get_columns("tenants")}
+            if "version" in tenant_columns:
+                conn.execute(text(
+                    "INSERT INTO tenants (id, name, slug, status, created_at, version) "
+                    "VALUES (:id, :name, :slug, 'active', :created_at, 1)"
+                ), {"id": AROUND_TENANT_ID, "name": AROUND_TENANT_NAME, "slug": AROUND_TENANT_SLUG, "created_at": datetime.utcnow()})
+            else:
+                conn.execute(text(
+                    "INSERT INTO tenants (id, name, slug, status, created_at) "
+                    "VALUES (:id, :name, :slug, 'active', :created_at)"
+                ), {"id": AROUND_TENANT_ID, "name": AROUND_TENANT_NAME, "slug": AROUND_TENANT_SLUG, "created_at": datetime.utcnow()})
 
         for table in tenant_tables:
             if table not in tables:
@@ -327,10 +336,17 @@ def run_multitenant_migration():
                         conn.execute(text("UPDATE users SET password_hash = :password_hash WHERE id = :id"), {"password_hash": password_hash, "id": user_id})
                 else:
                     user_id = "usr_" + hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
-                    conn.execute(text(
-                        "INSERT INTO users (id, email, password_hash, default_tenant_id, status, created_at) "
-                        "VALUES (:id, :email, :password_hash, :tenant_id, 'active', :created_at)"
-                    ), {"id": user_id, "email": normalized, "password_hash": password_hash, "tenant_id": AROUND_TENANT_ID, "created_at": datetime.utcnow()})
+                    user_columns = {c["name"] for c in inspect(conn).get_columns("users")}
+                    if "version" in user_columns:
+                        conn.execute(text(
+                            "INSERT INTO users (id, email, password_hash, default_tenant_id, status, created_at, version) "
+                            "VALUES (:id, :email, :password_hash, :tenant_id, 'active', :created_at, 1)"
+                        ), {"id": user_id, "email": normalized, "password_hash": password_hash, "tenant_id": AROUND_TENANT_ID, "created_at": datetime.utcnow()})
+                    else:
+                        conn.execute(text(
+                            "INSERT INTO users (id, email, password_hash, default_tenant_id, status, created_at) "
+                            "VALUES (:id, :email, :password_hash, :tenant_id, 'active', :created_at)"
+                        ), {"id": user_id, "email": normalized, "password_hash": password_hash, "tenant_id": AROUND_TENANT_ID, "created_at": datetime.utcnow()})
                 conn.execute(text("UPDATE members SET user_id = :user_id, email = :email WHERE id = :member_id"), {"user_id": user_id, "email": normalized, "member_id": member_id})
 
             conn.execute(text(
@@ -347,9 +363,15 @@ def run_multitenant_migration():
                     "SELECT id FROM tenant_settings WHERE tenant_id = :tenant_id AND key = :key"
                 ), {"tenant_id": AROUND_TENANT_ID, "key": key}).first()
                 if not exists:
-                    conn.execute(text(
-                        "INSERT INTO tenant_settings (id, tenant_id, key, value) VALUES (:id, :tenant_id, :key, :value)"
-                    ), {"id": models.gen_id("tset"), "tenant_id": AROUND_TENANT_ID, "key": key, "value": value or ""})
+                    tenant_setting_columns = {c["name"] for c in inspect(conn).get_columns("tenant_settings")}
+                    if "version" in tenant_setting_columns:
+                        conn.execute(text(
+                            "INSERT INTO tenant_settings (id, tenant_id, key, value, version) VALUES (:id, :tenant_id, :key, :value, 1)"
+                        ), {"id": models.gen_id("tset"), "tenant_id": AROUND_TENANT_ID, "key": key, "value": value or ""})
+                    else:
+                        conn.execute(text(
+                            "INSERT INTO tenant_settings (id, tenant_id, key, value) VALUES (:id, :tenant_id, :key, :value)"
+                        ), {"id": models.gen_id("tset"), "tenant_id": AROUND_TENANT_ID, "key": key, "value": value or ""})
 
         if engine.dialect.name == "postgresql":
             # Remove legacy global uniqueness so two tenants can use the same business names/codes.
@@ -395,6 +417,28 @@ def run_multitenant_migration():
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_tenant_member ON sessions (tenant_id, member_id)"))
 
     _log_event("multitenant_migration_ready", default_tenant=AROUND_TENANT_ID)
+
+
+def run_hardening_migrations():
+    """Backward-safe columns/indexes for audit logging and optimistic concurrency."""
+    versioned_tables = [
+        "tenants", "users", "tenant_settings", "pods", "members", "tenant_invitations",
+        "karbon_reconciliation_notes", "clients", "bank_accounts", "roles",
+        "task_type_options", "tracked_metrics", "templates", "template_tasks",
+    ]
+    with engine.begin() as conn:
+        inspector = inspect(conn)
+        tables = set(inspector.get_table_names())
+        for table in versioned_tables:
+            if table not in tables:
+                continue
+            cols = {c["name"] for c in inspect(conn).get_columns(table)}
+            if "version" not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN version INTEGER NOT NULL DEFAULT 1"))
+            conn.execute(text(f"UPDATE {table} SET version = 1 WHERE version IS NULL"))
+        if "audit_events" in tables:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audit_events_tenant_created ON audit_events (tenant_id, created_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_audit_events_tenant_entity ON audit_events (tenant_id, entity_type, entity_id)"))
 
 
 def run_startup_migrations():
@@ -688,6 +732,7 @@ async def lifespan(app: FastAPI):
             migration_lock_conn = engine.connect()
             migration_lock_conn.execute(text("SELECT pg_advisory_lock(:key)"), {"key": STARTUP_MIGRATION_LOCK_KEY})
         run_multitenant_migration()
+        run_hardening_migrations()
         run_startup_migrations()
         _ensure_operational_indexes()
     finally:
@@ -763,6 +808,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Clockbook", lifespan=lifespan)
 
+
+@app.exception_handler(StaleDataError)
+async def stale_write_handler(request: Request, exc: StaleDataError):
+    return JSONResponse(
+        status_code=409,
+        content={"detail": "This record was changed by someone else. Refresh and try again."},
+    )
+
 # Lets the Vite dev server on localhost:5173 call this API during local development.
 # In production the frontend is served by this same app, so this is not needed there.
 app.add_middleware(
@@ -777,6 +830,19 @@ app.add_middleware(
 async def operational_request_middleware(request: Request, call_next):
     request_id = request.headers.get("x-request-id") or secrets.token_hex(16)
     started = time.perf_counter()
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_REQUEST_BYTES:
+                return JSONResponse(status_code=413, content={"detail": "Request body is too large"}, headers={"X-Request-ID": request_id})
+        except ValueError:
+            return JSONResponse(status_code=400, content={"detail": "Invalid Content-Length"}, headers={"X-Request-ID": request_id})
+    # Also measure the actual body so chunked/missing Content-Length requests cannot bypass
+    # the limit. Starlette caches request.body() for the downstream FastAPI parser.
+    if request.method in {"POST", "PUT", "PATCH"}:
+        body = await request.body()
+        if len(body) > MAX_REQUEST_BYTES:
+            return JSONResponse(status_code=413, content={"detail": "Request body is too large"}, headers={"X-Request-ID": request_id})
     try:
         response = await call_next(request)
     except Exception as exc:
@@ -840,12 +906,21 @@ def get_current_member(authorization: str = Header(None), db: Session = Depends(
         raise HTTPException(401, "Account no longer exists in this workspace")
     if session.user_id and member.user_id and session.user_id != member.user_id:
         raise HTTPException(401, "Session membership is no longer valid")
+    db.info["actor_member_id"] = member.id
     return member
 
 
 def require_admin(member):
     if member.role not in ("admin", "super_admin"):
         raise HTTPException(403, "This action requires an admin")
+
+
+def _require_expected_version(record, expected_version):
+    if expected_version is None:
+        raise HTTPException(409, "This screen is out of date. Refresh and try again.")
+    current = int(getattr(record, "version", 1) or 1)
+    if int(expected_version) != current:
+        raise HTTPException(409, "This record was changed by someone else. Refresh and try again.")
 
 
 def is_admin_or_above(role):
@@ -1272,6 +1347,39 @@ def platform_create_tenant(payload: schemas.TenantCreate, current_member: models
     db.commit()
     db.refresh(tenant)
     return tenant
+
+
+@app.post("/api/admin/sessions/revoke-workspace")
+def revoke_workspace_sessions(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Emergency tenant-scoped session revocation.
+
+    This deliberately revokes the caller too. The response may arrive before the browser
+    notices, and the next authenticated request must require a fresh login.
+    """
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can revoke all workspace sessions")
+    count = db.query(models.Session).delete(synchronize_session=False)
+    db.commit()
+    _log_event("workspace_sessions_revoked", tenant_id=current_member.tenant_id, count=count)
+    return {"revoked_sessions": int(count or 0), "scope": "workspace"}
+
+
+@app.post("/api/platform/sessions/revoke-all")
+def revoke_all_platform_sessions(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Break-glass global revocation for a verified platform administrator."""
+    _require_platform_admin(current_member, db)
+    previous_skip = db.info.get("skip_tenant_scope")
+    db.info["skip_tenant_scope"] = True
+    try:
+        count = db.query(models.Session).delete(synchronize_session=False)
+        db.commit()
+    finally:
+        if previous_skip is None:
+            db.info.pop("skip_tenant_scope", None)
+        else:
+            db.info["skip_tenant_scope"] = previous_skip
+    _log_event("platform_sessions_revoked", count=count)
+    return {"revoked_sessions": int(count or 0), "scope": "platform"}
 
 
 @app.get("/api/time")
@@ -2402,6 +2510,7 @@ def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, curren
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
+    _require_expected_version(member, payload.expected_version)
     if current_member.role != "super_admin" and not _member_in_admin_scope(current_member, member):
         raise HTTPException(403, "You cannot manage that person's role")
     # Super-admin authority is never self-grantable. A regular admin may continue managing
@@ -2428,6 +2537,7 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
+    _require_expected_version(member, payload.expected_version)
     allowed_ids = _insights_allowed_member_ids(current_member, db)
     if member_id not in allowed_ids:
         raise HTTPException(403, "You cannot change capacity for that person")
@@ -2452,6 +2562,7 @@ def update_member_insights_permission(member_id: str, payload: schemas.MemberIns
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
+    _require_expected_version(member, payload.expected_version)
     member.can_view_leave_capacity_insights = bool(payload.enabled)
     db.commit()
     db.refresh(member)
@@ -2475,6 +2586,7 @@ def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
+    _require_expected_version(member, payload.expected_version)
     allowed_ids = _insights_allowed_member_ids(current_member, db)
     if member_id not in allowed_ids:
         raise HTTPException(403, "You cannot change the time zone for that person")
@@ -3793,6 +3905,7 @@ def update_client(client_id: str, payload: schemas.ClientCreate, current_member:
     client = db.get(models.Client, client_id)
     if not client:
         raise HTTPException(404, "Client not found")
+    _require_expected_version(client, payload.expected_version)
     new_name = payload.name.strip()
     if not new_name:
         raise HTTPException(400, "Enter a client name")
@@ -3968,6 +4081,7 @@ def update_member_pod(member_id: str, payload: schemas.MemberPodUpdate, current_
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
+    _require_expected_version(member, payload.expected_version)
     if payload.pod_id:
         if not db.get(models.Pod, payload.pod_id):
             raise HTTPException(404, "Pod not found")
@@ -4009,6 +4123,7 @@ def update_task_type_billing(task_type_id: str, payload: schemas.TaskTypeBilling
         raise HTTPException(404, "Task type not found")
     if _is_builtin_task_type_name(task_type.name):
         raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is built in and cannot be changed")
+    _require_expected_version(task_type, payload.expected_version)
     task_type.is_billable = bool(payload.is_billable)
     db.commit()
     db.refresh(task_type)
@@ -4092,6 +4207,7 @@ def update_template(template_id: str, payload: schemas.TemplateCreate, current_m
     tpl = db.get(models.Template, template_id)
     if not tpl:
         raise HTTPException(404, "Template not found")
+    _require_expected_version(tpl, payload.expected_version)
     field = payload.field.strip()
     category = (payload.category or "").strip() or None
     name = payload.name.strip()
@@ -4161,6 +4277,7 @@ def update_template_task(template_id: str, task_id: str, payload: schemas.Templa
     task = db.get(models.TemplateTask, task_id)
     if not task or task.template_id != template_id:
         raise HTTPException(404, "Task not found")
+    _require_expected_version(task, payload.expected_version)
     period_types, tracks_label = _validate_template_task_config(payload, db)
     task.name = payload.name.strip()
     task.role = payload.role.strip()
@@ -4808,6 +4925,76 @@ def scan_corrupted_tasks(current_member: models.Member = Depends(get_current_mem
     return {"affected_tasks": results}
 
 
+@app.get("/api/admin/diagnostics/invariants")
+def invariant_diagnostics(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Detect impossible/high-risk states without silently repairing them.
+
+    The endpoint is tenant-scoped by the ORM guard and restricted to Super Admins because
+    it exposes operational record identifiers. Repair remains an explicit separate action.
+    """
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a Super Admin can run invariant diagnostics")
+
+    findings = []
+    running_by_owner = {}
+    calendar_map = {}
+    tasks = db.query(models.TaskInstance).all()
+    for task in tasks:
+        if task.status == "running" and task.owner_id:
+            running_by_owner.setdefault(task.owner_id, []).append(task.id)
+        if task.source_calendar_event_id:
+            calendar_map.setdefault(task.source_calendar_event_id, []).append(task.id)
+
+        segments = list(task.segments or [])
+        open_indexes = [i for i, seg in enumerate(segments) if isinstance(seg, dict) and not seg.get("end")]
+        if len(open_indexes) > 1 or (open_indexes and open_indexes[-1] != len(segments) - 1):
+            findings.append({"type": "invalid_open_segments", "task_id": task.id, "indexes": open_indexes})
+        if task.status == "submitted" and open_indexes:
+            findings.append({"type": "submitted_task_has_open_segment", "task_id": task.id})
+
+        last_end = None
+        for i, seg in enumerate(segments):
+            if not isinstance(seg, dict) or not seg.get("start"):
+                findings.append({"type": "invalid_segment_shape", "task_id": task.id, "segment_index": i})
+                continue
+            try:
+                start = parse_utc_naive(seg["start"])
+                end = parse_utc_naive(seg["end"]) if seg.get("end") else None
+            except Exception:
+                findings.append({"type": "invalid_segment_timestamp", "task_id": task.id, "segment_index": i})
+                continue
+            if end is not None and end < start:
+                findings.append({"type": "negative_segment", "task_id": task.id, "segment_index": i})
+            if last_end is not None and start < last_end:
+                findings.append({"type": "overlapping_segments", "task_id": task.id, "segment_index": i})
+            if end is not None:
+                last_end = end
+
+        if task.owner_id and db.get(models.Member, task.owner_id) is None:
+            findings.append({"type": "missing_owner", "task_id": task.id, "owner_id": task.owner_id})
+        if task.client_id and db.get(models.Client, task.client_id) is None:
+            findings.append({"type": "missing_client", "task_id": task.id, "client_id": task.client_id})
+
+    for owner_id, task_ids in running_by_owner.items():
+        if len(task_ids) > 1:
+            findings.append({"type": "duplicate_running_timers", "owner_id": owner_id, "task_ids": task_ids})
+    for event_id, task_ids in calendar_map.items():
+        if len(task_ids) > 1:
+            findings.append({"type": "duplicate_calendar_mapping", "calendar_event_id": event_id, "task_ids": task_ids})
+    for member in db.query(models.Member).all():
+        if float(member.weekly_capacity_hours or 0) < 0:
+            findings.append({"type": "negative_capacity", "member_id": member.id})
+
+    return {
+        "ok": not findings,
+        "checked_tasks": len(tasks),
+        "checked_members": db.query(models.Member).count(),
+        "finding_count": len(findings),
+        "findings": findings[:1000],
+        "truncated": len(findings) > 1000,
+    }
+
+
 @app.post("/api/tasks/{task_id}/repair-segments")
 def repair_task_segments(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     # Closes every orphaned segment, using the next segment's own start time, since that is
@@ -5154,6 +5341,32 @@ def _set_setting_value(db: Session, key: str, value: str):
         setting.value = value
 
 
+def _integration_revision(db: Session, integration: str) -> int:
+    raw = _setting_value(db, f"{integration}_config_revision").strip()
+    try:
+        return max(int(raw or 0), 0)
+    except ValueError:
+        return 0
+
+
+def _require_integration_revision(db: Session, integration: str, expected_version, connected: bool):
+    current = _integration_revision(db, integration)
+    # New, never-configured integrations can be connected from a fresh screen without a
+    # revision token. Replacing/disconnecting existing config must prove which version the
+    # admin actually loaded so two admins cannot silently overwrite each other.
+    if connected and expected_version is None:
+        raise HTTPException(409, "This integration screen is out of date. Refresh and try again.")
+    if expected_version is not None and int(expected_version) != current:
+        raise HTTPException(409, "This integration was changed by someone else. Refresh and try again.")
+    return current
+
+
+def _bump_integration_revision(db: Session, integration: str, current: int) -> int:
+    next_value = int(current) + 1
+    _set_setting_value(db, f"{integration}_config_revision", str(next_value))
+    return next_value
+
+
 def _integration_master_key() -> bytes:
     raw = (os.environ.get("CLOCKBOOK_ENCRYPTION_KEY") or "").strip()
     if not raw:
@@ -5284,15 +5497,15 @@ def get_karbon_integration(current_member: models.Member = Depends(get_current_m
         try:
             token = _decrypt_secret(token_enc)
             access_key = _decrypt_secret(access_enc)
-            return {"connected": True, "source": "settings", "application_id_hint": token[-4:] if token else "", "access_key_hint": access_key[-4:] if access_key else ""}
+            return {"connected": True, "source": "settings", "application_id_hint": token[-4:] if token else "", "access_key_hint": access_key[-4:] if access_key else "", "version": _integration_revision(db, "karbon")}
         except HTTPException as exc:
-            return {"connected": False, "source": "settings", "error": exc.detail}
+            return {"connected": False, "source": "settings", "error": exc.detail, "version": _integration_revision(db, "karbon")}
     if mode != "disabled" and _current_tenant_id(db) == AROUND_TENANT_ID:
         token = (os.environ.get("KARBON_TOKEN") or "").strip()
         access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
         if token and access_key:
-            return {"connected": True, "source": "environment", "application_id_hint": token[-4:], "access_key_hint": access_key[-4:]}
-    return {"connected": False, "source": "settings"}
+            return {"connected": True, "source": "environment", "application_id_hint": token[-4:], "access_key_hint": access_key[-4:], "version": _integration_revision(db, "karbon")}
+    return {"connected": False, "source": "settings", "version": _integration_revision(db, "karbon")}
 
 
 @app.put("/api/integrations/karbon")
@@ -5301,6 +5514,8 @@ def save_karbon_integration(payload: schemas.KarbonIntegrationSave, current_memb
         raise HTTPException(403, "Only a Super Admin can manage integrations")
     application_id = payload.application_id.strip()
     access_key = payload.access_key.strip()
+    connected_before = _karbon_connected_for_workspace(db)
+    revision = _require_integration_revision(db, "karbon", payload.expected_version, connected_before)
     if not application_id or not access_key:
         raise HTTPException(400, "Application ID and Access Key are required")
     headers = {"Authorization": f"Bearer {application_id}", "AccessKey": access_key}
@@ -5308,8 +5523,9 @@ def save_karbon_integration(payload: schemas.KarbonIntegrationSave, current_memb
     _set_setting_value(db, "karbon_application_id_encrypted", _encrypt_secret(application_id))
     _set_setting_value(db, "karbon_access_key_encrypted", _encrypt_secret(access_key))
     _set_setting_value(db, "karbon_config_mode", "settings")
+    new_revision = _bump_integration_revision(db, "karbon", revision)
     db.commit()
-    return {"connected": True, "source": "settings", "application_id_hint": application_id[-4:], "access_key_hint": access_key[-4:]}
+    return {"connected": True, "source": "settings", "application_id_hint": application_id[-4:], "access_key_hint": access_key[-4:], "version": new_revision}
 
 
 @app.post("/api/integrations/karbon/test")
@@ -5321,14 +5537,17 @@ def test_karbon_integration(current_member: models.Member = Depends(get_current_
 
 
 @app.delete("/api/integrations/karbon")
-def disconnect_karbon_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+def disconnect_karbon_integration(expected_version: int | None = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
         raise HTTPException(403, "Only a Super Admin can manage integrations")
+    connected_before = _karbon_connected_for_workspace(db)
+    revision = _require_integration_revision(db, "karbon", expected_version, connected_before)
     _set_setting_value(db, "karbon_application_id_encrypted", "")
     _set_setting_value(db, "karbon_access_key_encrypted", "")
     _set_setting_value(db, "karbon_config_mode", "disabled")
+    new_revision = _bump_integration_revision(db, "karbon", revision)
     db.commit()
-    return {"connected": False, "source": "settings"}
+    return {"connected": False, "source": "settings", "version": new_revision}
 
 
 
@@ -5343,10 +5562,10 @@ def get_calamari_integration(current_member: models.Member = Depends(get_current
     if mode != "disabled" and tenant and key_enc:
         try:
             key = _decrypt_secret(key_enc)
-            return {"connected": True, "tenant": tenant, "api_key_hint": key[-4:] if key else ""}
+            return {"connected": True, "tenant": tenant, "api_key_hint": key[-4:] if key else "", "version": _integration_revision(db, "calamari")}
         except HTTPException as exc:
-            return {"connected": False, "tenant": tenant, "error": exc.detail}
-    return {"connected": False, "tenant": tenant}
+            return {"connected": False, "tenant": tenant, "error": exc.detail, "version": _integration_revision(db, "calamari")}
+    return {"connected": False, "tenant": tenant, "version": _integration_revision(db, "calamari")}
 
 
 def _test_calamari_credentials(tenant: str, api_key: str):
@@ -5363,14 +5582,17 @@ def save_calamari_integration(payload: schemas.CalamariIntegrationSave, current_
         raise HTTPException(403, "Only a Super Admin can manage integrations")
     tenant = _normalise_calamari_tenant(payload.tenant)
     api_key = payload.api_key.strip()
+    connected_before = _calamari_connected_for_workspace(db)
+    revision = _require_integration_revision(db, "calamari", payload.expected_version, connected_before)
     if not api_key:
         raise HTTPException(400, "Calamari API key is required")
     _test_calamari_credentials(tenant, api_key)
     _set_setting_value(db, "calamari_tenant", tenant)
     _set_setting_value(db, "calamari_api_key_encrypted", _encrypt_secret(api_key))
     _set_setting_value(db, "calamari_config_mode", "settings")
+    new_revision = _bump_integration_revision(db, "calamari", revision)
     db.commit()
-    return {"connected": True, "tenant": tenant, "api_key_hint": api_key[-4:]}
+    return {"connected": True, "tenant": tenant, "api_key_hint": api_key[-4:], "version": new_revision}
 
 
 @app.post("/api/integrations/calamari/test")
@@ -5398,13 +5620,16 @@ def test_calamari_integration(current_member: models.Member = Depends(get_curren
 
 
 @app.delete("/api/integrations/calamari")
-def disconnect_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+def disconnect_calamari_integration(expected_version: int | None = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
         raise HTTPException(403, "Only a Super Admin can manage integrations")
+    connected_before = _calamari_connected_for_workspace(db)
+    revision = _require_integration_revision(db, "calamari", expected_version, connected_before)
     _set_setting_value(db, "calamari_api_key_encrypted", "")
     _set_setting_value(db, "calamari_config_mode", "disabled")
+    new_revision = _bump_integration_revision(db, "calamari", revision)
     db.commit()
-    return {"connected": False, "tenant": _setting_value(db, "calamari_tenant").strip()}
+    return {"connected": False, "tenant": _setting_value(db, "calamari_tenant").strip(), "version": new_revision}
 
 @app.get("/api/karbon/reconciliation")
 def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
@@ -5646,6 +5871,22 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
         db.add(existing)
     db.commit()
     return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": note_text}
+
+
+@app.get("/api/audit/changes", response_model=list[schemas.AuditEventOut])
+def audit_changes(
+    limit: int = 200,
+    entity_type: str | None = None,
+    current_member: models.Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can view the change audit")
+    limit = max(1, min(int(limit), 500))
+    query = db.query(models.AuditEvent)
+    if entity_type:
+        query = query.filter(models.AuditEvent.entity_type == entity_type[:80])
+    return query.order_by(models.AuditEvent.created_at.desc()).limit(limit).all()
 
 
 @app.post("/api/audit/presence-heartbeat", status_code=204)

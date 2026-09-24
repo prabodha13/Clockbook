@@ -3,6 +3,7 @@ import secrets
 from datetime import datetime, date
 from sqlalchemy import Column, String, Boolean, DateTime, Date, ForeignKey, Integer, Float, JSON, Text, UniqueConstraint, Index
 from sqlalchemy.orm import relationship
+from sqlalchemy.ext.declarative import declared_attr
 
 from database import Base
 
@@ -15,7 +16,20 @@ class TenantScopedMixin:
     tenant_id = Column(String, ForeignKey("tenants.id"), nullable=False, index=True)
 
 
-class Tenant(Base):
+class VersionedMixin:
+    """Optimistic-locking guard for mutable business records.
+
+    SQLAlchemy includes the current version in UPDATE/DELETE statements and raises
+    StaleDataError if another request changed the same row after it was loaded.
+    """
+    version = Column(Integer, nullable=False, default=1)
+
+    @declared_attr
+    def __mapper_args__(cls):
+        return {"version_id_col": cls.version}
+
+
+class Tenant(VersionedMixin, Base):
     __tablename__ = "tenants"
     id = Column(String, primary_key=True, default=lambda: gen_id("tenant"))
     name = Column(String, nullable=False)
@@ -24,7 +38,7 @@ class Tenant(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class User(Base):
+class User(VersionedMixin, Base):
     __tablename__ = "users"
     id = Column(String, primary_key=True, default=lambda: gen_id("usr"))
     email = Column(String, nullable=False, unique=True, index=True)
@@ -41,7 +55,7 @@ class SystemSetting(Base):
     value = Column(String, nullable=False, default="")
 
 
-class TenantSetting(TenantScopedMixin, Base):
+class TenantSetting(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "tenant_settings"
     __table_args__ = (UniqueConstraint("tenant_id", "key", name="uq_tenant_settings_tenant_key"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("tset"))
@@ -57,14 +71,14 @@ class RateLimitBucket(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class Pod(TenantScopedMixin, Base):
+class Pod(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "pods"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_pods_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("pod"))
     name = Column(String, nullable=False)
 
 
-class Member(TenantScopedMixin, Base):
+class Member(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "members"
     __table_args__ = (UniqueConstraint("tenant_id", "user_id", name="uq_members_tenant_user"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("mem"))
@@ -96,7 +110,7 @@ class Member(TenantScopedMixin, Base):
         return bool(self.slack_user_id)
 
 
-class TenantInvitation(TenantScopedMixin, Base):
+class TenantInvitation(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "tenant_invitations"
     __table_args__ = (
         Index("ix_tenant_invitations_tenant_email", "tenant_id", "email"),
@@ -122,6 +136,17 @@ class TenantInvitation(TenantScopedMixin, Base):
         if self.expires_at and self.expires_at < datetime.utcnow():
             return "expired"
         return "pending"
+
+
+class AuditEvent(TenantScopedMixin, Base):
+    __tablename__ = "audit_events"
+    id = Column(String, primary_key=True, default=lambda: gen_id("audit"))
+    actor_member_id = Column(String, ForeignKey("members.id"), nullable=True, index=True)
+    action = Column(String, nullable=False)
+    entity_type = Column(String, nullable=False, index=True)
+    entity_id = Column(String, nullable=True, index=True)
+    changes = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
 
 
 class Session(TenantScopedMixin, Base):
@@ -160,7 +185,7 @@ class ClockStartEvent(TenantScopedMixin, Base):
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
-class KarbonReconciliationNote(TenantScopedMixin, Base):
+class KarbonReconciliationNote(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "karbon_reconciliation_notes"
     id = Column(String, primary_key=True, default=lambda: gen_id("krn"))
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
@@ -187,7 +212,7 @@ class DismissedSuggestion(TenantScopedMixin, Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class Client(TenantScopedMixin, Base):
+class Client(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "clients"
     __table_args__ = (
         UniqueConstraint("tenant_id", "code", name="uq_clients_tenant_code"),
@@ -198,7 +223,7 @@ class Client(TenantScopedMixin, Base):
     code = Column(String, nullable=True)
 
 
-class BankAccount(TenantScopedMixin, Base):
+class BankAccount(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "bank_accounts"
     __table_args__ = (Index("ix_bank_accounts_tenant_client", "tenant_id", "client_id"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("bank"))
@@ -206,14 +231,14 @@ class BankAccount(TenantScopedMixin, Base):
     name = Column(String, nullable=False)
 
 
-class Role(TenantScopedMixin, Base):
+class Role(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "roles"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_roles_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("role"))
     name = Column(String, nullable=False)
 
 
-class TaskTypeOption(TenantScopedMixin, Base):
+class TaskTypeOption(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "task_type_options"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_task_types_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("tto"))
@@ -221,14 +246,14 @@ class TaskTypeOption(TenantScopedMixin, Base):
     is_billable = Column(Boolean, nullable=False, default=False)
 
 
-class TrackedMetric(TenantScopedMixin, Base):
+class TrackedMetric(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "tracked_metrics"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_metrics_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("metric"))
     name = Column(String, nullable=False)
 
 
-class Template(TenantScopedMixin, Base):
+class Template(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "templates"
     id = Column(String, primary_key=True, default=lambda: gen_id("tpl"))
     field = Column(String, nullable=False)
@@ -242,7 +267,7 @@ class Template(TenantScopedMixin, Base):
     )
 
 
-class TemplateTask(TenantScopedMixin, Base):
+class TemplateTask(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "template_tasks"
     id = Column(String, primary_key=True, default=lambda: gen_id("tt"))
     template_id = Column(String, ForeignKey("templates.id"), nullable=False)

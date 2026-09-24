@@ -1,16 +1,22 @@
 from datetime import datetime, date
-from typing import Optional, List
-from pydantic import BaseModel, ConfigDict, field_serializer
+from typing import Optional, List, Literal
+from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, field_serializer
+
+
+class BaseModel(PydanticBaseModel):
+    # Requests reject unexpected fields instead of silently accepting browser-supplied data.
+    model_config = ConfigDict(extra="forbid")
 
 
 class Segment(BaseModel):
-    start: str
-    end: Optional[str] = None
+    start: str = Field(min_length=1, max_length=64)
+    end: Optional[str] = Field(default=None, max_length=64)
 
 
 class MemberOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     tenant_id: Optional[str] = None
     name: str
     email: Optional[str] = None
@@ -31,62 +37,70 @@ class MemberOut(BaseModel):
 class PodOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     name: str
 
 
 class SlackConnect(BaseModel):
-    slack_email: str
+    slack_email: str = Field(min_length=3, max_length=320)
 
 
 class NotificationChannelUpdate(BaseModel):
-    channel: str  # "browser" or "slack"
+    channel: Literal["browser", "slack"]
 
 
 class PodCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
 
 
 class KarbonIntegrationSave(BaseModel):
-    application_id: str
-    access_key: str
+    application_id: str = Field(min_length=1, max_length=512)
+    access_key: str = Field(min_length=1, max_length=512)
+    expected_version: Optional[int] = Field(default=None, ge=0)
 
 
 class CalamariIntegrationSave(BaseModel):
-    tenant: str
-    api_key: str
+    tenant: str = Field(min_length=1, max_length=240)
+    api_key: str = Field(min_length=1, max_length=512)
+    expected_version: Optional[int] = Field(default=None, ge=0)
 
 
 class KarbonReconciliationNoteSave(BaseModel):
-    member_id: str
+    member_id: str = Field(min_length=1, max_length=128)
     date: date
-    note: str = ""
+    note: str = Field(default="", max_length=4000)
 
 
 class MemberPodUpdate(BaseModel):
-    pod_id: Optional[str] = None
+    pod_id: Optional[str] = Field(default=None, max_length=128)
+    expected_version: int = Field(ge=1)
 
 
 class MemberCreate(BaseModel):
-    name: str
-    email: str
-    password: str
+    name: str = Field(min_length=1, max_length=160)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)
 
 
 class MemberRoleUpdate(BaseModel):
-    role: str
+    role: Literal["member", "admin", "super_admin"]
+    expected_version: int = Field(ge=1)
 
 
 class MemberCapacityUpdate(BaseModel):
-    weekly_capacity_hours: float
+    weekly_capacity_hours: float = Field(ge=0, le=168)
     capacity_effective_from: Optional[date] = None
+    expected_version: int = Field(ge=1)
 
 
 class MemberTimezoneUpdate(BaseModel):
-    timezone_name: str
+    timezone_name: str = Field(min_length=1, max_length=80)
+    expected_version: int = Field(ge=1)
 
 
 class MemberInsightsPermissionUpdate(BaseModel):
     enabled: bool
+    expected_version: int = Field(ge=1)
 
 
 class StaffTourUpdate(BaseModel):
@@ -94,9 +108,9 @@ class StaffTourUpdate(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: str
-    password: str
-    tenant_id: Optional[str] = None
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=1, max_length=256)
+    tenant_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class LoginResponse(BaseModel):
@@ -113,18 +127,18 @@ class TenantOut(BaseModel):
 
 
 class TenantCreate(BaseModel):
-    name: str
-    slug: Optional[str] = None
+    name: str = Field(min_length=1, max_length=160)
+    slug: Optional[str] = Field(default=None, max_length=160)
 
 
 class WorkspaceBrandingUpdate(BaseModel):
-    logo_data_url: Optional[str] = None
+    logo_data_url: Optional[str] = Field(default=None, max_length=500000)
 
 
 class TenantInvitationCreate(BaseModel):
-    name: str
-    email: str
-    role: str = "member"
+    name: str = Field(min_length=1, max_length=160)
+    email: str = Field(min_length=3, max_length=320)
+    role: Literal["member", "admin", "super_admin"] = "member"
 
 
 class TenantInvitationOut(BaseModel):
@@ -155,37 +169,39 @@ class TenantInvitationPublic(BaseModel):
 
 
 class TenantInvitationAccept(BaseModel):
-    password: str
-    name: Optional[str] = None
+    password: str = Field(min_length=8, max_length=256)
+    name: Optional[str] = Field(default=None, max_length=160)
 
 
 class ClaimAccountRequest(BaseModel):
-    member_id: Optional[str] = None
-    name: Optional[str] = None
-    email: str
-    password: str
+    member_id: Optional[str] = Field(default=None, max_length=128)
+    name: Optional[str] = Field(default=None, max_length=160)
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=256)
 
 
 class ClientOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     name: str
     code: Optional[str] = None
 
 
 class ClientCreate(BaseModel):
-    name: str
-    code: str
+    name: str = Field(min_length=1, max_length=240)
+    code: str = Field(min_length=1, max_length=80)
+    expected_version: Optional[int] = Field(default=None, ge=1)
 
 
 class ClientImportRow(BaseModel):
-    name: str
-    code: str
-    bank_accounts: List[str] = []
+    name: str = Field(min_length=1, max_length=240)
+    code: str = Field(min_length=1, max_length=80)
+    bank_accounts: List[str] = Field(default_factory=list, max_length=50)
 
 
 class ClientImportRequest(BaseModel):
-    rows: List[ClientImportRow]
+    rows: List[ClientImportRow] = Field(min_length=1, max_length=5000)
 
 
 class ClientImportResult(BaseModel):
@@ -196,83 +212,91 @@ class ClientImportResult(BaseModel):
 class RoleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     name: str
 
 
 class RoleCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
 
 
 class TaskTypeOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     name: str
     is_billable: bool = False
 
 
 class TaskTypeCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     is_billable: bool = False
 
 
 class TaskTypeBillingUpdate(BaseModel):
     is_billable: bool
+    expected_version: int = Field(ge=1)
 
 
 class TrackedMetricOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     name: str
 
 
 class TrackedMetricCreate(BaseModel):
-    name: str
+    name: str = Field(min_length=1, max_length=160)
 
 
 class BankAccountOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     client_id: str
     name: str
 
 
 class BankAccountCreate(BaseModel):
-    client_id: str
-    name: str
+    client_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=240)
 
 
 class TemplateTaskOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     name: str
     role: str
     task_type: str
     requires_bank_account: bool
     tracks_number_label: str
     needs_pay_period: bool = False
-    period_types: List[str] = []
+    period_types: List[str] = Field(default_factory=list, max_length=16)
     period_required: bool = False
     position: int = 0
 
 
 class TemplateTaskCreate(BaseModel):
-    name: str
-    role: str = ""
-    task_type: str = ""
+    expected_version: Optional[int] = Field(default=None, ge=1)
+    name: str = Field(min_length=1, max_length=240)
+    role: str = Field(default="", max_length=160)
+    task_type: str = Field(default="", max_length=160)
     requires_bank_account: bool = False
-    tracks_number_label: str = ""
+    tracks_number_label: str = Field(default="", max_length=160)
     needs_pay_period: bool = False
-    period_types: List[str] = []
+    period_types: List[str] = Field(default_factory=list, max_length=16)
     period_required: bool = False
 
 
 class TemplateTaskReorder(BaseModel):
-    task_ids: List[str]
+    task_ids: List[str] = Field(max_length=500)
 
 
 class TemplateOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
+    version: int = 1
     field: str
     category: Optional[str] = None
     name: str
@@ -280,9 +304,10 @@ class TemplateOut(BaseModel):
 
 
 class TemplateCreate(BaseModel):
-    field: str
-    category: Optional[str] = None
-    name: str
+    field: str = Field(min_length=1, max_length=160)
+    expected_version: Optional[int] = Field(default=None, ge=1)
+    category: Optional[str] = Field(default=None, max_length=160)
+    name: str = Field(min_length=1, max_length=240)
 
 
 class TaskOut(BaseModel):
@@ -308,21 +333,21 @@ class TaskOut(BaseModel):
     start_count: Optional[int] = None
     end_count: Optional[int] = None
     adjusted_seconds: Optional[float] = None
-    pay_period_type: Optional[str] = None
-    pay_period_number: Optional[int] = None
+    pay_period_type: Optional[str] = Field(default=None, max_length=32)
+    pay_period_number: Optional[int] = Field(default=None, ge=1, le=53)
     needs_pay_period: bool = False
-    period_types: List[str] = []
+    period_types: List[str] = Field(default_factory=list, max_length=16)
     period_required: bool = False
-    period_type: Optional[str] = None
-    period_year: Optional[int] = None
-    period_number: Optional[int] = None
-    period_start: Optional[str] = None
-    period_end: Optional[str] = None
-    source_calendar_event_id: Optional[str] = None
-    source_template_task_id: Optional[str] = None
-    source_template_name: Optional[str] = None
-    source_template_field: Optional[str] = None
-    source_template_category: Optional[str] = None
+    period_type: Optional[str] = Field(default=None, max_length=32)
+    period_year: Optional[int] = Field(default=None, ge=1900, le=2100)
+    period_number: Optional[int] = Field(default=None, ge=1, le=53)
+    period_start: Optional[str] = Field(default=None, max_length=32)
+    period_end: Optional[str] = Field(default=None, max_length=32)
+    source_calendar_event_id: Optional[str] = Field(default=None, max_length=512)
+    source_template_task_id: Optional[str] = Field(default=None, max_length=128)
+    source_template_name: Optional[str] = Field(default=None, max_length=240)
+    source_template_field: Optional[str] = Field(default=None, max_length=160)
+    source_template_category: Optional[str] = Field(default=None, max_length=160)
     submitted_pod_id: Optional[str] = None
     last_heartbeat_at: Optional[datetime] = None
 
@@ -336,109 +361,109 @@ class TaskOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    client_id: str
-    client_name: str
-    name: str
-    role: str = ""
-    task_type: str = ""
-    helped_member_id: Optional[str] = None
-    owner_id: Optional[str] = None
-    bank_account_id: Optional[str] = None
-    bank_account_name: str = ""
-    tracks_number_label: str = ""
-    pay_period_type: Optional[str] = None
-    pay_period_number: Optional[int] = None
+    client_id: str = Field(min_length=1, max_length=128)
+    client_name: str = Field(min_length=1, max_length=240)
+    name: str = Field(min_length=1, max_length=240)
+    role: str = Field(default="", max_length=160)
+    task_type: str = Field(default="", max_length=160)
+    helped_member_id: Optional[str] = Field(default=None, max_length=128)
+    owner_id: Optional[str] = Field(default=None, max_length=128)
+    bank_account_id: Optional[str] = Field(default=None, max_length=128)
+    bank_account_name: str = Field(default="", max_length=240)
+    tracks_number_label: str = Field(default="", max_length=160)
+    pay_period_type: Optional[str] = Field(default=None, max_length=32)
+    pay_period_number: Optional[int] = Field(default=None, ge=1, le=53)
     needs_pay_period: bool = False
-    period_types: List[str] = []
+    period_types: List[str] = Field(default_factory=list, max_length=16)
     period_required: bool = False
-    period_type: Optional[str] = None
-    period_year: Optional[int] = None
-    period_number: Optional[int] = None
-    period_start: Optional[str] = None
-    period_end: Optional[str] = None
-    source_calendar_event_id: Optional[str] = None
-    source_template_task_id: Optional[str] = None
-    source_template_name: Optional[str] = None
-    source_template_field: Optional[str] = None
-    source_template_category: Optional[str] = None
+    period_type: Optional[str] = Field(default=None, max_length=32)
+    period_year: Optional[int] = Field(default=None, ge=1900, le=2100)
+    period_number: Optional[int] = Field(default=None, ge=1, le=53)
+    period_start: Optional[str] = Field(default=None, max_length=32)
+    period_end: Optional[str] = Field(default=None, max_length=32)
+    source_calendar_event_id: Optional[str] = Field(default=None, max_length=512)
+    source_template_task_id: Optional[str] = Field(default=None, max_length=128)
+    source_template_name: Optional[str] = Field(default=None, max_length=240)
+    source_template_field: Optional[str] = Field(default=None, max_length=160)
+    source_template_category: Optional[str] = Field(default=None, max_length=160)
 
 
 class TaskPause(BaseModel):
-    end_at: Optional[str] = None
+    end_at: Optional[str] = Field(default=None, max_length=64)
 
 
 class TaskPauseBeacon(BaseModel):
-    token: str
-    end_at: Optional[str] = None
+    token: str = Field(min_length=16, max_length=256)
+    end_at: Optional[str] = Field(default=None, max_length=64)
 
 
 class TaskSubmit(BaseModel):
-    note: str = ""
-    client_id: Optional[str] = None
-    end_count: Optional[int] = None
-    adjusted_seconds: Optional[float] = None
-    role: Optional[str] = None
-    task_type: Optional[str] = None
-    period_type: Optional[str] = None
-    period_year: Optional[int] = None
-    period_number: Optional[int] = None
-    period_start: Optional[str] = None
-    period_end: Optional[str] = None
+    note: str = Field(default="", max_length=4000)
+    client_id: Optional[str] = Field(default=None, max_length=128)
+    end_count: Optional[int] = Field(default=None, ge=0, le=2147483647)
+    adjusted_seconds: Optional[float] = Field(default=None, ge=0, le=2678400)
+    role: Optional[str] = Field(default=None, max_length=160)
+    task_type: Optional[str] = Field(default=None, max_length=160)
+    period_type: Optional[str] = Field(default=None, max_length=32)
+    period_year: Optional[int] = Field(default=None, ge=1900, le=2100)
+    period_number: Optional[int] = Field(default=None, ge=1, le=53)
+    period_start: Optional[str] = Field(default=None, max_length=32)
+    period_end: Optional[str] = Field(default=None, max_length=32)
 
 
 class TaskStart(BaseModel):
-    start_count: Optional[int] = None
-    start_at: Optional[str] = None
+    start_count: Optional[int] = Field(default=None, ge=0, le=2147483647)
+    start_at: Optional[str] = Field(default=None, max_length=64)
 
 
 class TaskReassign(BaseModel):
-    owner_id: str
+    owner_id: str = Field(min_length=1, max_length=128)
 
 
 class AdHocMeetingCreate(BaseModel):
-    colleague_id: Optional[str] = None
+    colleague_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class AdHocMeetingFinish(BaseModel):
-    colleague_id: Optional[str] = None
-    interaction: str  # "general", "helped", or "received"
-    context: str
+    colleague_id: Optional[str] = Field(default=None, max_length=128)
+    interaction: Literal["general", "helped", "received"]
+    context: str = Field(min_length=1, max_length=4000)
 
 
 class QuickMeetingCreate(BaseModel):
-    summary: str
-    request_id: Optional[str] = None
-    attendee_member_ids: List[str] = []
-    external_emails: List[str] = []
-    client_id: Optional[str] = None
-    duration_minutes: int = 30
+    summary: str = Field(min_length=1, max_length=240)
+    request_id: Optional[str] = Field(default=None, max_length=128)
+    attendee_member_ids: List[str] = Field(default_factory=list, max_length=100)
+    external_emails: List[str] = Field(default_factory=list, max_length=100)
+    client_id: Optional[str] = Field(default=None, max_length=128)
+    duration_minutes: int = Field(default=30, ge=1, le=720)
 
 
 class CalendarEventCreate(BaseModel):
-    summary: str
-    start: str
-    end: str
+    summary: str = Field(min_length=1, max_length=240)
+    start: str = Field(min_length=1, max_length=64)
+    end: str = Field(min_length=1, max_length=64)
     all_day: bool = False
-    attendee_member_ids: List[str] = []
-    external_emails: List[str] = []
+    attendee_member_ids: List[str] = Field(default_factory=list, max_length=100)
+    external_emails: List[str] = Field(default_factory=list, max_length=100)
     create_meet: bool = False
 
 
 class CalendarEventUpdate(BaseModel):
-    summary: Optional[str] = None
-    start: Optional[str] = None
-    end: Optional[str] = None
+    summary: Optional[str] = Field(default=None, max_length=240)
+    start: Optional[str] = Field(default=None, max_length=64)
+    end: Optional[str] = Field(default=None, max_length=64)
     all_day: Optional[bool] = None
 
 
 class HelpEventCreate(BaseModel):
-    colleague_id: str
-    direction: str  # "helped" or "received"
-    seconds: float
-    source: str = "idle_prompt"
+    colleague_id: str = Field(min_length=1, max_length=128)
+    direction: Literal["helped", "received"]
+    seconds: float = Field(gt=0, le=43200)
+    source: str = Field(default="idle_prompt", max_length=80)
     adjusted: bool = False
-    context: str
-    inactivity_event_id: Optional[str] = None
+    context: str = Field(default="", max_length=4000)
+    inactivity_event_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class HelpEventOut(BaseModel):
@@ -482,10 +507,10 @@ class HelpEventDetail(BaseModel):
 
 
 class InactivityEventCreate(BaseModel):
-    kind: str
+    kind: Literal["screen_locked", "sleep_gap", "stale_gap"]
     started_at: datetime
     ended_at: datetime
-    task_id: Optional[str] = None
+    task_id: Optional[str] = Field(default=None, max_length=128)
 
 
 class InactivityEventDetail(BaseModel):
@@ -507,3 +532,14 @@ class InactivityEventDetail(BaseModel):
 
 class InactivityAuditSettingUpdate(BaseModel):
     enabled: bool
+
+
+class AuditEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    actor_member_id: Optional[str] = None
+    action: str
+    entity_type: str
+    entity_id: Optional[str] = None
+    changes: dict
+    created_at: datetime
