@@ -5245,6 +5245,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [teamProgress, setTeamProgress] = useState("");
   const [error, setError] = useState("");
   const [noteRow, setNoteRow] = useState(null);
+  const autoCompareTimerRef = useRef(null);
+  const autoComparePendingRef = useRef(false);
   const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
   const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
 
@@ -5268,6 +5270,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     if (!canSelectTeamMembers || selectedTeamMemberIds === null) return teamOptions;
     return teamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
   }, [teamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
+  const teamSelectionKey = useMemo(() => selectedTeamOptions.map((member) => member.id).join(","), [selectedTeamOptions]);
 
   useEffect(() => {
     if (!teamPickerOpen) return;
@@ -5304,6 +5307,11 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   }, [preset, customFrom, customTo]);
 
   async function compare() {
+    if (autoCompareTimerRef.current) {
+      clearTimeout(autoCompareTimerRef.current);
+      autoCompareTimerRef.current = null;
+    }
+    autoComparePendingRef.current = false;
     if (!range) return;
     if (viewMode === "team") {
       if (!isAdmin || forceSelfOnly || selectedTeamOptions.length === 0) return;
@@ -5338,6 +5346,59 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     catch (err) { setData(null); setError(err.message || "Could not compare with Karbon"); }
     finally { setBusy(false); }
   }
+
+  // Team View behaves like a live SaaS filter: once the user changes the period or
+  // selected team members, rerun the existing comparison automatically. The
+  // reconciliation function itself is unchanged; this only changes when it is invoked.
+  useEffect(() => {
+    if (viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+      autoComparePendingRef.current = false;
+      if (autoCompareTimerRef.current) {
+        clearTimeout(autoCompareTimerRef.current);
+        autoCompareTimerRef.current = null;
+      }
+      return;
+    }
+    if (busy) {
+      autoComparePendingRef.current = true;
+      return;
+    }
+    autoComparePendingRef.current = false;
+    if (autoCompareTimerRef.current) clearTimeout(autoCompareTimerRef.current);
+    autoCompareTimerRef.current = setTimeout(() => {
+      autoCompareTimerRef.current = null;
+      compare();
+    }, 350);
+    return () => {
+      if (autoCompareTimerRef.current) {
+        clearTimeout(autoCompareTimerRef.current);
+        autoCompareTimerRef.current = null;
+      }
+    };
+  }, [viewMode, isAdmin, forceSelfOnly, range?.from, range?.to, teamSelectionKey]);
+
+  // If filters change while a comparison is already running, wait for that request to
+  // finish and then refresh once with the latest selection instead of starting overlapping
+  // Karbon requests.
+  useEffect(() => {
+    if (busy || !autoComparePendingRef.current) return;
+    if (viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+      autoComparePendingRef.current = false;
+      return;
+    }
+    autoComparePendingRef.current = false;
+    if (autoCompareTimerRef.current) clearTimeout(autoCompareTimerRef.current);
+    autoCompareTimerRef.current = setTimeout(() => {
+      autoCompareTimerRef.current = null;
+      compare();
+    }, 350);
+    return () => {
+      if (autoCompareTimerRef.current) {
+        clearTimeout(autoCompareTimerRef.current);
+        autoCompareTimerRef.current = null;
+      }
+    };
+  }, [busy, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to, teamSelectionKey]);
 
   const signed = (minutes) => {
     const n = Math.round(minutes || 0);
@@ -5459,7 +5520,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div></div>
         {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
         <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !range || (viewMode === "individual" ? !effectiveMemberId : selectedTeamOptions.length === 0)}>
-          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? "Compare team with Karbon" : "Compare with Karbon")}
+          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? "Refresh comparison" : "Compare with Karbon")}
         </button>
       </div>
     </div>
