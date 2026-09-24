@@ -3340,7 +3340,7 @@ function SettingsView({
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Task types</div>
             {taskTypes.map((t) => {
-              const isBuiltInHelping = (t.name || "").trim().toLowerCase() === "helping";
+              const isBuiltInHelping = (t.name || "").trim().toLowerCase() === "helping/training";
               return (
                 <div key={t.id} className="cb-client-account-row" style={{ gap: 10 }}>
                   <div style={{ fontSize: 13.5, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
@@ -3355,7 +3355,7 @@ function SettingsView({
                     disabled={isBuiltInHelping}
                     onClick={() => !isBuiltInHelping && onUpdateTaskTypeBilling(t.id, !t.is_billable)}
                     style={{ minWidth: 92, justifyContent: "center", color: t.is_billable ? "#168A45" : "var(--ink-soft)", background: t.is_billable ? "#EAF8EF" : "#F5F6F7", opacity: isBuiltInHelping ? 0.72 : 1, cursor: isBuiltInHelping ? "default" : undefined }}
-                    title={isBuiltInHelping ? "Built-in Helping is fixed as non-billable" : "Used by Capacity & Utilization"}
+                    title={isBuiltInHelping ? "Built-in Helping/Training is fixed as non-billable" : "Used by Capacity & Utilization"}
                   >
                     {t.is_billable ? "Billable" : "Non-billable"}
                   </button>
