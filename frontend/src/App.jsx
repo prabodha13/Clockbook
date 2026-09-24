@@ -1346,15 +1346,15 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "team" ? "active" : ""}`} onClick={() => setViewFilter("team")}>Team View</button>
               </div>
               {pickableMembers.length > 0 && (
-                <select
-                  className="cb-select"
-                  style={{ width: 175, minHeight: 32, padding: "5px 24px 5px 10px", fontSize: 12.5, background: "var(--paper)" }}
-                  value={viewedMember ? viewedMember.id : ""}
-                  onChange={(e) => setViewFilter(e.target.value || "everyone")}
-                >
-                  <option value="">Or pick someone...</option>
-                  {pickableMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
+                <div style={{ width: 190 }}>
+                  <SearchableSelect
+                    options={pickableMembers}
+                    value={viewedMember ? viewedMember.id : ""}
+                    onChange={(memberId) => setViewFilter(memberId || "everyone")}
+                    placeholder="Or pick someone..."
+                    getLabel={(member) => member.name}
+                  />
+                </div>
               )}
             </div>
           )}
