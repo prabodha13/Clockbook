@@ -3159,6 +3159,7 @@ function SettingsView({
           <div className="cb-page-sub">The fixed lists everyone picks from when setting up templates or logging a task.</div>
         </div>
       </div>
+      <div style={{ visibility: platformSettingsReady ? "visible" : "hidden" }}>
       <WorkspaceSettingsCard
         workspaces={workspaces}
         activeWorkspaceId={activeWorkspaceId}
@@ -3168,45 +3169,6 @@ function SettingsView({
         onBrandingUpdated={onBrandingUpdated}
         onPlatformResolved={() => setPlatformSettingsReady(true)}
       />
-      {!platformSettingsReady && (
-        <div
-          aria-hidden="true"
-          style={{
-            position: "absolute",
-            left: 0,
-            right: 0,
-            top: 72,
-            bottom: 0,
-            zIndex: 20,
-            background: "var(--bg)",
-            pointerEvents: "auto",
-            paddingTop: 2,
-          }}
-        >
-          <div className="cb-tmpl-card">
-            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
-              <div style={{ width: "100%", display: "grid", gap: 8 }}>
-                <div style={{ height: 11, width: 120, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
-                <div style={{ height: 16, width: 92, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
-              </div>
-            </div>
-            <div style={{ padding: 16 }}>
-              <SettingsLoadingBlock rows={4} minHeight={142} />
-            </div>
-          </div>
-          <div className="cb-tmpl-card">
-            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
-              <div style={{ width: "100%", display: "grid", gap: 8 }}>
-                <div style={{ height: 11, width: 105, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
-                <div style={{ height: 16, width: 118, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
-              </div>
-            </div>
-            <div style={{ padding: 16 }}>
-              <SettingsLoadingBlock rows={5} minHeight={198} />
-            </div>
-          </div>
-        </div>
-      )}
       {realIsSuperAdmin && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
@@ -3632,6 +3594,46 @@ function SettingsView({
                 Fixed: {result.before_hours}h corrected to {result.after_hours}h.
               </div>
             ))}
+          </div>
+        </div>
+      )}
+      </div>
+      {!platformSettingsReady && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 72,
+            bottom: 0,
+            zIndex: 20,
+            background: "var(--bg)",
+            pointerEvents: "auto",
+            paddingTop: 2,
+          }}
+        >
+          <div className="cb-tmpl-card">
+            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+              <div style={{ width: "100%", display: "grid", gap: 8 }}>
+                <div style={{ height: 11, width: 120, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+                <div style={{ height: 16, width: 92, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <SettingsLoadingBlock rows={4} minHeight={142} />
+            </div>
+          </div>
+          <div className="cb-tmpl-card">
+            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+              <div style={{ width: "100%", display: "grid", gap: 8 }}>
+                <div style={{ height: 11, width: 105, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+                <div style={{ height: 16, width: 118, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <SettingsLoadingBlock rows={5} minHeight={198} />
+            </div>
           </div>
         </div>
       )}
