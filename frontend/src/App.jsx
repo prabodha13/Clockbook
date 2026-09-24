@@ -590,7 +590,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
           </button>
         ))}
       </div>
-      <div className="cb-sidebar-foot">Time tracked here stays in your firm's own database until you export it.</div>
+      <div className="cb-sidebar-foot" style={{ fontSize: 11.5, lineHeight: 1.45, color: "var(--ink-faint)", opacity: 0.9 }}>Time tracked here stays in your firm's own database until you export it.</div>
     </div>
   );
 }
@@ -620,16 +620,16 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
   const isPaused = pinnedTask && pinnedTask.status === "paused";
   const elapsed = pinnedTask ? elapsedSeconds(pinnedTask, now) : 0;
   return (
-    <div className="cb-topbar">
+    <div className="cb-topbar" style={{ gap: 16, minHeight: 70, paddingTop: 10, paddingBottom: 10 }}>
       {pinnedTask ? (
-        <div className={`cb-tracking${isPaused ? " paused" : ""}`}>
+        <div className={`cb-tracking${isPaused ? " paused" : ""}`} style={{ minHeight: 48, padding: "7px 10px", borderRadius: 10, flex: "1 1 540px", maxWidth: 760 }}>
           <div className="cb-tracking-dot" />
-          <div className="cb-tracking-text">
-            <div className="cb-tracking-label">{isPaused ? "Paused" : "Now tracking"}</div>
-            <div className="cb-tracking-name">{pinnedTask.client_name}: {taskDisplayHeading(pinnedTask)}</div>
+          <div className="cb-tracking-text" style={{ minWidth: 0, flex: 1 }}>
+            <div className="cb-tracking-label" style={{ marginBottom: 2, fontSize: 11.5 }}>{isPaused ? "Paused" : "Now tracking"}</div>
+            <div className="cb-tracking-name" style={{ lineHeight: 1.25, overflow: "hidden", textOverflow: "ellipsis" }}>{pinnedTask.client_name}: {taskDisplayHeading(pinnedTask)}</div>
           </div>
-          <div className="cb-tracking-time cb-mono">{formatHMS(elapsed)}</div>
-          <div className="cb-tracking-actions">
+          <div className="cb-tracking-time cb-mono" style={{ fontSize: 14, fontWeight: 750, padding: "0 4px" }}>{formatHMS(elapsed)}</div>
+          <div className="cb-tracking-actions" style={{ gap: 6 }}>
             {isPaused ? (
               <button className="cb-btn cb-btn-sm" onClick={onResume}><Play size={13} />Resume</button>
             ) : (
@@ -641,7 +641,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
       ) : (
         <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>No timer running</div>
       )}
-      <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+      <div className="cb-user-menu" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
         {activeWorkspace && (
           <div ref={workspaceMenuRef} style={{ position: "relative" }}>
             <button
@@ -723,7 +723,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
             </span>
           )}
         </div>
-        <div className="cb-row-meta">
+        <div className="cb-row-meta" style={{ marginTop: 4, lineHeight: 1.5, color: "var(--ink-soft)" }}>
           {task.role && <span>{task.role}</span>}
           {task.task_type && <span>{task.task_type}</span>}
           {task.source_template_name && <span>Template: {task.source_template_name}</span>}
@@ -1324,8 +1324,8 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
 
   return (
     <div style={{ position: "relative" }}>
-      <div className="cb-page-head">
-        <div>
+      <div className="cb-page-head" style={{ alignItems: "flex-start", gap: 18, paddingBottom: 16 }}>
+        <div style={{ minWidth: 220, paddingTop: 2 }}>
           <div className="cb-page-title cb-serif">Dashboard</div>
           <div className="cb-page-sub">
             {viewFilter === "team"
@@ -1337,10 +1337,10 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
                   : "Your firm's active work, tracked client by client."}
           </div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {isAdmin && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <div className="cb-tabs cb-tabs-plain">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)" }}>
+              <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "mine" ? "active" : ""}`} onClick={() => setViewFilter("mine")}>Just me</button>
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "team" ? "active" : ""}`} onClick={() => setViewFilter("team")}>Team View</button>
@@ -1348,7 +1348,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
               {pickableMembers.length > 0 && (
                 <select
                   className="cb-select"
-                  style={{ width: 175, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
+                  style={{ width: 175, minHeight: 32, padding: "5px 24px 5px 10px", fontSize: 12.5, background: "var(--paper)" }}
                   value={viewedMember ? viewedMember.id : ""}
                   onChange={(e) => setViewFilter(e.target.value || "everyone")}
                 >
@@ -1358,9 +1358,11 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
               )}
             </div>
           )}
-          <button className="cb-btn" data-tour="ad-hoc-meeting" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
-          <button className="cb-btn" data-tour="helper" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
-          <button className="cb-btn cb-btn-primary" data-tour="new-task-button" onClick={onNewTask}><Plus size={15} />New task</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, paddingLeft: 2 }}>
+            <button className="cb-btn" data-tour="ad-hoc-meeting" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
+            <button className="cb-btn" data-tour="helper" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
+            <button className="cb-btn cb-btn-primary" data-tour="new-task-button" onClick={onNewTask}><Plus size={15} />New task</button>
+          </div>
         </div>
       </div>
 
@@ -1411,7 +1413,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
 
       {viewFilter !== "team" && (
         <>
-      <div className="cb-stats">
+      <div className="cb-stats" style={{ marginTop: 2, marginBottom: 18, paddingTop: 12, paddingBottom: 12 }}>
         <div className="cb-stat">
           <div className="cb-stat-num cb-mono">{formatHM(todaySeconds)}</div>
           <div className="cb-stat-label">Tracked today ({statsMember.name.split(" ")[0]})</div>
@@ -1439,7 +1441,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         )}
       </div>
 
-      <div data-tour="task-search" style={{ margin: "0 0 14px", maxWidth: 460 }}>
+      <div data-tour="task-search" style={{ margin: "2px 0 18px", maxWidth: 460 }}>
         <div style={{ position: "relative" }}>
           <Search size={16} aria-hidden="true" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
           <input
