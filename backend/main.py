@@ -5399,19 +5399,68 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         ).all()
     }
 
+    # Super Admin-only audit context for the Daily comparison. This deliberately reuses
+    # the same 3-hour shutdown inference as Daily start activity, but does not alter any
+    # Karbon/ClockBook reconciliation calculation. Non-Super-Admin responses never include
+    # this field, so it cannot be recovered by inspecting the browser API response.
+    login_to_shutdown_by_day = {}
+    if current_member.role == "super_admin":
+        utc_start = datetime.combine(start_date - timedelta(days=1), datetime.min.time())
+        utc_end = datetime.combine(end_date + timedelta(days=2), datetime.min.time())
+        login_events = db.query(models.LoginEvent).filter(
+            models.LoginEvent.member_id == target_id,
+            models.LoginEvent.created_at >= utc_start,
+            models.LoginEvent.created_at < utc_end,
+        ).all()
+        first_login_by_day = {}
+        for event in login_events:
+            local = _utc_naive_to_local(event.created_at, member)
+            if local and start_date <= local.date() <= end_date:
+                key = local.date().isoformat()
+                previous = first_login_by_day.get(key)
+                if previous is None or local < previous:
+                    first_login_by_day[key] = local
+
+        presence_rows = db.query(models.DailyPresenceEvent).filter(
+            models.DailyPresenceEvent.member_id == target_id,
+            models.DailyPresenceEvent.work_date >= start_date,
+            models.DailyPresenceEvent.work_date <= end_date + timedelta(days=1),
+        ).order_by(models.DailyPresenceEvent.work_date, models.DailyPresenceEvent.first_seen_at).all()
+        presence_by_day = {row.work_date.isoformat(): row for row in presence_rows if start_date <= row.work_date <= end_date}
+        now_utc = datetime.utcnow()
+        shutdown_gap = timedelta(hours=3)
+        for day_key, first_login_local in first_login_by_day.items():
+            presence = presence_by_day.get(day_key)
+            if not presence or not presence.last_seen_at:
+                continue
+            next_seen_utc = None
+            for candidate in presence_rows:
+                if candidate.work_date > presence.work_date:
+                    next_seen_utc = candidate.first_seen_at
+                    break
+            gap_end = next_seen_utc or now_utc
+            if gap_end - presence.last_seen_at < shutdown_gap:
+                continue
+            shutdown_local = _utc_naive_to_local(presence.last_seen_at, member)
+            if shutdown_local and shutdown_local >= first_login_local:
+                login_to_shutdown_by_day[day_key] = (shutdown_local - first_login_local).total_seconds()
+
     rows = []
     cursor = start_date
     while cursor <= end_date:
         key = cursor.isoformat()
         cb = round(clockbook_by_day.get(key, 0.0))
         kb = int(karbon_by_day.get(key, 0))
-        rows.append({
+        row = {
             "date": key,
             "clockbook_minutes": cb,
             "karbon_minutes": kb,
             "difference_minutes": kb - cb,
             "note": saved_notes.get(key, ""),
-        })
+        }
+        if current_member.role == "super_admin":
+            row["first_login_to_shutdown_seconds"] = login_to_shutdown_by_day.get(key)
+        rows.append(row)
         cursor += timedelta(days=1)
     cb_total = sum(r["clockbook_minutes"] for r in rows)
     kb_total = sum(r["karbon_minutes"] for r in rows)
