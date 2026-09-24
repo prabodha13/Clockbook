@@ -1119,7 +1119,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Dashboard</div>
@@ -2699,7 +2699,7 @@ function SettingsLoadingBlock({ rows = 3, minHeight = 96 }) {
   );
 }
 
-function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, canManageBranding = false, onBrandingUpdated }) {
+function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, canManageBranding = false, onBrandingUpdated, onPlatformResolved }) {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0] || null;
   const [platformTenants, setPlatformTenants] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -2731,6 +2731,10 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
   useEffect(() => {
     refreshPlatformTenants();
   }, []);
+
+  useEffect(() => {
+    if (platformChecked && onPlatformResolved) onPlatformResolved();
+  }, [platformChecked, onPlatformResolved]);
 
   async function createWorkspace(e) {
     e.preventDefault();
@@ -2928,6 +2932,7 @@ function SettingsView({
   const [testingCalamari, setTestingCalamari] = useState(false);
   const [calamariMessage, setCalamariMessage] = useState("");
   const [permissionSearch, setPermissionSearch] = useState("");
+  const [platformSettingsReady, setPlatformSettingsReady] = useState(false);
 
   useEffect(() => {
     if (!realIsSuperAdmin) return;
@@ -3147,7 +3152,7 @@ function SettingsView({
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Settings</div>
@@ -3161,7 +3166,47 @@ function SettingsView({
         onWorkspaceCreated={onWorkspaceCreated}
         canManageBranding={realIsSuperAdmin && viewMode === "super_admin"}
         onBrandingUpdated={onBrandingUpdated}
+        onPlatformResolved={() => setPlatformSettingsReady(true)}
       />
+      {!platformSettingsReady && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: 72,
+            bottom: 0,
+            zIndex: 20,
+            background: "var(--bg)",
+            pointerEvents: "auto",
+            paddingTop: 2,
+          }}
+        >
+          <div className="cb-tmpl-card">
+            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+              <div style={{ width: "100%", display: "grid", gap: 8 }}>
+                <div style={{ height: 11, width: 120, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+                <div style={{ height: 16, width: 92, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <SettingsLoadingBlock rows={4} minHeight={142} />
+            </div>
+          </div>
+          <div className="cb-tmpl-card">
+            <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+              <div style={{ width: "100%", display: "grid", gap: 8 }}>
+                <div style={{ height: 11, width: 105, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+                <div style={{ height: 16, width: 118, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+              </div>
+            </div>
+            <div style={{ padding: 16 }}>
+              <SettingsLoadingBlock rows={5} minHeight={198} />
+            </div>
+          </div>
+        </div>
+      )}
       {realIsSuperAdmin && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
@@ -3608,7 +3653,7 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Templates</div>
@@ -4058,7 +4103,7 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onImport, onUpd
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Clients</div>
@@ -5739,7 +5784,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Export to Karbon</div>
@@ -6212,7 +6257,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Staff</div>
@@ -6559,7 +6604,7 @@ function HelpReportView() {
   }
 
   return (
-    <div>
+    <div style={{ position: "relative" }}>
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Reports</div>
