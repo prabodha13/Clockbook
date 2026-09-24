@@ -3224,7 +3224,7 @@ function SettingsView({
     setSavingKarbon(true);
     setKarbonMessage("");
     try {
-      const result = await api.saveKarbonIntegration(karbonApplicationId.trim(), karbonAccessKey.trim());
+      const result = await api.saveKarbonIntegration(karbonApplicationId.trim(), karbonAccessKey.trim(), karbonIntegration?.version ?? null);
       setKarbonIntegration(result);
       setKarbonApplicationId("");
       setKarbonAccessKey("");
@@ -3256,7 +3256,7 @@ function SettingsView({
     setSavingKarbon(true);
     setKarbonMessage("");
     try {
-      const result = await api.disconnectKarbonIntegration();
+      const result = await api.disconnectKarbonIntegration(karbonIntegration?.version ?? null);
       setKarbonIntegration(result);
       setKarbonApplicationId("");
       setKarbonAccessKey("");
@@ -3275,7 +3275,7 @@ function SettingsView({
     setSavingCalamari(true);
     setCalamariMessage("");
     try {
-      const result = await api.saveCalamariIntegration(calamariTenant.trim(), calamariApiKey.trim());
+      const result = await api.saveCalamariIntegration(calamariTenant.trim(), calamariApiKey.trim(), calamariIntegration?.version ?? null);
       setCalamariIntegration(result);
       setCalamariTenant(result.tenant || calamariTenant.trim());
       setCalamariApiKey("");
@@ -3307,7 +3307,7 @@ function SettingsView({
     setSavingCalamari(true);
     setCalamariMessage("");
     try {
-      const result = await api.disconnectCalamariIntegration();
+      const result = await api.disconnectCalamariIntegration(calamariIntegration?.version ?? null);
       setCalamariIntegration(result);
       setCalamariApiKey("");
       setCalamariMessage("Calamari disconnected.");
@@ -7108,6 +7108,7 @@ function ManualOverridesReportView() {
   }, [rows, userRows]);
 
   const [trendUser, setTrendUser] = useState("");
+  const [trendHover, setTrendHover] = useState(null);
 
   useEffect(() => {
     if (!userRows.length) {
@@ -7287,6 +7288,7 @@ function ManualOverridesReportView() {
                   </select>
                 </div>
                 {trend.length <= 1 ? <div className="cb-empty" style={{ minHeight: 220, display: "grid", placeItems: "center" }}>Choose a multi-day period to see a trend.</div> : <>
+                  <div style={{ position: "relative" }} onMouseLeave={() => setTrendHover(null)}>
                   <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label={`Manual override trend for ${trendUser}`}>
                     {[0, 0.5, 1].map((r) => { const y = padT + (chartH - padT - padB) * r; return <line key={r} x1={padL} x2={chartW - padR} y1={y} y2={y} stroke="var(--line)" strokeWidth="1" />; })}
                     <text x={padL - 8} y={padT + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">{formatHM(trendMax)}</text>
@@ -7299,13 +7301,49 @@ function ManualOverridesReportView() {
                       const reducedY = padT + (chartH - padT - padB) * (1 - (d.reduced || 0) / trendMax);
                       const labelEvery = trend.length <= 7 ? 1 : trend.length <= 14 ? 2 : Math.ceil(trend.length / 7);
                       const showLabel = i === 0 || i === trend.length - 1 || i % labelEvery === 0;
+                      const step = trend.length <= 1 ? (chartW - padL - padR) : (chartW - padL - padR) / (trend.length - 1);
+                      const hitLeft = i === 0 ? padL : x - step / 2;
+                      const hitRight = i === trend.length - 1 ? chartW - padR : x + step / 2;
+                      const hovered = trendHover?.key === d.key;
                       return <Fragment key={d.key}>
-                        <circle cx={x} cy={addedY} r="3" fill={addedColor}><title>{`${d.label}: added ${formatHM(d.added)}`}</title></circle>
-                        <circle cx={x} cy={reducedY} r="3" fill={reducedColor}><title>{`${d.label}: reduced ${formatHM(d.reduced)}`}</title></circle>
+                        {hovered && <line x1={x} x2={x} y1={padT} y2={chartH - padB} stroke="var(--line-strong, #cbd5cf)" strokeWidth="1" strokeDasharray="3 4" />}
+                        <circle cx={x} cy={addedY} r={hovered ? "4.5" : "3"} fill={addedColor} />
+                        <circle cx={x} cy={reducedY} r={hovered ? "4.5" : "3"} fill={reducedColor} />
+                        <rect
+                          x={hitLeft}
+                          y={padT}
+                          width={Math.max(8, hitRight - hitLeft)}
+                          height={chartH - padT - padB}
+                          fill="transparent"
+                          style={{ cursor: "crosshair" }}
+                          onMouseEnter={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, x })}
+                          onMouseMove={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, x })}
+                        />
                         {showLabel && <text x={x} y={chartH - 13} fontSize="10" fill="var(--ink-faint)" textAnchor={i === 0 ? "start" : i === trend.length - 1 ? "end" : "middle"}>{d.label}</text>}
                       </Fragment>;
                     })}
                   </svg>
+                  {trendHover && <div style={{
+                    position: "absolute",
+                    left: `clamp(92px, ${(trendHover.x / chartW) * 100}%, calc(100% - 92px))`,
+                    top: 10,
+                    transform: "translateX(-50%)",
+                    pointerEvents: "none",
+                    background: "var(--ink)",
+                    color: "var(--paper)",
+                    borderRadius: 8,
+                    padding: "7px 9px",
+                    boxShadow: "0 6px 18px rgba(0,0,0,.14)",
+                    minWidth: 145,
+                    zIndex: 2,
+                    fontSize: 11.5,
+                    lineHeight: 1.35,
+                  }}>
+                    <div style={{ fontWeight: 750, marginBottom: 4 }}>{trendHover.label}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time added</span><span className="cb-mono">{formatHM(trendHover.added)}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time reduced</span><span className="cb-mono">{formatHM(trendHover.reduced)}</span></div>
+                  </div>}
+                  </div>
                   <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: -4 }}>
                     <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: addedColor }} />Time added</span>
                     <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: reducedColor }} />Time reduced</span>
@@ -7514,10 +7552,20 @@ function SuperAdminReportsView({ members }) {
   const [mode, setMode] = useState("help");
   return (
     <div>
-      <div className="cb-tabs cb-tabs-plain" style={{ marginBottom: 16, width: "fit-content" }}>
-        <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
-        <button className={`cb-tab cb-tab-plain ${mode === "overrides" ? "active" : ""}`} onClick={() => setMode("overrides")}>Manual overrides</button>
-        <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Audit</button>
+      <div style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: 5,
+        marginBottom: 16,
+        border: "1px solid var(--line)",
+        borderRadius: 10,
+        background: "var(--paper)",
+      }}>
+        <div className="cb-tabs cb-tabs-plain" style={{ width: "fit-content", gap: 2 }}>
+          <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
+          <button className={`cb-tab cb-tab-plain ${mode === "overrides" ? "active" : ""}`} onClick={() => setMode("overrides")}>Manual overrides</button>
+          <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Audit</button>
+        </div>
       </div>
       {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : <InactivityAuditView members={members} />}
     </div>
@@ -9442,7 +9490,7 @@ export default function App() {
 
   async function changeMemberRole(memberId, role) {
     try {
-      const updated = await api.updateMemberRole(memberId, role);
+      const updated = await api.updateMemberRole(memberId, role, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
       showToast(err.message, true);
@@ -9451,7 +9499,7 @@ export default function App() {
 
   async function changeMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom = null) {
     try {
-      const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom);
+      const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
       showToast(`Capacity updated: ${Number(updated.weekly_capacity_hours || 0).toFixed(1)}h/week${updated.capacity_effective_from ? ` from ${formatDate(updated.capacity_effective_from)}` : ""}`);
@@ -9462,7 +9510,7 @@ export default function App() {
 
   async function changeMemberTimezone(memberId, timezoneName) {
     try {
-      const updated = await api.updateMemberTimezone(memberId, timezoneName);
+      const updated = await api.updateMemberTimezone(memberId, timezoneName, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
       showToast(`Time zone updated: ${updated.timezone_name}`);
@@ -9473,7 +9521,7 @@ export default function App() {
 
   async function changeMemberInsightsPermission(memberId, enabled) {
     try {
-      const updated = await api.updateMemberInsightsPermission(memberId, enabled);
+      const updated = await api.updateMemberInsightsPermission(memberId, enabled, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast(`${enabled ? "Enabled" : "Disabled"} leave & capacity insights for ${updated.name}`);
     } catch (err) {
@@ -9503,7 +9551,7 @@ export default function App() {
 
   async function assignMemberPod(memberId, podId) {
     try {
-      const updated = await api.updateMemberPod(memberId, podId);
+      const updated = await api.updateMemberPod(memberId, podId, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
     } catch (err) {
@@ -9652,7 +9700,7 @@ export default function App() {
   }
 
   async function updateClient(clientId, name, code) {
-    const updated = await api.updateClient(clientId, name, code);
+    const updated = await api.updateClient(clientId, name, code, current?.version || 1);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
   }
@@ -9696,7 +9744,7 @@ export default function App() {
   }
 
   async function updateTaskTypeBilling(id, isBillable) {
-    const updated = await api.updateTaskTypeBilling(id, isBillable);
+    const updated = await api.updateTaskTypeBilling(id, isBillable, current?.version || 1);
     setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
 
@@ -9828,7 +9876,7 @@ export default function App() {
     await refreshTemplates();
   }
   async function renameTemplate(id, field, name, category = "") {
-    await api.updateTemplate(id, field, name, category);
+    await api.updateTemplate(id, field, name, category, current?.version || 1);
     await refreshTemplates();
   }
   async function deleteTemplate(id) {
@@ -9840,7 +9888,7 @@ export default function App() {
     await refreshTemplates();
   }
   async function updateTemplateTask(templateId, taskId, task) {
-    await api.updateTemplateTask(templateId, taskId, task);
+    await api.updateTemplateTask(templateId, taskId, task, current?.version || 1);
     await refreshTemplates();
   }
   async function deleteTemplateTask(templateId, taskId) {
