@@ -5360,7 +5360,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const teamKarbonMinutes = successfulTeamRows.reduce((sum, entry) => sum + (entry.data.karbon_minutes || 0), 0);
   const teamDifferenceMinutes = teamKarbonMinutes - teamClockBookMinutes;
   const teamLoginToShutdownSeconds = showLoginToShutdown ? successfulTeamRows.reduce((sum, entry) => {
-    return sum + (entry.data.rows || []).reduce((daySum, row) => daySum + (row.first_login_to_shutdown_seconds || 0), 0);
+    return sum + (entry.data.rows || []).reduce((daySum, row) => daySum + (row.net_first_login_to_shutdown_seconds || 0), 0);
   }, 0) : 0;
   const teamReviewDays = successfulTeamRows.reduce((sum, entry) => {
     const tolerance = entry.data.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
@@ -5507,7 +5507,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
           {showLoginToShutdown && <col style={{ width: "12%" }} />}
           <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
           <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
-        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}{showLoginToShutdown && <th className="num" title="First login-to-shutdown span minus ClockBook tracked time. This may include lunch, breaks, and other non-tracked periods.">Span vs ClockBook</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
+        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
           {(data.rows || []).map((r) => {
             const ok = isMatched(r.difference_minutes);
             return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
@@ -5515,8 +5515,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
               <td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td>
               <td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td>
               <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
-              {showLoginToShutdown && <td className="num cb-mono">{r.first_login_to_shutdown_seconds != null ? formatHM(r.first_login_to_shutdown_seconds) : "—"}</td>}
-              {showLoginToShutdown && <td className="num cb-mono" title="First login-to-shutdown span minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">{r.first_login_to_shutdown_seconds != null ? signedSeconds(r.first_login_to_shutdown_seconds - ((r.clockbook_minutes || 0) * 60)) : "—"}</td>}
+              {showLoginToShutdown && <td className="num cb-mono" title={r.inactivity_seconds ? `Gross span ${formatHM(r.first_login_to_shutdown_seconds)} less ${formatHM(r.inactivity_seconds)} inactivity` : "First login-to-shutdown span less recorded inactivity time."}>{r.net_first_login_to_shutdown_seconds != null ? formatHM(r.net_first_login_to_shutdown_seconds) : "—"}</td>}
+              {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">{r.net_first_login_to_shutdown_seconds != null ? signedSeconds(r.net_first_login_to_shutdown_seconds - ((r.clockbook_minutes || 0) * 60)) : "—"}</td>}
               <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
               <td>
                 <button type="button" className="cb-btn cb-btn-sm" title={r.note || "Add reconciliation note"} onClick={() => setNoteRow({ ...r, _member_id: data.member_id, _member_name: data.member_name })} style={{ minWidth: 66, justifyContent: "center" }}>
@@ -5552,9 +5552,9 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
             <div style={{ fontSize: 11.5, color: teamReviewDays === 0 ? "var(--ink-faint)" : "#92400e", marginTop: 5 }}>{teamReviewDays === 0 ? "All compared days matched" : `${teamReviewDays} day${teamReviewDays === 1 ? "" : "s"} to review`}</div>
           </div>
           {showLoginToShutdown && <div style={styles.summaryItem}>
-            <div style={styles.summaryLabel}>First login to shutdown</div>
+            <div style={styles.summaryLabel}>Net login to shutdown</div>
             <div className="cb-mono" style={styles.summaryValue}>{teamLoginToShutdownSeconds > 0 ? formatHM(teamLoginToShutdownSeconds) : "—"}</div>
-            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 5 }}>Sum of daily login-to-shutdown spans</div>
+            <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 5 }}>Login-to-shutdown less recorded inactivity</div>
           </div>}
         </div>
 
@@ -5574,16 +5574,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
           {showLoginToShutdown && <col style={{ width: "12%" }} />}
           <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
           <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
-        </colgroup><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}{showLoginToShutdown && <th className="num" title="First login-to-shutdown span minus ClockBook tracked time. This is informational and does not affect Karbon match status.">Span vs ClockBook</th>}<th>Status</th><th></th></tr></thead><tbody>
+        </colgroup><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}<th>Status</th><th></th></tr></thead><tbody>
           {teamData.map((entry) => {
             const memberData = entry.data;
             const tolerance = memberData?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
             const memberOk = memberData ? isMatched(memberData.difference_minutes, tolerance) : false;
             const memberLoginToShutdownSeconds = showLoginToShutdown && memberData
-              ? (memberData.rows || []).reduce((sum, row) => sum + (row.first_login_to_shutdown_seconds || 0), 0)
+              ? (memberData.rows || []).reduce((sum, row) => sum + (row.net_first_login_to_shutdown_seconds || 0), 0)
               : 0;
             const memberClockBookSecondsForSpanDays = showLoginToShutdown && memberData
-              ? (memberData.rows || []).reduce((sum, row) => row.first_login_to_shutdown_seconds != null ? sum + ((row.clockbook_minutes || 0) * 60) : sum, 0)
+              ? (memberData.rows || []).reduce((sum, row) => row.net_first_login_to_shutdown_seconds != null ? sum + ((row.clockbook_minutes || 0) * 60) : sum, 0)
               : 0;
             const expanded = expandedMembers.has(entry.member.id);
             return <Fragment key={entry.member.id}>
@@ -5592,8 +5592,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 <td className="num cb-mono">{memberData ? formatHM(memberData.clockbook_minutes * 60) : "—"}</td>
                 <td className="num cb-mono">{memberData ? formatHM(memberData.karbon_minutes * 60) : "—"}</td>
                 <td className="num cb-mono" style={memberData ? (memberOk ? styles.differenceGood : styles.differenceReview) : undefined}>{memberData ? signed(memberData.difference_minutes) : "—"}</td>
-                {showLoginToShutdown && <td className="num cb-mono">{memberData && memberLoginToShutdownSeconds > 0 ? formatHM(memberLoginToShutdownSeconds) : "—"}</td>}
-                {showLoginToShutdown && <td className="num cb-mono" title="First login-to-shutdown span minus ClockBook tracked time for days where a login-to-shutdown span is available. Informational only; it does not affect Karbon match status.">{memberData && memberLoginToShutdownSeconds > 0 ? signedSeconds(memberLoginToShutdownSeconds - memberClockBookSecondsForSpanDays) : "—"}</td>}
+                {showLoginToShutdown && <td className="num cb-mono" title="Sum of daily login-to-shutdown spans less recorded inactivity.">{memberData && memberLoginToShutdownSeconds > 0 ? formatHM(memberLoginToShutdownSeconds) : "—"}</td>}
+                {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus ClockBook tracked time for days where a net span is available. Informational only; it does not affect Karbon match status.">{memberData && memberLoginToShutdownSeconds > 0 ? signedSeconds(memberLoginToShutdownSeconds - memberClockBookSecondsForSpanDays) : "—"}</td>}
                 <td>{memberData ? <span style={styles.statusPill(memberOk)}><span style={styles.statusDot(memberOk)} />{memberOk ? "Matched" : "Review"}</span> : <span className="cb-hint">Unavailable</span>}</td>
                 <td className="num">{memberData && <button type="button" className="cb-icon-btn" title={expanded ? "Hide daily detail" : "Show daily detail"} onClick={() => toggleMember(entry.member.id)}>{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>}</td>
               </tr>
@@ -5617,8 +5617,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                         <td className="num cb-mono">{formatHM(row.clockbook_minutes * 60)}</td>
                         <td className="num cb-mono">{formatHM(row.karbon_minutes * 60)}</td>
                         <td className="num cb-mono" style={rowOk ? styles.differenceGood : styles.differenceReview}>{signed(row.difference_minutes)}</td>
-                        {showLoginToShutdown && <td className="num cb-mono">{row.first_login_to_shutdown_seconds != null ? formatHM(row.first_login_to_shutdown_seconds) : "—"}</td>}
-                        {showLoginToShutdown && <td className="num cb-mono" title="First login-to-shutdown span minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">{row.first_login_to_shutdown_seconds != null ? signedSeconds(row.first_login_to_shutdown_seconds - ((row.clockbook_minutes || 0) * 60)) : "—"}</td>}
+                        {showLoginToShutdown && <td className="num cb-mono" title={row.inactivity_seconds ? `Gross span ${formatHM(row.first_login_to_shutdown_seconds)} less ${formatHM(row.inactivity_seconds)} inactivity` : "First login-to-shutdown span less recorded inactivity time."}>{row.net_first_login_to_shutdown_seconds != null ? formatHM(row.net_first_login_to_shutdown_seconds) : "—"}</td>}
+                        {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">{row.net_first_login_to_shutdown_seconds != null ? signedSeconds(row.net_first_login_to_shutdown_seconds - ((row.clockbook_minutes || 0) * 60)) : "—"}</td>}
                         <td><span style={styles.statusPill(rowOk)}><span style={styles.statusDot(rowOk)} />{rowOk ? "Matched" : "Review"}</span></td>
                         <td><button type="button" className="cb-btn cb-btn-sm" title={row.note || "Add reconciliation note"} onClick={() => setNoteRow({ ...row, _member_id: memberData.member_id, _member_name: memberData.member_name })} style={{ minWidth: 66, justifyContent: "center" }}><StickyNote size={13} />{row.note ? "View" : "Note"}</button></td>
                       </tr>;
