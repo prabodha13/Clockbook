@@ -637,7 +637,9 @@ function resolvedBankAccountId(row, taskId, clientAccounts) {
   return "";
 }
 
-function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, onClose, onDone, onCreateTasks }) {
+const BUILTIN_HELPING_TASK_TYPE = "Helping/Training";
+
+function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, members, currentUser, onClose, onDone, onCreateTasks }) {
   const [rows, setRows] = useState(() =>
     suggestions.map((s) => ({
       suggestion: s,
@@ -647,6 +649,8 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
       templateId: "",
       selectedTaskIds: [], // which specific tasks within the chosen template, none pre-checked
       taskType: "",
+      helpedMemberId: "",
+      helpedMemberByTaskId: {},
       bankAccountByTaskId: {},
     }))
   );
@@ -676,21 +680,31 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
       if (i !== index) return r;
       const isSelected = r.selectedTaskIds.includes(taskId);
       const nextBankAccountByTaskId = { ...r.bankAccountByTaskId };
-      if (isSelected) delete nextBankAccountByTaskId[taskId];
+      const nextHelpedMemberByTaskId = { ...r.helpedMemberByTaskId };
+      if (isSelected) { delete nextBankAccountByTaskId[taskId]; delete nextHelpedMemberByTaskId[taskId]; }
       return {
         ...r,
         selectedTaskIds: isSelected ? r.selectedTaskIds.filter((id) => id !== taskId) : [...r.selectedTaskIds, taskId],
         bankAccountByTaskId: nextBankAccountByTaskId,
+        helpedMemberByTaskId: nextHelpedMemberByTaskId,
       };
     }));
   }
 
   function isRowComplete(row) {
     if (!row.clientId || !row.role || row.useTemplate === null) return false;
-    if (row.useTemplate === false) return !!row.taskType;
+    if (row.useTemplate === false) {
+      if (!row.taskType) return false;
+      if (row.taskType === BUILTIN_HELPING_TASK_TYPE && !row.helpedMemberId) return false;
+      return true;
+    }
     if (!row.templateId || row.selectedTaskIds.length === 0) return false;
     const clientAccounts = bankAccounts.filter((a) => a.client_id === row.clientId);
-    return bankTasksFor(row).every((t) => resolvedBankAccountId(row, t.id, clientAccounts));
+    return selectedTemplateTasksFor(row).every((t) => {
+      if (t.requires_bank_account && !resolvedBankAccountId(row, t.id, clientAccounts)) return false;
+      if (t.task_type === BUILTIN_HELPING_TASK_TYPE && !row.helpedMemberByTaskId[t.id]) return false;
+      return true;
+    });
   }
 
   const allComplete = rows.length > 0 && rows.every(isRowComplete);
@@ -710,6 +724,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
           payloads.push({
             client_id: row.clientId, client_name: client.name, name: row.suggestion.summary,
             role: row.role, task_type: row.taskType,
+            helped_member_id: row.taskType === BUILTIN_HELPING_TASK_TYPE ? row.helpedMemberId : null,
             source_calendar_event_id: row.suggestion.id,
           });
         } else {
@@ -721,6 +736,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
             payloads.push({
               client_id: row.clientId, client_name: client.name, name: tt.name,
               role: row.role, task_type: tt.task_type,
+              helped_member_id: tt.task_type === BUILTIN_HELPING_TASK_TYPE ? (row.helpedMemberByTaskId[tt.id] || null) : null,
               bank_account_id: account ? account.id : null,
               bank_account_name: account ? account.name : "",
               tracks_number_label: tt.tracks_number_label || "",
@@ -780,13 +796,24 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
                   </div>
                 </div>
                 {row.useTemplate === false && (
-                  <div className="cb-field">
-                    <label className="cb-label">Task type</label>
-                    <select className="cb-select" value={row.taskType} onChange={(e) => updateRow(i, { taskType: e.target.value })}>
-                      <option value="">Select a task type</option>
-                      {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
-                    </select>
-                  </div>
+                  <>
+                    <div className="cb-field">
+                      <label className="cb-label">Task type</label>
+                      <select className="cb-select" value={row.taskType} onChange={(e) => updateRow(i, { taskType: e.target.value, helpedMemberId: e.target.value === BUILTIN_HELPING_TASK_TYPE ? row.helpedMemberId : "" })}>
+                        <option value="">Select a task type</option>
+                        {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
+                      </select>
+                    </div>
+                    {row.taskType === BUILTIN_HELPING_TASK_TYPE && (
+                      <div className="cb-field">
+                        <label className="cb-label">Helped / trained person <span style={{ color: "#C53B3B" }}>*</span></label>
+                        <select className="cb-select" value={row.helpedMemberId} onChange={(e) => updateRow(i, { helpedMemberId: e.target.value })}>
+                          <option value="">Select a person</option>
+                          {members.filter((m) => m.id !== currentUser.id).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </select>
+                      </div>
+                    )}
+                  </>
                 )}
                 {row.useTemplate === true && (
                   <>
@@ -817,6 +844,17 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
                                   {t.task_type || "no task type"}
                                   {t.requires_bank_account ? " \u00b7 needs a bank account" : ""}
                                 </div>
+                                {row.selectedTaskIds.includes(t.id) && t.task_type === BUILTIN_HELPING_TASK_TYPE && (
+                                  <select
+                                    className="cb-select" style={{ marginTop: 6 }}
+                                    value={row.helpedMemberByTaskId[t.id] || ""}
+                                    onClick={(e) => e.stopPropagation()}
+                                    onChange={(e) => updateRow(i, { helpedMemberByTaskId: { ...row.helpedMemberByTaskId, [t.id]: e.target.value } })}
+                                  >
+                                    <option value="">Select who was helped / trained</option>
+                                    {members.filter((m) => m.id !== currentUser.id).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                                  </select>
+                                )}
                               </div>
                             </label>
                           ))}
@@ -859,7 +897,7 @@ function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, tas
   );
 }
 
-function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTypes, bankAccounts, members, onCreateTasks }) {
   const [suggestions, setSuggestions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedIds, setSelectedIds] = useState(() => new Set());
@@ -973,7 +1011,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
       )}
       {showReview && (
         <SuggestedTasksReviewModal
-          suggestions={selected} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
+          suggestions={selected} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts} members={members} currentUser={currentUser}
           onClose={() => setShowReview(false)}
           onDone={async () => {
             setShowReview(false);
@@ -1288,7 +1326,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
 
       {(!isAdmin || viewFilter === "mine") && (
         <SuggestedTasksSection
-          currentUser={currentUser} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
+          currentUser={currentUser} clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts} members={members}
           onCreateTasks={onCreateTasks}
         />
       )}
@@ -1528,12 +1566,14 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
   const [bankAccountByTaskId, setBankAccountByTaskId] = useState({});
   const [roleByTaskId, setRoleByTaskId] = useState({});
   const [taskTypeByTaskId, setTaskTypeByTaskId] = useState({});
+  const [helpedMemberByTaskId, setHelpedMemberByTaskId] = useState({});
   const [periodByTaskId, setPeriodByTaskId] = useState({});
   const [taskSearchQuery, setTaskSearchQuery] = useState("");
 
   const [customName, setCustomName] = useState("");
   const [role, setRole] = useState("");
   const [taskType, setTaskType] = useState("");
+  const [helpedMemberId, setHelpedMemberId] = useState("");
 
   const [ownerId, setOwnerId] = useState(currentUser.id);
   const [busy, setBusy] = useState(false);
@@ -1559,6 +1599,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     setBankAccountByTaskId({});
     setRoleByTaskId({});
     setTaskTypeByTaskId({});
+    setHelpedMemberByTaskId({});
     setPeriodByTaskId({});
     setTaskSearchQuery("");
   }
@@ -1569,6 +1610,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
         setBankAccountByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         setRoleByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         setTaskTypeByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
+        setHelpedMemberByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         setPeriodByTaskId((m) => { const next = { ...m }; delete next[id]; return next; });
         return prev.filter((x) => x !== id);
       }
@@ -1621,12 +1663,18 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             setBusy(false);
             return;
           }
+          if (taskTypeByTaskId[t.id] === BUILTIN_HELPING_TASK_TYPE && !helpedMemberByTaskId[t.id]) {
+            setError(`Select who was helped/trained for "${t.name}"`);
+            setBusy(false);
+            return;
+          }
         }
         payloads = chosenTasks.map((t) => {
           const account = t.requires_bank_account ? bankAccounts.find((a) => a.id === bankAccountByTaskId[t.id]) : null;
           return {
             client_id: cId, client_name: cName, name: t.name,
             role: roleByTaskId[t.id], task_type: taskTypeByTaskId[t.id], owner_id: ownerId,
+            helped_member_id: taskTypeByTaskId[t.id] === BUILTIN_HELPING_TASK_TYPE ? helpedMemberByTaskId[t.id] : null,
             bank_account_id: account ? account.id : null,
             bank_account_name: account ? account.name : "",
             tracks_number_label: t.tracks_number_label || "",
@@ -1657,7 +1705,12 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
           setBusy(false);
           return;
         }
-        payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId }];
+        if (taskType === BUILTIN_HELPING_TASK_TYPE && !helpedMemberId) {
+          setError("Select who was helped/trained");
+          setBusy(false);
+          return;
+        }
+        payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId, helped_member_id: taskType === BUILTIN_HELPING_TASK_TYPE ? helpedMemberId : null }];
       }
 
       await onCreate(payloads, startImmediately);
@@ -1764,10 +1817,27 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                                   <select
                                     className="cb-select"
                                     value={taskTypeByTaskId[t.id] || ""}
-                                    onChange={(e) => setTaskTypeByTaskId((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      setTaskTypeByTaskId((prev) => ({ ...prev, [t.id]: value }));
+                                      if (value !== BUILTIN_HELPING_TASK_TYPE) setHelpedMemberByTaskId((prev) => ({ ...prev, [t.id]: "" }));
+                                    }}
                                   >
                                     <option value="">Select a task type</option>
                                     {taskTypes.map((tt) => <option key={tt.id} value={tt.name}>{tt.name}</option>)}
+                                  </select>
+                                </div>
+                              )}
+                              {checked && !disabledForNewClient && taskTypeByTaskId[t.id] === BUILTIN_HELPING_TASK_TYPE && (
+                                <div className="cb-field" style={{ marginTop: 6 }}>
+                                  <label className="cb-label">Helped / trained person <span style={{ color: "#C53B3B" }}>*</span></label>
+                                  <select
+                                    className="cb-select"
+                                    value={helpedMemberByTaskId[t.id] || ""}
+                                    onChange={(e) => setHelpedMemberByTaskId((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                                  >
+                                    <option value="">Select a person</option>
+                                    {members.filter((m) => m.id !== ownerId).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                                   </select>
                                 </div>
                               )}
@@ -1855,7 +1925,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                 </div>
                 <div className="cb-field">
                   <label className="cb-label">Karbon task type</label>
-                  <select className="cb-select" value={taskType} onChange={(e) => setTaskType(e.target.value)}>
+                  <select className="cb-select" value={taskType} onChange={(e) => { const value = e.target.value; setTaskType(value); if (value !== BUILTIN_HELPING_TASK_TYPE) setHelpedMemberId(""); }}>
                     <option value="">Select a task type</option>
                     {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                   </select>
@@ -1863,10 +1933,21 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
               </div>
             )}
 
+            {taskMode === "custom" && taskType === BUILTIN_HELPING_TASK_TYPE && (
+              <div className="cb-field">
+                <label className="cb-label">Helped / trained person <span style={{ color: "#C53B3B" }}>*</span></label>
+                <select className="cb-select" value={helpedMemberId} onChange={(e) => setHelpedMemberId(e.target.value)}>
+                  <option value="">Select a person</option>
+                  {members.filter((m) => m.id !== ownerId).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                </select>
+                <div className="cb-hint" style={{ marginTop: 5 }}>Required only for Helping/Training tasks.</div>
+              </div>
+            )}
+
             <div className="cb-field">
               <label className="cb-label">Assign to</label>
               {isAdminRole(currentUser.role) ? (
-                <select className="cb-select" value={ownerId} onChange={(e) => setOwnerId(e.target.value)}>
+                <select className="cb-select" value={ownerId} onChange={(e) => { const value = e.target.value; setOwnerId(value); if (helpedMemberId === value) setHelpedMemberId(""); setHelpedMemberByTaskId((prev) => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, v === value ? "" : v]))); }}>
                   {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
                 </select>
               ) : (
