@@ -7283,9 +7283,15 @@ function ManualOverridesReportView() {
                     <div className="cb-group-title">Override trend over time</div>
                     <div className="cb-hint" style={{ marginTop: 3 }}>{trendGranularity === "day" ? "Daily" : trendGranularity === "week" ? "Weekly" : "Monthly"} time added versus reduced. Periods with no manual adjustment stay at zero.</div>
                   </div>
-                  <select className="cb-select" value={trendUser} onChange={(e) => setTrendUser(e.target.value)} style={{ width: 240, maxWidth: "42%", flex: "0 0 auto" }} aria-label="Select user for override trend">
-                    {userRows.map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
-                  </select>
+                  <div style={{ width: 260, maxWidth: "42%", flex: "0 0 auto" }}>
+                    <SearchableSelect
+                      options={userRows.map((u) => ({ ...u, id: u.name }))}
+                      value={trendUser}
+                      onChange={setTrendUser}
+                      placeholder="Search user..."
+                      getLabel={(u) => u.name}
+                    />
+                  </div>
                 </div>
                 {trend.length <= 1 ? <div className="cb-empty" style={{ minHeight: 220, display: "grid", placeItems: "center" }}>Choose a multi-day period to see a trend.</div> : <>
                   <div style={{ position: "relative" }} onMouseLeave={() => setTrendHover(null)}>
@@ -7552,16 +7558,8 @@ function SuperAdminReportsView({ members }) {
   const [mode, setMode] = useState("help");
   return (
     <div>
-      <div style={{
-        display: "inline-flex",
-        alignItems: "center",
-        padding: 5,
-        marginBottom: 16,
-        border: "1px solid var(--line)",
-        borderRadius: 10,
-        background: "var(--paper)",
-      }}>
-        <div className="cb-tabs cb-tabs-plain" style={{ width: "fit-content", gap: 2 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, marginBottom: 16, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)", width: "fit-content" }}>
+        <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
           <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
           <button className={`cb-tab cb-tab-plain ${mode === "overrides" ? "active" : ""}`} onClick={() => setMode("overrides")}>Manual overrides</button>
           <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Audit</button>
