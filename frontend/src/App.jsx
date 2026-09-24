@@ -5398,7 +5398,15 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
           </div>
         </div>
 
-        <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
+        <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
+          <col style={{ width: showLoginToShutdown ? "22%" : "30%" }} />
+          <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+          {showLoginToShutdown && <col style={{ width: "21%" }} />}
+          <col style={{ width: showLoginToShutdown ? "14%" : "18%" }} />
+          <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
+        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
           {(data.rows || []).map((r) => {
             const ok = isMatched(r.difference_minutes);
             return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
@@ -5455,7 +5463,15 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
           </div>
         </div>
 
-        <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 72 }}></th></tr></thead><tbody>
+        <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
+          <col style={{ width: showLoginToShutdown ? "22%" : "30%" }} />
+          <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+          {showLoginToShutdown && <col style={{ width: "21%" }} />}
+          <col style={{ width: showLoginToShutdown ? "14%" : "18%" }} />
+          <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
+        </colgroup><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th></th></tr></thead><tbody>
           {teamData.map((entry) => {
             const memberData = entry.data;
             const tolerance = memberData?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
@@ -5477,7 +5493,15 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
               {expanded && memberData && <tr><td colSpan={showLoginToShutdown ? 7 : 6} style={{ padding: 0, background: "var(--paper-soft)" }}>
                 <div style={{ padding: "10px 14px 14px" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{entry.member.name} · Daily comparison</div>
-                  <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
+                  <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
+                    <col style={{ width: showLoginToShutdown ? "22%" : "30%" }} />
+                    <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+                    <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+                    <col style={{ width: showLoginToShutdown ? "11%" : "14%" }} />
+                    {showLoginToShutdown && <col style={{ width: "21%" }} />}
+                    <col style={{ width: showLoginToShutdown ? "14%" : "18%" }} />
+                    <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
+                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
                     {(memberData.rows || []).map((row) => {
                       const rowOk = isMatched(row.difference_minutes, tolerance);
                       return <tr key={`${entry.member.id}-${row.date}`} style={rowOk ? undefined : styles.reviewRow}>
