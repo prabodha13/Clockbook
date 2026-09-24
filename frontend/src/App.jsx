@@ -6694,6 +6694,198 @@ function HelpReportView() {
 }
 
 
+
+function ManualOverridesReportView() {
+  const [rows, setRows] = useState(null);
+  const [error, setError] = useState(false);
+  const [periodMode, setPeriodMode] = useState("today");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const activeRange = useMemo(() => {
+    const now = new Date();
+    if (periodMode === "today") {
+      const from = localDayStart(now.getFullYear(), now.getMonth(), now.getDate());
+      const to = localDayEnd(now.getFullYear(), now.getMonth(), now.getDate());
+      return { fromIso: from.toISOString(), toIso: to.toISOString() };
+    }
+    if (periodMode === "custom") return dateRangeForCustom(customFrom, customTo);
+    return dateRangeForPreset(periodMode);
+  }, [periodMode, customFrom, customTo]);
+
+  const load = useCallback(async (showRefreshing = false) => {
+    if (!activeRange) {
+      setRows([]);
+      return;
+    }
+    if (showRefreshing) setIsRefreshing(true);
+    setError(false);
+    try {
+      const data = await api.getExportRows("all", "all", activeRange.fromIso, activeRange.toIso, "all");
+      setRows((data || []).filter((row) => row.adjusted && row.tracked_seconds != null));
+    } catch (err) {
+      setError(true);
+    } finally {
+      if (showRefreshing) setIsRefreshing(false);
+    }
+  }, [activeRange]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const userRows = useMemo(() => {
+    const grouped = new Map();
+    for (const row of rows || []) {
+      const name = row.tracked_by || "Unknown";
+      const original = Number(row.tracked_seconds || 0);
+      const final = Number(row.seconds || 0);
+      const delta = final - original;
+      if (!grouped.has(name)) grouped.set(name, { name, count: 0, added: 0, reduced: 0, absolute: 0, net: 0 });
+      const item = grouped.get(name);
+      item.count += 1;
+      item.net += delta;
+      item.absolute += Math.abs(delta);
+      if (delta > 0) item.added += delta;
+      if (delta < 0) item.reduced += Math.abs(delta);
+    }
+    return Array.from(grouped.values()).sort((a, b) => b.absolute - a.absolute || b.count - a.count || a.name.localeCompare(b.name));
+  }, [rows]);
+
+  const totals = useMemo(() => {
+    let added = 0, reduced = 0;
+    for (const row of rows || []) {
+      const delta = Number(row.seconds || 0) - Number(row.tracked_seconds || 0);
+      if (delta > 0) added += delta;
+      if (delta < 0) reduced += Math.abs(delta);
+    }
+    return { count: (rows || []).length, users: userRows.length, added, reduced };
+  }, [rows, userRows]);
+
+  const trend = useMemo(() => {
+    const byDate = new Map();
+    for (const row of rows || []) {
+      const date = row.date || (row.work_started_at ? localWorkDateKey(row.work_started_at) : "");
+      if (!date) continue;
+      const name = row.tracked_by || "Unknown";
+      if (!byDate.has(date)) byDate.set(date, new Map());
+      const day = byDate.get(date);
+      const delta = Math.abs(Number(row.seconds || 0) - Number(row.tracked_seconds || 0));
+      day.set(name, (day.get(name) || 0) + delta);
+    }
+    return Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([date, values]) => ({ date, values }));
+  }, [rows]);
+
+  const topUsers = userRows.slice(0, 5);
+  const maxUserSeconds = Math.max(1, ...topUsers.map((u) => u.absolute));
+  const trendMax = Math.max(1, ...trend.flatMap((d) => topUsers.map((u) => d.values.get(u.name) || 0)));
+  const chartW = 720, chartH = 220, padL = 42, padR = 16, padT = 12, padB = 38;
+  const colors = ["#245C43", "#2E5C7A", "#B5590F", "#5C4A8C", "#8C2F3A"];
+
+  const linePoints = (name) => trend.map((d, i) => {
+    const x = trend.length <= 1 ? padL + (chartW - padL - padR) / 2 : padL + i * (chartW - padL - padR) / (trend.length - 1);
+    const y = padT + (chartH - padT - padB) * (1 - (d.values.get(name) || 0) / trendMax);
+    return `${x},${y}`;
+  }).join(" ");
+
+  function signedDuration(seconds) {
+    if (Math.abs(seconds) < 1) return "0m";
+    return `${seconds > 0 ? "+" : "−"}${formatHM(Math.abs(seconds))}`;
+  }
+
+  return (
+    <div>
+      <div className="cb-page-head">
+        <div>
+          <div className="cb-page-title cb-serif">Reports</div>
+          <div className="cb-page-sub">Manual time overrides only. This report reads existing submitted entries and does not change recorded time.</div>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap", minHeight: 64 }}>
+        <div style={{ flex: "0 0 auto" }}>
+          <div className="cb-label">Period</div>
+          <div className="cb-tabs">
+            {[["today","Today"],["this_week","This week"],["last_week","Last week"],["this_month","This month"],["last_month","Last month"],["custom","Custom"]].map(([value, label]) => (
+              <button key={value} className={`cb-tab ${periodMode === value ? "active" : ""}`} onClick={() => setPeriodMode(value)}>{label}</button>
+            ))}
+          </div>
+        </div>
+        {periodMode === "custom" && <div style={{ display: "flex", alignItems: "flex-end", gap: 8, flex: "0 0 auto" }}>
+          <div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ width: 145 }} /></div>
+          <span style={{ color: "var(--ink-faint)", paddingBottom: 10 }}>to</span>
+          <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 145 }} /></div>
+        </div>}
+        <button className="cb-btn cb-btn-sm" onClick={() => load(true)} disabled={isRefreshing || !activeRange} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />{isRefreshing ? "Refreshing…" : "Refresh"}</button>
+      </div>
+
+      {error && <div className="cb-empty">Could not load manual overrides.</div>}
+      {!error && rows === null && <TableSkeleton rows={4} />}
+      {!error && rows !== null && (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 12, marginBottom: 20 }}>
+            {[
+              ["Override entries", totals.count],
+              ["Time added", formatHM(totals.added)],
+              ["Time reduced", formatHM(totals.reduced)],
+              ["Users overriding", totals.users],
+            ].map(([label, value]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "14px 16px" }}><div className="cb-hint" style={{ marginBottom: 5 }}>{label}</div><div style={{ fontSize: 23, fontWeight: 750, color: "var(--ink)" }}>{value}</div></div>)}
+          </div>
+
+          {rows.length === 0 ? <div className="cb-empty">No manually overridden entries were submitted in this period.</div> : <>
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 0.9fr) minmax(0, 1.35fr)", gap: 16, marginBottom: 24 }}>
+              <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16 }}>
+                <div className="cb-group-title">Overrides by user</div>
+                <div className="cb-hint" style={{ margin: "3px 0 16px" }}>Total amount of time changed, ignoring whether the adjustment was up or down.</div>
+                {topUsers.map((u) => <div key={u.name} style={{ display: "grid", gridTemplateColumns: "130px 1fr 70px", alignItems: "center", gap: 10, marginBottom: 11 }}>
+                  <div style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={u.name}>{u.name}</div>
+                  <div style={{ height: 9, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, (u.absolute / maxUserSeconds) * 100)}%`, height: "100%", background: "var(--green)", borderRadius: 999 }} /></div>
+                  <div className="cb-mono" style={{ textAlign: "right" }}>{formatHM(u.absolute)}</div>
+                </div>)}
+              </div>
+
+              <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16, minWidth: 0 }}>
+                <div className="cb-group-title">Override trend over time</div>
+                <div className="cb-hint" style={{ margin: "3px 0 8px" }}>Daily manually changed time for the five users with the largest adjustments in this period.</div>
+                {trend.length <= 1 ? <div className="cb-empty" style={{ minHeight: 220, display: "grid", placeItems: "center" }}>Choose a multi-day period to see a trend.</div> : <>
+                  <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label="Manual override trend by user">
+                    {[0, 0.5, 1].map((r) => { const y = padT + (chartH - padT - padB) * r; return <line key={r} x1={padL} x2={chartW - padR} y1={y} y2={y} stroke="var(--line)" strokeWidth="1" />; })}
+                    {topUsers.map((u, idx) => <polyline key={u.name} fill="none" stroke={colors[idx % colors.length]} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" points={linePoints(u.name)} />)}
+                    <text x={padL} y={chartH - 12} fontSize="11" fill="var(--ink-faint)">{formatDate(`${trend[0].date}T12:00:00`)}</text>
+                    <text x={chartW - padR} y={chartH - 12} fontSize="11" fill="var(--ink-faint)" textAnchor="end">{formatDate(`${trend[trend.length - 1].date}T12:00:00`)}</text>
+                  </svg>
+                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: -4 }}>{topUsers.map((u, idx) => <span key={u.name} className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: colors[idx % colors.length] }} />{u.name}</span>)}</div>
+                </>}
+              </div>
+            </div>
+
+            <div className="cb-group-head" style={{ justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">User summary</div><div className="cb-group-count">{userRows.length}</div></div>
+            <div className="cb-table-wrap" style={{ marginBottom: 24 }}>
+              <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
+                <colgroup><col style={{ width: "34%" }} /><col style={{ width: "13%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "17%" }} /></colgroup>
+                <thead><tr><th>Person</th><th className="num">Overrides</th><th className="num">Time added</th><th className="num">Time reduced</th><th className="num">Net change</th></tr></thead>
+                <tbody>{userRows.map((u) => <tr key={u.name}><td>{u.name}</td><td className="num cb-mono">{u.count}</td><td className="num cb-mono">{formatHM(u.added)}</td><td className="num cb-mono">{formatHM(u.reduced)}</td><td className="num cb-mono">{signedDuration(u.net)}</td></tr>)}</tbody>
+              </table>
+            </div>
+
+            <div className="cb-group-head" style={{ justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Override entries</div><div className="cb-group-count">{rows.length}</div></div>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>An override is an existing submitted task where the final duration differs from the duration ClockBook tracked.</div>
+            <div className="cb-table-wrap" style={{ overflowX: "hidden" }}>
+              <table className="cb-table" style={{ tableLayout: "fixed", width: "100%", minWidth: 0 }}>
+                <colgroup><col style={{ width: "10%" }} /><col style={{ width: "13%" }} /><col style={{ width: "16%" }} /><col style={{ width: "21%" }} /><col style={{ width: "11%" }} /><col style={{ width: "11%" }} /><col style={{ width: "9%" }} /><col style={{ width: "9%" }} /></colgroup>
+                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th className="num">Tracked</th><th className="num">Final</th><th className="num">Difference</th><th>Submitted</th></tr></thead>
+                <tbody>{rows.map((row) => {
+                  const delta = Number(row.seconds || 0) - Number(row.tracked_seconds || 0);
+                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td title={row.note || ""}>{row.task || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined }}>{signedDuration(delta)}</td><td>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
+                })}</tbody>
+              </table>
+            </div>
+          </>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function InactivityAuditView({ members }) {
   const localDate = (d) => {
     const y = d.getFullYear();
@@ -6848,9 +7040,10 @@ function SuperAdminReportsView({ members }) {
     <div>
       <div className="cb-tabs cb-tabs-plain" style={{ marginBottom: 16, width: "fit-content" }}>
         <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
+        <button className={`cb-tab cb-tab-plain ${mode === "overrides" ? "active" : ""}`} onClick={() => setMode("overrides")}>Manual overrides</button>
         <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Audit</button>
       </div>
-      {mode === "help" ? <HelpReportView /> : <InactivityAuditView members={members} />}
+      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : <InactivityAuditView members={members} />}
     </div>
   );
 }
