@@ -5149,6 +5149,10 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [customTo, setCustomTo] = useState("");
   const [data, setData] = useState(null);
   const [teamData, setTeamData] = useState(null);
+  // null means every currently visible team member is selected. Super Admins can narrow
+  // Team View to specific people without changing the underlying reconciliation logic.
+  // Admin/Staff demo modes ignore this filter entirely and continue to use their normal scope.
+  const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState(null);
   const [expandedMembers, setExpandedMembers] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const [teamProgress, setTeamProgress] = useState("");
@@ -5172,6 +5176,12 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     return Array.from(byId.values()).sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
   }, [staffOptions, isAdmin, forceSelfOnly, currentUser?.id, currentUser?.role, currentUser?.pod_id]);
 
+  const canSelectTeamMembers = currentUser?.role === "super_admin" && isAdmin && !forceSelfOnly;
+  const selectedTeamOptions = useMemo(() => {
+    if (!canSelectTeamMembers || selectedTeamMemberIds === null) return teamOptions;
+    return teamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
+  }, [teamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
+
   useEffect(() => {
     if ((!isAdmin || forceSelfOnly) && currentUser?.id) {
       setMemberId(currentUser.id);
@@ -5189,16 +5199,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   async function compare() {
     if (!range) return;
     if (viewMode === "team") {
-      if (!isAdmin || forceSelfOnly || teamOptions.length === 0) return;
+      if (!isAdmin || forceSelfOnly || selectedTeamOptions.length === 0) return;
       setBusy(true); setError(""); setTeamData(null); setTeamProgress("");
       const results = [];
       try {
         // Run sequentially so Team View does not suddenly fan out a large number of Karbon
         // API calls. Each call is the exact same reconciliation request already used by the
         // individual view, preserving all existing calculations and backend permissions.
-        for (let i = 0; i < teamOptions.length; i += 1) {
-          const member = teamOptions[i];
-          setTeamProgress(`${i + 1} of ${teamOptions.length}`);
+        for (let i = 0; i < selectedTeamOptions.length; i += 1) {
+          const member = selectedTeamOptions[i];
+          setTeamProgress(`${i + 1} of ${selectedTeamOptions.length}`);
           try {
             const reconciliation = await api.getKarbonReconciliation(member.id, range.from, range.to);
             results.push({ member, data: reconciliation, error: "" });
@@ -5287,14 +5297,46 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     <div style={styles.controlPanel}>
       <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
         {viewMode === "individual" && isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
-        {viewMode === "team" && <div style={{ minWidth: 220 }}><div className="cb-label">Team</div><div className="cb-input" style={{ display: "flex", alignItems: "center", minHeight: 38 }}>{teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"}</div></div>}
+        {viewMode === "team" && <div style={{ minWidth: canSelectTeamMembers ? 280 : 220 }}>
+          <div className="cb-label">Team</div>
+          {canSelectTeamMembers ? (
+            <details style={{ position: "relative" }}>
+              <summary className="cb-input" style={{ display: "flex", alignItems: "center", minHeight: 38, cursor: "pointer", listStyle: "none", userSelect: "none" }}>
+                <span>{selectedTeamOptions.length} of {teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"} selected</span>
+                <ChevronDown size={14} style={{ marginLeft: "auto" }} />
+              </summary>
+              <div style={{ position: "absolute", zIndex: 80, top: "calc(100% + 5px)", left: 0, minWidth: 300, maxHeight: 320, overflowY: "auto", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)", padding: 8 }}>
+                <div style={{ display: "flex", gap: 6, padding: "2px 2px 8px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={(e) => { e.preventDefault(); setSelectedTeamMemberIds(null); setTeamData(null); }}>Select all</button>
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={(e) => { e.preventDefault(); setSelectedTeamMemberIds(new Set()); setTeamData(null); }}>Clear</button>
+                </div>
+                {teamOptions.map((member) => {
+                  const checked = selectedTeamMemberIds === null || selectedTeamMemberIds.has(member.id);
+                  return <label key={member.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 6px", cursor: "pointer", borderRadius: 6 }}>
+                    <input type="checkbox" className="cb-checkbox" checked={checked} onChange={() => {
+                      setSelectedTeamMemberIds((previous) => {
+                        const next = previous === null ? new Set(teamOptions.map((item) => item.id)) : new Set(previous);
+                        if (next.has(member.id)) next.delete(member.id); else next.add(member.id);
+                        return next;
+                      });
+                      setTeamData(null);
+                    }} />
+                    <span>{member.name}</span>
+                  </label>;
+                })}
+              </div>
+            </details>
+          ) : (
+            <div className="cb-input" style={{ display: "flex", alignItems: "center", minHeight: 38 }}>{teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"}</div>
+          )}
+        </div>}
         <div><div className="cb-label">Period</div><div className="cb-tabs">
           <button className={`cb-tab ${preset === "this_week" ? "active" : ""}`} onClick={() => setPreset("this_week")}>This week</button>
           <button className={`cb-tab ${preset === "last_week" ? "active" : ""}`} onClick={() => setPreset("last_week")}>Last week</button>
           <button className={`cb-tab ${preset === "custom" ? "active" : ""}`} onClick={() => setPreset("custom")}>Custom</button>
         </div></div>
         {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
-        <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !range || (viewMode === "individual" ? !effectiveMemberId : teamOptions.length === 0)}>
+        <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !range || (viewMode === "individual" ? !effectiveMemberId : selectedTeamOptions.length === 0)}>
           {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? "Compare team with Karbon" : "Compare with Karbon")}
         </button>
       </div>
