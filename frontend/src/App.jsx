@@ -2831,21 +2831,26 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
         </div>
       </div>
 
-      {!platformChecked ? (
-        <div className="cb-tmpl-card" aria-hidden="true">
+      {(!platformChecked || isPlatformAdmin) && (
+        <div className="cb-tmpl-card" aria-busy={!platformChecked ? "true" : undefined}>
+          <div className="cb-tmpl-head" style={{ minHeight: 65 }}>
+            {!platformChecked ? (
+              <div aria-hidden="true" style={{ width: "100%", display: "grid", gap: 8 }}>
+                <div style={{ height: 11, width: 150, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+                <div style={{ height: 16, width: 96, borderRadius: 999, background: "var(--border)", opacity: 0.55 }} />
+              </div>
+            ) : (
+              <div>
+                <div className="cb-tmpl-field">Platform administration</div>
+                <div className="cb-tmpl-name">Workspaces</div>
+              </div>
+            )}
+          </div>
           <div style={{ padding: 16, minHeight: 230 }}>
-            <SettingsLoadingBlock rows={5} minHeight={198} />
-          </div>
-        </div>
-      ) : isPlatformAdmin && (
-        <div className="cb-tmpl-card">
-          <div className="cb-tmpl-head">
-            <div>
-              <div className="cb-tmpl-field">Platform administration</div>
-              <div className="cb-tmpl-name">Workspaces</div>
-            </div>
-          </div>
-          <div style={{ padding: 16, minHeight: 154 }}>
+            {!platformChecked ? (
+              <SettingsLoadingBlock rows={5} minHeight={198} />
+            ) : (
+              <>
             <div className="cb-hint" style={{ marginBottom: 14 }}>
               Create a separate company workspace. Each workspace has its own clients, tasks, staff, templates, settings and integrations.
             </div>
@@ -2881,6 +2886,8 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
                   })}
                 </div>
               </div>
+            )}
+              </>
             )}
           </div>
         </div>
