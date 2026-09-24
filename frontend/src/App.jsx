@@ -3702,7 +3702,7 @@ function SettingsView({
               Manage external services connected to this ClockBook workspace. Saved credentials are encrypted on the server and are never returned to the browser after saving.
             </div>
 
-            <div>
+            <div style={{ padding: "2px 0 4px" }}>
               <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Karbon</div>
               <div className="cb-hint" style={{ marginBottom: 8 }}>
                 Connect this ClockBook workspace to its Karbon account.
@@ -3747,9 +3747,9 @@ function SettingsView({
               {karbonMessage && <div className={karbonMessage.toLowerCase().includes("successful") || karbonMessage.toLowerCase().includes("connected") ? "cb-hint" : "cb-error"} style={{ marginTop: 10 }}>{karbonMessage}</div>}
             </div>
 
-            <div style={{ borderTop: "1px solid var(--border)", margin: "14px 0" }} />
+            <div style={{ borderTop: "1px solid var(--line)", margin: "18px 0 16px" }} />
 
-            <div>
+            <div style={{ padding: "2px 0 4px" }}>
               <div className="cb-tmpl-name" style={{ marginBottom: 6 }}>Calamari</div>
               <div className="cb-hint" style={{ marginBottom: 8 }}>
                 Uses approved time off and employee public holidays to reduce available capacity. Remote-work requests do not reduce capacity. Staff are matched by their ClockBook email address.
