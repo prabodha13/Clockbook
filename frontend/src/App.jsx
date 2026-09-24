@@ -6442,7 +6442,7 @@ function HelpReportView() {
   const [details, setDetails] = useState(null);
   const [detailsError, setDetailsError] = useState(false);
   const [sortBy, setSortBy] = useState("received_seconds");
-  const [periodMode, setPeriodMode] = useState("this_week");
+  const [periodMode, setPeriodMode] = useState("today");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [expandedPair, setExpandedPair] = useState(null);
