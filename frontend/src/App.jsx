@@ -6338,12 +6338,15 @@ function HelpReportView() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [expandedPair, setExpandedPair] = useState(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  function loadReports() {
+  function loadReports(showRefreshing = false) {
+    if (showRefreshing) setIsRefreshing(true);
     setDetailsError(false);
     api.getHelpEventsDetail()
       .then(setDetails)
-      .catch(() => setDetailsError(true));
+      .catch(() => setDetailsError(true))
+      .finally(() => { if (showRefreshing) setIsRefreshing(false); });
   }
 
   useEffect(() => { loadReports(); }, []);
@@ -6503,7 +6506,7 @@ function HelpReportView() {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginBottom: 18, flexWrap: "wrap", minHeight: 64 }}>
         <div style={{ flex: "0 0 auto" }}>
           <div className="cb-label">Period</div>
           <div className="cb-tabs">
@@ -6519,7 +6522,7 @@ function HelpReportView() {
           <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 145 }} /></div>
         </div>}
 
-        <button className="cb-btn cb-btn-sm" onClick={loadReports} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
+        <button className="cb-btn cb-btn-sm" onClick={() => loadReports(true)} disabled={isRefreshing} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />{isRefreshing ? "Refreshing…" : "Refresh"}</button>
       </div>
 
       {detailsError && <div className="cb-empty">Could not load this right now.</div>}
@@ -6610,8 +6613,10 @@ function InactivityAuditView({ members }) {
   const [activityRows, setActivityRows] = useState(null);
   const [personId, setPersonId] = useState("");
   const [error, setError] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (showRefreshing = false) => {
+    if (showRefreshing) setIsRefreshing(true);
     setError(false);
     try {
       const [status, activity] = await Promise.all([
@@ -6623,6 +6628,8 @@ function InactivityAuditView({ members }) {
       setEvents(status.enabled ? await api.getInactivityEvents(auditDateRange.from, auditDateRange.to) : []);
     } catch (err) {
       setError(true);
+    } finally {
+      if (showRefreshing) setIsRefreshing(false);
     }
   }, [auditDateRange]);
 
@@ -6658,7 +6665,7 @@ function InactivityAuditView({ members }) {
         <div className="cb-page-title cb-serif">Audit</div>
         <div className="cb-page-sub">Super-admin review of daily start activity plus Clockbook-detected lock, sleep, and offline gaps. Times use each person’s configured time zone.</div>
 
-        <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap", minHeight: 64 }}>
           <div style={{ flex: "0 0 150px" }}>
             <div className="cb-label">Person</div>
             <select className="cb-select" value={personId} onChange={(e) => setPersonId(e.target.value)} style={{ width: 150, minWidth: 150 }}>
@@ -6685,7 +6692,7 @@ function InactivityAuditView({ members }) {
             <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
           </div>}
 
-          <button className="cb-btn cb-btn-sm" onClick={load} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />Refresh</button>
+          <button className="cb-btn cb-btn-sm" onClick={() => load(true)} disabled={isRefreshing} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />{isRefreshing ? "Refreshing…" : "Refresh"}</button>
         </div>
       </div>
       <div className="cb-group-head" style={{ marginTop: 18, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Daily start activity</div><div className="cb-group-count">{filteredActivityRows.length}</div></div>
