@@ -2831,7 +2831,13 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
         </div>
       </div>
 
-      {platformChecked && isPlatformAdmin && (
+      {!platformChecked ? (
+        <div className="cb-tmpl-card" aria-hidden="true">
+          <div style={{ padding: 16, minHeight: 230 }}>
+            <SettingsLoadingBlock rows={5} minHeight={198} />
+          </div>
+        </div>
+      ) : isPlatformAdmin && (
         <div className="cb-tmpl-card">
           <div className="cb-tmpl-head">
             <div>
