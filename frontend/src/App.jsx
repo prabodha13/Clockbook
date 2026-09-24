@@ -5609,7 +5609,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                     {showLoginToShutdown && <col style={{ width: "12%" }} />}
                     <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
                     <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
-                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}{showLoginToShutdown && <th className="num" title="First login-to-shutdown span minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Span vs ClockBook</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
+                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
                     {(memberData.rows || []).map((row) => {
                       const rowOk = isMatched(row.difference_minutes, tolerance);
                       return <tr key={`${entry.member.id}-${row.date}`} style={rowOk ? undefined : styles.reviewRow}>
