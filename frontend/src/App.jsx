@@ -5142,17 +5142,42 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     const day = String(d.getDate()).padStart(2, "0");
     return `${y}-${m}-${day}`;
   };
+  const [viewMode, setViewMode] = useState("individual");
   const [memberId, setMemberId] = useState(currentUser?.id || "");
   const [preset, setPreset] = useState("this_week");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [data, setData] = useState(null);
+  const [teamData, setTeamData] = useState(null);
+  const [expandedMembers, setExpandedMembers] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
+  const [teamProgress, setTeamProgress] = useState("");
   const [error, setError] = useState("");
   const [noteRow, setNoteRow] = useState(null);
   const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
   const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
-  useEffect(() => { if ((!isAdmin || forceSelfOnly) && currentUser?.id) setMemberId(currentUser.id); }, [isAdmin, forceSelfOnly, currentUser?.id]);
+
+  // Team View intentionally mirrors the existing admin visibility model rather than creating
+  // a new permission model: Super Admin sees the workspace, while an Admin sees only the
+  // non-Super-Admin people already in their assigned pod/team (or the existing unscoped admin
+  // set when no pod is assigned). The backend reconciliation endpoint still enforces the same
+  // scope on every member request.
+  const teamOptions = useMemo(() => {
+    if (!isAdmin || forceSelfOnly) return [];
+    if (currentUser?.role === "super_admin") return staffOptions;
+    const visible = staffOptions.filter((m) => m.role !== "super_admin" && (!currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+    const byId = new Map();
+    if (currentUser?.id) byId.set(currentUser.id, currentUser);
+    visible.forEach((m) => byId.set(m.id, m));
+    return Array.from(byId.values()).sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
+  }, [staffOptions, isAdmin, forceSelfOnly, currentUser?.id, currentUser?.role, currentUser?.pod_id]);
+
+  useEffect(() => {
+    if ((!isAdmin || forceSelfOnly) && currentUser?.id) {
+      setMemberId(currentUser.id);
+      setViewMode("individual");
+    }
+  }, [isAdmin, forceSelfOnly, currentUser?.id]);
 
   const range = useMemo(() => {
     if (preset === "custom") return customFrom && customTo ? { from: customFrom, to: customTo } : null;
@@ -5162,7 +5187,35 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   }, [preset, customFrom, customTo]);
 
   async function compare() {
-    if (!effectiveMemberId || !range) return;
+    if (!range) return;
+    if (viewMode === "team") {
+      if (!isAdmin || forceSelfOnly || teamOptions.length === 0) return;
+      setBusy(true); setError(""); setTeamData(null); setTeamProgress("");
+      const results = [];
+      try {
+        // Run sequentially so Team View does not suddenly fan out a large number of Karbon
+        // API calls. Each call is the exact same reconciliation request already used by the
+        // individual view, preserving all existing calculations and backend permissions.
+        for (let i = 0; i < teamOptions.length; i += 1) {
+          const member = teamOptions[i];
+          setTeamProgress(`${i + 1} of ${teamOptions.length}`);
+          try {
+            const reconciliation = await api.getKarbonReconciliation(member.id, range.from, range.to);
+            results.push({ member, data: reconciliation, error: "" });
+          } catch (err) {
+            results.push({ member, data: null, error: err.message || "Could not compare with Karbon" });
+          }
+        }
+        setTeamData(results);
+      } catch (err) {
+        setTeamData(null); setError(err.message || "Could not compare team with Karbon");
+      } finally {
+        setBusy(false); setTeamProgress("");
+      }
+      return;
+    }
+
+    if (!effectiveMemberId) return;
     setBusy(true); setError("");
     try { setData(await api.getKarbonReconciliation(effectiveMemberId, range.from, range.to)); }
     catch (err) { setData(null); setError(err.message || "Could not compare with Karbon"); }
@@ -5175,10 +5228,19 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     return `${n > 0 ? "+" : "−"}${formatHM(Math.abs(n) * 60)}`;
   };
   const toleranceMinutes = data?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
-  const isMatched = (minutes) => Math.abs(minutes || 0) <= toleranceMinutes;
+  const isMatched = (minutes, tolerance = toleranceMinutes) => Math.abs(minutes || 0) <= tolerance;
   const status = data ? (isMatched(data.difference_minutes) ? "Matched" : "Review") : "";
   const reviewCount = data ? (data.rows || []).filter((r) => !isMatched(r.difference_minutes)).length : 0;
   const rangeLabel = range ? `${formatDate(`${range.from}T12:00:00`)} – ${formatDate(`${range.to}T12:00:00`)}` : "";
+
+  const successfulTeamRows = (teamData || []).filter((entry) => entry.data);
+  const teamClockBookMinutes = successfulTeamRows.reduce((sum, entry) => sum + (entry.data.clockbook_minutes || 0), 0);
+  const teamKarbonMinutes = successfulTeamRows.reduce((sum, entry) => sum + (entry.data.karbon_minutes || 0), 0);
+  const teamDifferenceMinutes = teamKarbonMinutes - teamClockBookMinutes;
+  const teamReviewDays = successfulTeamRows.reduce((sum, entry) => {
+    const tolerance = entry.data.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
+    return sum + (entry.data.rows || []).filter((row) => !isMatched(row.difference_minutes, tolerance)).length;
+  }, 0);
 
   const styles = {
     controlPanel: { background: "#fff", border: "1px solid var(--line)", borderRadius: 10, padding: "15px 16px", marginBottom: 16 },
@@ -5200,87 +5262,186 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     differenceReview: { color: "#92400e", fontWeight: 700 },
   };
 
+  const toggleMember = (memberIdToToggle) => {
+    setExpandedMembers((previous) => {
+      const next = new Set(previous);
+      if (next.has(memberIdToToggle)) next.delete(memberIdToToggle);
+      else next.add(memberIdToToggle);
+      return next;
+    });
+  };
+
   return <div>
-    <div className="cb-page-head" style={{ marginBottom: 18 }}>
+    <div className="cb-page-head" style={{ marginBottom: 14 }}>
       <div>
         <div className="cb-page-title cb-serif">Karbon Check</div>
         <div className="cb-page-sub">Reconcile submitted ClockBook time against Karbon for the selected period.</div>
       </div>
     </div>
 
+    {isAdmin && !forceSelfOnly && <div className="cb-tabs" style={{ width: "fit-content", marginBottom: 16 }}>
+      <button type="button" className={`cb-tab ${viewMode === "individual" ? "active" : ""}`} onClick={() => { setViewMode("individual"); setError(""); }}>Individual view</button>
+      <button type="button" className={`cb-tab ${viewMode === "team" ? "active" : ""}`} onClick={() => { setViewMode("team"); setError(""); }}>Team view</button>
+    </div>}
+
     <div style={styles.controlPanel}>
       <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-        {isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "individual" && isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "team" && <div style={{ minWidth: 220 }}><div className="cb-label">Team</div><div className="cb-input" style={{ display: "flex", alignItems: "center", minHeight: 38 }}>{teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"}</div></div>}
         <div><div className="cb-label">Period</div><div className="cb-tabs">
           <button className={`cb-tab ${preset === "this_week" ? "active" : ""}`} onClick={() => setPreset("this_week")}>This week</button>
           <button className={`cb-tab ${preset === "last_week" ? "active" : ""}`} onClick={() => setPreset("last_week")}>Last week</button>
           <button className={`cb-tab ${preset === "custom" ? "active" : ""}`} onClick={() => setPreset("custom")}>Custom</button>
         </div></div>
         {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
-        <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !effectiveMemberId || !range}>{busy ? "Comparing..." : "Compare with Karbon"}</button>
+        <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !range || (viewMode === "individual" ? !effectiveMemberId : teamOptions.length === 0)}>
+          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? "Compare team with Karbon" : "Compare with Karbon")}
+        </button>
       </div>
     </div>
 
     {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
-    {!data && !error && <div className="cb-empty">Select a period to run a reconciliation.</div>}
-    {data && <>
-      <div style={styles.summaryBar}>
-        <div style={styles.summaryItem}>
-          <div style={styles.summaryLabel}>ClockBook</div>
-          <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.clockbook_minutes * 60)}</div>
-        </div>
-        <div style={styles.summaryItem}>
-          <div style={styles.summaryLabel}>Karbon</div>
-          <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.karbon_minutes * 60)}</div>
-        </div>
-        <div style={styles.summaryItem}>
-          <div style={styles.summaryLabel}>Difference</div>
-          <div className="cb-mono" style={{ ...styles.summaryValue, color: status === "Matched" ? "#166534" : "#92400e" }}>{signed(data.difference_minutes)}</div>
-        </div>
-        <div style={styles.summaryStatus(status === "Matched")}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "space-between" }}>
-            <span style={styles.statusPill(status === "Matched")}><span style={styles.statusDot(status === "Matched")} />{status}</span>
-            <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>±{toleranceMinutes}m tolerance</span>
+
+    {viewMode === "individual" && <>
+      {!data && !error && <div className="cb-empty">Select a period to run a reconciliation.</div>}
+      {data && <>
+        <div style={styles.summaryBar}>
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>ClockBook</div>
+            <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.clockbook_minutes * 60)}</div>
           </div>
-          {reviewCount > 0 && <div style={{ fontSize: 11.5, color: "#92400e", marginTop: 6 }}>{reviewCount} day{reviewCount === 1 ? "" : "s"} to review</div>}
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>Karbon</div>
+            <div className="cb-mono" style={styles.summaryValue}>{formatHM(data.karbon_minutes * 60)}</div>
+          </div>
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>Difference</div>
+            <div className="cb-mono" style={{ ...styles.summaryValue, color: status === "Matched" ? "#166534" : "#92400e" }}>{signed(data.difference_minutes)}</div>
+          </div>
+          <div style={styles.summaryStatus(status === "Matched")}>
+            <div style={{ display: "flex", alignItems: "center", gap: 9, justifyContent: "space-between" }}>
+              <span style={styles.statusPill(status === "Matched")}><span style={styles.statusDot(status === "Matched")} />{status}</span>
+              <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>±{toleranceMinutes}m tolerance</span>
+            </div>
+            {reviewCount > 0 && <div style={{ fontSize: 11.5, color: "#92400e", marginTop: 6 }}>{reviewCount} day{reviewCount === 1 ? "" : "s"} to review</div>}
+          </div>
         </div>
-      </div>
 
-      <div className="cb-group-head" style={{ marginBottom: 10 }}>
-        <div>
-          <div className="cb-group-title">Daily comparison</div>
-          <div style={styles.sectionMeta}><span>{data.member_name}</span><span>·</span><span>{rangeLabel}</span></div>
+        <div className="cb-group-head" style={{ marginBottom: 10 }}>
+          <div>
+            <div className="cb-group-title">Daily comparison</div>
+            <div style={styles.sectionMeta}><span>{data.member_name}</span><span>·</span><span>{rangeLabel}</span></div>
+          </div>
         </div>
-      </div>
 
-      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
-        {(data.rows || []).map((r) => {
-          const ok = isMatched(r.difference_minutes);
-          return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
-            <td style={{ fontWeight: 600 }}>{formatDate(`${r.date}T12:00:00`)}</td>
-            <td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td>
-            <td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td>
-            <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
-            {showLoginToShutdown && <td className="num cb-mono">{r.first_login_to_shutdown_seconds != null ? formatHM(r.first_login_to_shutdown_seconds) : "—"}</td>}
-            <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
-            <td>
-              <button type="button" className="cb-btn cb-btn-sm" title={r.note || "Add reconciliation note"} onClick={() => setNoteRow(r)} style={{ minWidth: 66, justifyContent: "center" }}>
-                <StickyNote size={13} />{r.note ? "View" : "Note"}
-              </button>
-            </td>
-          </tr>;
-        })}
-      </tbody></table></div>
-      <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-faint)" }}>ClockBook uses final submitted duration, including manual adjustments. Differences within ±{toleranceMinutes} minutes are treated as matched.</div>
+        <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
+          {(data.rows || []).map((r) => {
+            const ok = isMatched(r.difference_minutes);
+            return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
+              <td style={{ fontWeight: 600 }}>{formatDate(`${r.date}T12:00:00`)}</td>
+              <td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td>
+              <td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td>
+              <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
+              {showLoginToShutdown && <td className="num cb-mono">{r.first_login_to_shutdown_seconds != null ? formatHM(r.first_login_to_shutdown_seconds) : "—"}</td>}
+              <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
+              <td>
+                <button type="button" className="cb-btn cb-btn-sm" title={r.note || "Add reconciliation note"} onClick={() => setNoteRow({ ...r, _member_id: data.member_id, _member_name: data.member_name })} style={{ minWidth: 66, justifyContent: "center" }}>
+                  <StickyNote size={13} />{r.note ? "View" : "Note"}
+                </button>
+              </td>
+            </tr>;
+          })}
+        </tbody></table></div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-faint)" }}>ClockBook uses final submitted duration, including manual adjustments. Differences within ±{toleranceMinutes} minutes are treated as matched.</div>
+      </>}
+    </>}
+
+    {viewMode === "team" && <>
+      {!teamData && !error && <div className="cb-empty">Run the comparison to see your team's Karbon reconciliation.</div>}
+      {teamData && <>
+        <div style={styles.summaryBar}>
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>Team members</div>
+            <div style={styles.summaryValue}>{successfulTeamRows.length}<span style={{ fontSize: 12, fontWeight: 500, color: "var(--ink-faint)" }}> / {teamData.length}</span></div>
+          </div>
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>ClockBook</div>
+            <div className="cb-mono" style={styles.summaryValue}>{formatHM(teamClockBookMinutes * 60)}</div>
+          </div>
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>Karbon</div>
+            <div className="cb-mono" style={styles.summaryValue}>{formatHM(teamKarbonMinutes * 60)}</div>
+          </div>
+          <div style={styles.summaryItem}>
+            <div style={styles.summaryLabel}>Difference</div>
+            <div className="cb-mono" style={{ ...styles.summaryValue, color: teamReviewDays === 0 ? "#166534" : "#92400e" }}>{signed(teamDifferenceMinutes)}</div>
+            <div style={{ fontSize: 11.5, color: teamReviewDays === 0 ? "var(--ink-faint)" : "#92400e", marginTop: 5 }}>{teamReviewDays === 0 ? "All compared days matched" : `${teamReviewDays} day${teamReviewDays === 1 ? "" : "s"} to review`}</div>
+          </div>
+        </div>
+
+        <div className="cb-group-head" style={{ marginBottom: 10 }}>
+          <div>
+            <div className="cb-group-title">Team comparison</div>
+            <div style={styles.sectionMeta}><span>{rangeLabel}</span><span>·</span><span>Expand a person for daily detail</span></div>
+          </div>
+        </div>
+
+        <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th><th style={{ width: 72 }}></th></tr></thead><tbody>
+          {teamData.map((entry) => {
+            const memberData = entry.data;
+            const tolerance = memberData?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
+            const memberOk = memberData ? isMatched(memberData.difference_minutes, tolerance) : false;
+            const expanded = expandedMembers.has(entry.member.id);
+            return <Fragment key={entry.member.id}>
+              <tr style={memberData && !memberOk ? styles.reviewRow : undefined}>
+                <td style={{ fontWeight: 700 }}>{entry.member.name}{entry.error && <div style={{ fontSize: 11.5, fontWeight: 500, color: "#92400e", marginTop: 3 }}>{entry.error}</div>}</td>
+                <td className="num cb-mono">{memberData ? formatHM(memberData.clockbook_minutes * 60) : "—"}</td>
+                <td className="num cb-mono">{memberData ? formatHM(memberData.karbon_minutes * 60) : "—"}</td>
+                <td className="num cb-mono" style={memberData ? (memberOk ? styles.differenceGood : styles.differenceReview) : undefined}>{memberData ? signed(memberData.difference_minutes) : "—"}</td>
+                <td>{memberData ? <span style={styles.statusPill(memberOk)}><span style={styles.statusDot(memberOk)} />{memberOk ? "Matched" : "Review"}</span> : <span className="cb-hint">Unavailable</span>}</td>
+                <td className="num">{memberData && <button type="button" className="cb-icon-btn" title={expanded ? "Hide daily detail" : "Show daily detail"} onClick={() => toggleMember(entry.member.id)}>{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>}</td>
+              </tr>
+              {expanded && memberData && <tr><td colSpan={6} style={{ padding: 0, background: "var(--paper-soft)" }}>
+                <div style={{ padding: "10px 14px 14px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{entry.member.name} · Daily comparison</div>
+                  <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
+                    {(memberData.rows || []).map((row) => {
+                      const rowOk = isMatched(row.difference_minutes, tolerance);
+                      return <tr key={`${entry.member.id}-${row.date}`} style={rowOk ? undefined : styles.reviewRow}>
+                        <td style={{ fontWeight: 600 }}>{formatDate(`${row.date}T12:00:00`)}</td>
+                        <td className="num cb-mono">{formatHM(row.clockbook_minutes * 60)}</td>
+                        <td className="num cb-mono">{formatHM(row.karbon_minutes * 60)}</td>
+                        <td className="num cb-mono" style={rowOk ? styles.differenceGood : styles.differenceReview}>{signed(row.difference_minutes)}</td>
+                        {showLoginToShutdown && <td className="num cb-mono">{row.first_login_to_shutdown_seconds != null ? formatHM(row.first_login_to_shutdown_seconds) : "—"}</td>}
+                        <td><span style={styles.statusPill(rowOk)}><span style={styles.statusDot(rowOk)} />{rowOk ? "Matched" : "Review"}</span></td>
+                        <td><button type="button" className="cb-btn cb-btn-sm" title={row.note || "Add reconciliation note"} onClick={() => setNoteRow({ ...row, _member_id: memberData.member_id, _member_name: memberData.member_name })} style={{ minWidth: 66, justifyContent: "center" }}><StickyNote size={13} />{row.note ? "View" : "Note"}</button></td>
+                      </tr>;
+                    })}
+                  </tbody></table></div>
+                </div>
+              </td></tr>}
+            </Fragment>;
+          })}
+        </tbody></table></div>
+        <div style={{ marginTop: 10, fontSize: 12, color: "var(--ink-faint)" }}>Team View reuses the same individual Karbon reconciliation and the same admin/team access scope. It does not change matching, tolerance, submitted-time, or note logic.</div>
+      </>}
     </>}
 
     {noteRow && <KarbonReconciliationNoteModal
       row={noteRow}
-      memberName={data?.member_name || ""}
+      memberName={noteRow._member_name || data?.member_name || ""}
       onClose={() => setNoteRow(null)}
       onSave={async (note) => {
-        const saved = await api.saveKarbonReconciliationNote(effectiveMemberId, noteRow.date, note);
-        setData((prev) => prev ? { ...prev, rows: (prev.rows || []).map((r) => r.date === noteRow.date ? { ...r, note: saved.note || "" } : r) } : prev);
+        const targetMemberId = noteRow._member_id || effectiveMemberId;
+        const saved = await api.saveKarbonReconciliationNote(targetMemberId, noteRow.date, note);
+        if (viewMode === "team") {
+          setTeamData((previous) => (previous || []).map((entry) => entry.member.id !== targetMemberId || !entry.data ? entry : {
+            ...entry,
+            data: { ...entry.data, rows: (entry.data.rows || []).map((row) => row.date === noteRow.date ? { ...row, note: saved.note || "" } : row) },
+          }));
+        } else {
+          setData((prev) => prev ? { ...prev, rows: (prev.rows || []).map((r) => r.date === noteRow.date ? { ...r, note: saved.note || "" } : r) } : prev);
+        }
         setNoteRow(null);
       }}
     />}
