@@ -3047,17 +3047,27 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
         </div>
         <div style={{ ...SETTINGS_BODY_STYLE, minHeight: 0 }}>
           {activeWorkspace ? (
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 220 }}>
-                  <WorkspaceLogo workspace={activeWorkspace} size={36} />
-                  <div>
-                    <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
-                    <div className="cb-hint" style={{ marginTop: 2 }}>Workspace ID: {activeWorkspace.id}</div>
-                  </div>
+            <div style={{ display: "grid", gap: 8 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+                <WorkspaceLogo workspace={activeWorkspace} size={36} />
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
+                  <div className="cb-hint" style={{ marginTop: 2 }}>Workspace ID: {activeWorkspace.id}</div>
                 </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "end", justifyContent: "space-between", gap: 14, flexWrap: "wrap" }}>
+                {canManageBranding && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", minWidth: 280, flex: "1 1 520px" }}>
+                    <label className="cb-btn cb-btn-sm" style={{ cursor: brandingBusy ? "default" : "pointer" }}>
+                      {brandingBusy ? "Updating..." : activeWorkspace.logo_data_url ? "Replace company logo" : "Upload company logo"}
+                      <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadWorkspaceLogo} disabled={brandingBusy} style={{ display: "none" }} />
+                    </label>
+                    {activeWorkspace.logo_data_url && <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={removeWorkspaceLogo} disabled={brandingBusy}>Remove logo</button>}
+                    <span className="cb-hint">PNG, JPEG or WebP. ClockBook resizes it for the workspace switcher.</span>
+                  </div>
+                )}
                 {workspaces.length > 1 && (
-                  <div style={{ width: 320, maxWidth: "100%" }}>
+                  <div style={{ width: 340, maxWidth: "100%", flex: "0 0 340px" }}>
                     <label className="cb-label" style={{ display: "block", marginBottom: 4 }}>Switch workspace</label>
                     <select
                       className="cb-input"
@@ -3072,16 +3082,6 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
                   </div>
                 )}
               </div>
-              {canManageBranding && (
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <label className="cb-btn cb-btn-sm" style={{ cursor: brandingBusy ? "default" : "pointer" }}>
-                    {brandingBusy ? "Updating..." : activeWorkspace.logo_data_url ? "Replace company logo" : "Upload company logo"}
-                    <input type="file" accept="image/png,image/jpeg,image/webp" onChange={uploadWorkspaceLogo} disabled={brandingBusy} style={{ display: "none" }} />
-                  </label>
-                  {activeWorkspace.logo_data_url && <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={removeWorkspaceLogo} disabled={brandingBusy}>Remove logo</button>}
-                  <span className="cb-hint">PNG, JPEG or WebP. ClockBook resizes it for the workspace switcher.</span>
-                </div>
-              )}
               {brandingMessage && <div className={brandingMessage.toLowerCase().includes("updated") || brandingMessage.toLowerCase().includes("removed") ? "cb-hint" : "cb-error"}>{brandingMessage}</div>}
             </div>
           ) : (
@@ -3130,14 +3130,14 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
             {platformTenants.length > 0 && (
               <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
                 <div className="cb-label" style={{ marginBottom: 7 }}>Platform workspaces</div>
-                <div style={{ display: "grid", gap: 4, maxWidth: 700 }}>
-                  <div aria-hidden="true" style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(160px, 220px)", gap: 18, padding: "0 10px 2px", color: "var(--ink-faint)", fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase" }}>
+                <div style={{ maxWidth: 680, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden", background: "var(--paper)" }}>
+                  <div aria-hidden="true" style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) 190px", gap: 16, padding: "7px 12px", background: "var(--surface)", color: "var(--ink-faint)", fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase", borderBottom: "1px solid var(--border)" }}>
                     <span>Workspace</span><span>Slug</span>
                   </div>
-                  {platformTenants.map((tenant) => {
+                  {platformTenants.map((tenant, index) => {
                     const workspace = workspaces.find((row) => row.id === tenant.id) || tenant;
                     return (
-                      <div key={tenant.id} style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(160px, 220px)", alignItems: "center", gap: 18, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <div key={tenant.id} style={{ display: "grid", gridTemplateColumns: "minmax(300px, 1fr) 190px", alignItems: "center", gap: 16, padding: "8px 12px", borderTop: index === 0 ? "none" : "1px solid var(--border)" }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
                           <WorkspaceLogo workspace={workspace} size={28} />
                           <span style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tenant.name}</span>
