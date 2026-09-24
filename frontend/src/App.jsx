@@ -6761,29 +6761,94 @@ function ManualOverridesReportView() {
     return { count: (rows || []).length, users: userRows.length, added, reduced };
   }, [rows, userRows]);
 
-  const trend = useMemo(() => {
-    const byDate = new Map();
-    for (const row of rows || []) {
-      const date = row.date || (row.work_started_at ? localWorkDateKey(row.work_started_at) : "");
-      if (!date) continue;
-      const name = row.tracked_by || "Unknown";
-      if (!byDate.has(date)) byDate.set(date, new Map());
-      const day = byDate.get(date);
-      const delta = Math.abs(Number(row.seconds || 0) - Number(row.tracked_seconds || 0));
-      day.set(name, (day.get(name) || 0) + delta);
+  const [trendUser, setTrendUser] = useState("");
+
+  useEffect(() => {
+    if (!userRows.length) {
+      if (trendUser) setTrendUser("");
+      return;
     }
-    return Array.from(byDate.entries()).sort(([a], [b]) => a.localeCompare(b)).map(([date, values]) => ({ date, values }));
-  }, [rows]);
+    if (!userRows.some((u) => u.name === trendUser)) setTrendUser(userRows[0].name);
+  }, [userRows, trendUser]);
+
+  const trendGranularity = useMemo(() => {
+    if (periodMode === "this_month" || periodMode === "last_month") return "week";
+    if (periodMode === "custom" && activeRange) {
+      const start = new Date(activeRange.fromIso);
+      const end = new Date(activeRange.toIso);
+      const days = Math.max(1, Math.round((end - start) / 86400000) + 1);
+      if (days > 62) return "month";
+      if (days > 14) return "week";
+    }
+    return "day";
+  }, [periodMode, activeRange]);
+
+  const trend = useMemo(() => {
+    if (!activeRange || !trendUser) return [];
+
+    const start = new Date(activeRange.fromIso);
+    const end = new Date(activeRange.toIso);
+    start.setHours(0, 0, 0, 0);
+    end.setHours(0, 0, 0, 0);
+
+    const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const shortDay = (d) => d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    const buckets = [];
+    let cursor = new Date(start);
+
+    while (cursor <= end) {
+      const bucketStart = new Date(cursor);
+      let bucketEnd = new Date(cursor);
+      let label = shortDay(bucketStart);
+
+      if (trendGranularity === "week") {
+        const daysToSunday = (7 - bucketStart.getDay()) % 7;
+        bucketEnd.setDate(bucketEnd.getDate() + daysToSunday);
+        if (bucketEnd > end) bucketEnd = new Date(end);
+        label = `${shortDay(bucketStart)}–${shortDay(bucketEnd)}`;
+      } else if (trendGranularity === "month") {
+        bucketEnd = new Date(bucketStart.getFullYear(), bucketStart.getMonth() + 1, 0);
+        if (bucketEnd > end) bucketEnd = new Date(end);
+        label = bucketStart.toLocaleDateString(undefined, { month: "short", year: "numeric" });
+      }
+
+      buckets.push({
+        key: dateKey(bucketStart),
+        startKey: dateKey(bucketStart),
+        endKey: dateKey(bucketEnd),
+        label,
+        added: 0,
+        reduced: 0,
+      });
+
+      cursor = new Date(bucketEnd);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    for (const row of rows || []) {
+      if ((row.tracked_by || "Unknown") !== trendUser) continue;
+      const rowDate = row.date || (row.work_started_at ? localWorkDateKey(row.work_started_at) : "");
+      if (!rowDate) continue;
+      const bucket = buckets.find((b) => rowDate >= b.startKey && rowDate <= b.endKey);
+      if (!bucket) continue;
+      const delta = Number(row.seconds || 0) - Number(row.tracked_seconds || 0);
+      if (delta > 0) bucket.added += delta;
+      if (delta < 0) bucket.reduced += Math.abs(delta);
+    }
+
+    return buckets;
+  }, [rows, activeRange, trendUser, trendGranularity]);
 
   const topUsers = userRows.slice(0, 5);
   const maxUserSeconds = Math.max(1, ...topUsers.map((u) => u.absolute));
-  const trendMax = Math.max(1, ...trend.flatMap((d) => topUsers.map((u) => d.values.get(u.name) || 0)));
-  const chartW = 720, chartH = 220, padL = 42, padR = 16, padT = 12, padB = 38;
-  const colors = ["#245C43", "#2E5C7A", "#B5590F", "#5C4A8C", "#8C2F3A"];
+  const trendMax = Math.max(1, ...trend.flatMap((d) => [d.added, d.reduced]));
+  const chartW = 720, chartH = 220, padL = 48, padR = 16, padT = 16, padB = 42;
+  const addedColor = "#B5590F";
+  const reducedColor = "#2E5C7A";
 
-  const linePoints = (name) => trend.map((d, i) => {
+  const linePoints = (key) => trend.map((d, i) => {
     const x = trend.length <= 1 ? padL + (chartW - padL - padR) / 2 : padL + i * (chartW - padL - padR) / (trend.length - 1);
-    const y = padT + (chartH - padT - padB) * (1 - (d.values.get(name) || 0) / trendMax);
+    const y = padT + (chartH - padT - padB) * (1 - (d[key] || 0) / trendMax);
     return `${x},${y}`;
   }).join(" ");
 
@@ -6844,16 +6909,39 @@ function ManualOverridesReportView() {
               </div>
 
               <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16, minWidth: 0 }}>
-                <div className="cb-group-title">Override trend over time</div>
-                <div className="cb-hint" style={{ margin: "3px 0 8px" }}>Daily manually changed time for the five users with the largest adjustments in this period.</div>
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
+                  <div>
+                    <div className="cb-group-title">Override trend over time</div>
+                    <div className="cb-hint" style={{ marginTop: 3 }}>{trendGranularity === "day" ? "Daily" : trendGranularity === "week" ? "Weekly" : "Monthly"} time added versus reduced. Periods with no manual adjustment stay at zero.</div>
+                  </div>
+                  <select className="cb-select" value={trendUser} onChange={(e) => setTrendUser(e.target.value)} style={{ width: 190, flex: "0 0 auto" }} aria-label="Select user for override trend">
+                    {userRows.map((u) => <option key={u.name} value={u.name}>{u.name}</option>)}
+                  </select>
+                </div>
                 {trend.length <= 1 ? <div className="cb-empty" style={{ minHeight: 220, display: "grid", placeItems: "center" }}>Choose a multi-day period to see a trend.</div> : <>
-                  <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label="Manual override trend by user">
+                  <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label={`Manual override trend for ${trendUser}`}>
                     {[0, 0.5, 1].map((r) => { const y = padT + (chartH - padT - padB) * r; return <line key={r} x1={padL} x2={chartW - padR} y1={y} y2={y} stroke="var(--line)" strokeWidth="1" />; })}
-                    {topUsers.map((u, idx) => <polyline key={u.name} fill="none" stroke={colors[idx % colors.length]} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" points={linePoints(u.name)} />)}
-                    <text x={padL} y={chartH - 12} fontSize="11" fill="var(--ink-faint)">{formatDate(`${trend[0].date}T12:00:00`)}</text>
-                    <text x={chartW - padR} y={chartH - 12} fontSize="11" fill="var(--ink-faint)" textAnchor="end">{formatDate(`${trend[trend.length - 1].date}T12:00:00`)}</text>
+                    <text x={padL - 8} y={padT + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">{formatHM(trendMax)}</text>
+                    <text x={padL - 8} y={chartH - padB + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">0m</text>
+                    <polyline fill="none" stroke={addedColor} strokeWidth="2.7" strokeLinejoin="round" strokeLinecap="round" points={linePoints("added")} />
+                    <polyline fill="none" stroke={reducedColor} strokeWidth="2.7" strokeLinejoin="round" strokeLinecap="round" points={linePoints("reduced")} />
+                    {trend.map((d, i) => {
+                      const x = trend.length <= 1 ? padL + (chartW - padL - padR) / 2 : padL + i * (chartW - padL - padR) / (trend.length - 1);
+                      const addedY = padT + (chartH - padT - padB) * (1 - (d.added || 0) / trendMax);
+                      const reducedY = padT + (chartH - padT - padB) * (1 - (d.reduced || 0) / trendMax);
+                      const labelEvery = trend.length <= 7 ? 1 : trend.length <= 14 ? 2 : Math.ceil(trend.length / 7);
+                      const showLabel = i === 0 || i === trend.length - 1 || i % labelEvery === 0;
+                      return <Fragment key={d.key}>
+                        <circle cx={x} cy={addedY} r="3" fill={addedColor}><title>{`${d.label}: added ${formatHM(d.added)}`}</title></circle>
+                        <circle cx={x} cy={reducedY} r="3" fill={reducedColor}><title>{`${d.label}: reduced ${formatHM(d.reduced)}`}</title></circle>
+                        {showLabel && <text x={x} y={chartH - 13} fontSize="10" fill="var(--ink-faint)" textAnchor={i === 0 ? "start" : i === trend.length - 1 ? "end" : "middle"}>{d.label}</text>}
+                      </Fragment>;
+                    })}
                   </svg>
-                  <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: -4 }}>{topUsers.map((u, idx) => <span key={u.name} className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 5 }}><span style={{ width: 8, height: 8, borderRadius: 999, background: colors[idx % colors.length] }} />{u.name}</span>)}</div>
+                  <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: -4 }}>
+                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: addedColor }} />Time added</span>
+                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: reducedColor }} />Time reduced</span>
+                  </div>
                 </>}
               </div>
             </div>
