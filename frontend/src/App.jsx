@@ -5134,7 +5134,7 @@ function KarbonReconciliationNoteModal({ row, memberName, onClose, onSave }) {
   );
 }
 
-function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false }) {
+function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false, showLoginToShutdown = false }) {
   const DEFAULT_TOLERANCE_MINUTES = 10;
   const localDate = (d) => {
     const y = d.getFullYear();
@@ -5253,7 +5253,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div>
       </div>
 
-      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th><th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
+      <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num">First login to shutdown</th>}<th>Status</th><th style={{ width: 92 }}>Note</th></tr></thead><tbody>
         {(data.rows || []).map((r) => {
           const ok = isMatched(r.difference_minutes);
           return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
@@ -5261,6 +5261,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
             <td className="num cb-mono">{formatHM(r.clockbook_minutes * 60)}</td>
             <td className="num cb-mono">{formatHM(r.karbon_minutes * 60)}</td>
             <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
+            {showLoginToShutdown && <td className="num cb-mono">{r.first_login_to_shutdown_seconds != null ? formatHM(r.first_login_to_shutdown_seconds) : "—"}</td>}
             <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
             <td>
               <button type="button" className="cb-btn cb-btn-sm" title={r.note || "Add reconciliation note"} onClick={() => setNoteRow(r)} style={{ minWidth: 66, justifyContent: "center" }}>
@@ -8995,6 +8996,7 @@ export default function App() {
               <KarbonReconciliationView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"} pods={pods}
+                showLoginToShutdown={realIsSuperAdmin}
               />
             )}
             {view === "staff" && (
