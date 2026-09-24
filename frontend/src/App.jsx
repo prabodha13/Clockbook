@@ -6331,16 +6331,16 @@ function AlertsBanner({ onEnable, onDismiss }) {
 }
 
 function HelpReportView() {
-  const [rows, setRows] = useState(null);
-  const [error, setError] = useState(false);
-  const [sortBy, setSortBy] = useState("received_seconds");
   const [details, setDetails] = useState(null);
   const [detailsError, setDetailsError] = useState(false);
+  const [sortBy, setSortBy] = useState("received_seconds");
+  const [periodMode, setPeriodMode] = useState("this_week");
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [expandedPair, setExpandedPair] = useState(null);
 
   function loadReports() {
-    api.getHelpEventsSummary()
-      .then(setRows)
-      .catch(() => setError(true));
+    setDetailsError(false);
     api.getHelpEventsDetail()
       .then(setDetails)
       .catch(() => setDetailsError(true));
@@ -6349,7 +6349,7 @@ function HelpReportView() {
   useEffect(() => { loadReports(); }, []);
 
   async function deleteEntry(entry) {
-    if (!entry.task_id) return; // Logged before this could be linked to a task, nothing to remove here
+    if (!entry.task_id) return;
     if (!window.confirm(`Remove this entry? "${entry.member_name}" ${entry.direction === "helped" ? "helped" : "received help from"} "${entry.colleague_name}" for ${formatHM(entry.seconds)}.`)) return;
     try {
       await api.deleteTask(entry.task_id);
@@ -6359,74 +6359,140 @@ function HelpReportView() {
     }
   }
 
-  const [expandedPerson, setExpandedPerson] = useState(null);
-  const [expandedHelper, setExpandedHelper] = useState(null);
+  function localDateKeyFromDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
 
-  // Level 1: per person, both sides of the ledger kept separate on purpose, since each side
-  // is logged independently and a mismatch between them (one side reported, the other never
-  // did) is itself useful information, not something to silently merge away
-  const helpReceived = useMemo(() => {
+  function startOfLocalWeek(d) {
+    const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    const day = out.getDay();
+    out.setDate(out.getDate() + (day === 0 ? -6 : 1 - day));
+    out.setHours(0, 0, 0, 0);
+    return out;
+  }
+
+  const activeRange = useMemo(() => {
+    const now = new Date();
+    let start = null;
+    let end = null;
+    if (periodMode === "today") {
+      start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    } else if (periodMode === "this_week") {
+      start = startOfLocalWeek(now);
+      end = new Date(start); end.setDate(end.getDate() + 6); end.setHours(23, 59, 59, 999);
+    } else if (periodMode === "last_week") {
+      start = startOfLocalWeek(now); start.setDate(start.getDate() - 7);
+      end = new Date(start); end.setDate(end.getDate() + 6); end.setHours(23, 59, 59, 999);
+    } else if (periodMode === "this_month") {
+      start = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    } else if (periodMode === "last_month") {
+      start = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+      end = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    } else if (periodMode === "custom" && customFrom && customTo) {
+      start = new Date(`${customFrom}T00:00:00`);
+      end = new Date(`${customTo}T23:59:59.999`);
+    }
+    return { start, end };
+  }, [periodMode, customFrom, customTo]);
+
+  const filteredDetails = useMemo(() => {
     if (!details) return [];
+    if (!activeRange.start || !activeRange.end) return details;
+    return details.filter((d) => {
+      const t = new Date(d.created_at).getTime();
+      return Number.isFinite(t) && t >= activeRange.start.getTime() && t <= activeRange.end.getTime();
+    });
+  }, [details, activeRange]);
+
+  const summaryRows = useMemo(() => {
     const byPerson = {};
-    function ensure(name) {
-      if (!byPerson[name]) byPerson[name] = { person: name, selfSeconds: 0, selfCount: 0, helperSeconds: 0, helperCount: 0, helpers: new Set() };
-      return byPerson[name];
-    }
-    for (const d of details) {
-      if (d.direction === "received") {
-        const row = ensure(d.member_name);
-        row.selfSeconds += d.seconds;
-        row.selfCount += 1;
-        row.helpers.add(d.colleague_name);
+    for (const d of filteredDetails) {
+      if (!byPerson[d.member_name]) byPerson[d.member_name] = { member_name: d.member_name, helped_seconds: 0, received_seconds: 0, helped_count: 0, received_count: 0 };
+      const row = byPerson[d.member_name];
+      if (d.direction === "helped") {
+        row.helped_seconds += d.seconds;
+        row.helped_count += 1;
       } else {
-        const row = ensure(d.colleague_name);
-        row.helperSeconds += d.seconds;
-        row.helperCount += 1;
-        row.helpers.add(d.member_name);
+        row.received_seconds += d.seconds;
+        row.received_count += 1;
       }
     }
-    return Object.values(byPerson)
-      .map((r) => ({ ...r, helpersCount: r.helpers.size }))
-      .sort((a, b) => (b.selfSeconds + b.helperSeconds) - (a.selfSeconds + a.helperSeconds));
-  }, [details]);
+    return Object.values(byPerson).sort((a, b) => b[sortBy] - a[sortBy]);
+  }, [filteredDetails, sortBy]);
 
-  // Level 2: for the expanded person, the same self-reported vs helper-reported comparison,
-  // broken down per individual helper instead of aggregated across all of them
-  const helperBreakdown = useMemo(() => {
-    if (!details || !expandedPerson) return [];
-    const byHelper = {};
-    function ensure(name) {
-      if (!byHelper[name]) byHelper[name] = { helper: name, selfSeconds: 0, selfCount: 0, helperSeconds: 0, helperCount: 0 };
-      return byHelper[name];
+  const reconciliationRows = useMemo(() => {
+    const pairs = {};
+    function ensure(receiver, helper) {
+      const key = `${receiver}|||${helper}`;
+      if (!pairs[key]) pairs[key] = { key, receiver, helper, receiverSeconds: 0, receiverCount: 0, helperSeconds: 0, helperCount: 0, entries: [] };
+      return pairs[key];
     }
-    for (const d of details) {
-      if (d.direction === "received" && d.member_name === expandedPerson) {
-        const row = ensure(d.colleague_name);
-        row.selfSeconds += d.seconds;
-        row.selfCount += 1;
-      } else if (d.direction === "helped" && d.colleague_name === expandedPerson) {
-        const row = ensure(d.member_name);
+    for (const d of filteredDetails) {
+      if (d.direction === "received") {
+        const row = ensure(d.member_name, d.colleague_name);
+        row.receiverSeconds += d.seconds;
+        row.receiverCount += 1;
+        row.entries.push(d);
+      } else if (d.direction === "helped") {
+        const row = ensure(d.colleague_name, d.member_name);
         row.helperSeconds += d.seconds;
         row.helperCount += 1;
+        row.entries.push(d);
       }
     }
-    return Object.values(byHelper).sort((a, b) => (b.selfSeconds + b.helperSeconds) - (a.selfSeconds + a.helperSeconds));
-  }, [details, expandedPerson]);
+    return Object.values(pairs).map((row) => {
+      const delta = row.helperSeconds - row.receiverSeconds;
+      let status = "Review";
+      if (row.receiverCount === 0) status = "Missing receiver entry";
+      else if (row.helperCount === 0) status = "Missing helper entry";
+      else if (Math.round(row.receiverSeconds) === Math.round(row.helperSeconds)) status = "Matched";
+      return { ...row, delta, status };
+    }).sort((a, b) => {
+      const aPriority = a.status === "Matched" ? 1 : 0;
+      const bPriority = b.status === "Matched" ? 1 : 0;
+      if (aPriority !== bPriority) return aPriority - bPriority;
+      return Math.abs(b.delta) - Math.abs(a.delta) || a.receiver.localeCompare(b.receiver) || a.helper.localeCompare(b.helper);
+    });
+  }, [filteredDetails]);
 
-  // Level 3: the raw individual entries between exactly this person and this helper, both
-  // directions, only fields that already exist on a help event, nothing invented
-  const pairEntries = useMemo(() => {
-    if (!details || !expandedPerson || !expandedHelper) return [];
-    return details.filter((d) =>
-      (d.direction === "received" && d.member_name === expandedPerson && d.colleague_name === expandedHelper) ||
-      (d.direction === "helped" && d.member_name === expandedHelper && d.colleague_name === expandedPerson)
-    );
-  }, [details, expandedPerson, expandedHelper]);
+  const expandedDailyRows = useMemo(() => {
+    if (!expandedPair) return [];
+    const pair = reconciliationRows.find((r) => r.key === expandedPair);
+    if (!pair) return [];
+    const byDay = {};
+    for (const e of pair.entries) {
+      const key = localDateKeyFromDate(new Date(e.created_at));
+      if (!byDay[key]) byDay[key] = { date: key, receiverSeconds: 0, receiverCount: 0, helperSeconds: 0, helperCount: 0 };
+      if (e.direction === "received") {
+        byDay[key].receiverSeconds += e.seconds;
+        byDay[key].receiverCount += 1;
+      } else {
+        byDay[key].helperSeconds += e.seconds;
+        byDay[key].helperCount += 1;
+      }
+    }
+    return Object.values(byDay).map((day) => {
+      const delta = day.helperSeconds - day.receiverSeconds;
+      let status = "Review";
+      if (day.receiverCount === 0) status = "Missing receiver entry";
+      else if (day.helperCount === 0) status = "Missing helper entry";
+      else if (Math.round(day.receiverSeconds) === Math.round(day.helperSeconds)) status = "Matched";
+      return { ...day, delta, status };
+    }).sort((a, b) => b.date.localeCompare(a.date));
+  }, [expandedPair, reconciliationRows]);
 
-  const sorted = useMemo(() => {
-    if (!rows) return [];
-    return [...rows].sort((a, b) => b[sortBy] - a[sortBy]);
-  }, [rows, sortBy]);
+  useEffect(() => { setExpandedPair(null); }, [periodMode, customFrom, customTo]);
+
+  function statusBadge(status) {
+    const matched = status === "Matched";
+    const missing = status.startsWith("Missing");
+    const border = matched ? "#b7e4c7" : missing ? "#f3c7c7" : "#f4d58d";
+    const background = matched ? "#effaf3" : missing ? "#fff3f3" : "#fff8e8";
+    const color = matched ? "#176b3a" : missing ? "#a33a3a" : "#986000";
+    return <span style={{ display: "inline-flex", alignItems: "center", border: `1px solid ${border}`, background, color, borderRadius: 999, padding: "2px 8px", fontSize: 11, fontWeight: 700 }}>{status}</span>;
+  }
 
   return (
     <div>
@@ -6436,208 +6502,83 @@ function HelpReportView() {
           <div className="cb-page-sub">Who's been helping out, and who's been getting help. Feeds future reporting, nothing here affects billing.</div>
         </div>
       </div>
-      {error && <div className="cb-empty">Could not load this right now.</div>}
-      {!error && rows === null && <TableSkeleton rows={4} />}
-      {!error && rows !== null && rows.length === 0 && (
-        <div className="cb-empty">No help logged yet. This fills in as people use "I helped" or "I received help" from the timer prompts.</div>
+
+      <div className="cb-card" style={{ padding: 14, marginBottom: 18 }}>
+        <div className="cb-label" style={{ marginBottom: 8 }}>Period</div>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
+          <div className="cb-tabs" style={{ width: "fit-content" }}>
+            {[['today','Today'],['this_week','This week'],['last_week','Last week'],['this_month','This month'],['last_month','Last month'],['custom','Custom']].map(([value, label]) => (
+              <button key={value} className={`cb-tab ${periodMode === value ? "active" : ""}`} onClick={() => setPeriodMode(value)}>{label}</button>
+            ))}
+          </div>
+          {periodMode === "custom" && <>
+            <div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} style={{ width: 150 }} /></div>
+            <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 150 }} /></div>
+          </>}
+          <button className="cb-btn cb-btn-sm" onClick={loadReports} style={{ height: 36 }}><RotateCcw size={13} />Refresh</button>
+        </div>
+      </div>
+
+      {detailsError && <div className="cb-empty">Could not load this right now.</div>}
+      {!detailsError && details === null && <TableSkeleton rows={4} />}
+      {!detailsError && details !== null && filteredDetails.length === 0 && (
+        <div className="cb-empty">No help was logged in this period.</div>
       )}
-      {!error && rows !== null && rows.length > 0 && (
+
+      {!detailsError && details !== null && filteredDetails.length > 0 && <>
+        <div className="cb-group-head" style={{ justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Help activity</div><div className="cb-group-count">{summaryRows.length}</div></div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
             <colgroup><col style={{ width: "31%" }} /><col style={{ width: "22%" }} /><col style={{ width: "22%" }} /><col style={{ width: "12.5%" }} /><col style={{ width: "12.5%" }} /></colgroup>
-            <thead>
-              <tr>
-                <th>Person</th>
-                <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("helped_seconds")}>
-                  Time spent helping{sortBy === "helped_seconds" ? " \u2193" : ""}
-                </th>
-                <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("received_seconds")}>
-                  Time received help{sortBy === "received_seconds" ? " \u2193" : ""}
-                </th>
-                <th className="num">Times helped</th>
-                <th className="num">Times received</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((r) => (
-                <tr key={r.member_id}>
-                  <td>{r.member_name}</td>
-                  <td className="num cb-mono">{formatHM(r.helped_seconds)}</td>
-                  <td className="num cb-mono">{formatHM(r.received_seconds)}</td>
-                  <td className="num cb-mono">{r.helped_count}</td>
-                  <td className="num cb-mono">{r.received_count}</td>
-                </tr>
-              ))}
-            </tbody>
+            <thead><tr>
+              <th>Person</th>
+              <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("helped_seconds")}>Time spent helping{sortBy === "helped_seconds" ? " ↓" : ""}</th>
+              <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("received_seconds")}>Time received help{sortBy === "received_seconds" ? " ↓" : ""}</th>
+              <th className="num">Times helped</th><th className="num">Times received</th>
+            </tr></thead>
+            <tbody>{summaryRows.map((r) => <tr key={r.member_name}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.helped_seconds)}</td><td className="num cb-mono">{formatHM(r.received_seconds)}</td><td className="num cb-mono">{r.helped_count}</td><td className="num cb-mono">{r.received_count}</td></tr>)}</tbody>
           </table>
         </div>
-      )}
-      <div className="cb-group-head" style={{ marginTop: 32, justifyContent: "flex-start", gap: 8 }}>
-        <div className="cb-group-title">Help received</div>
-        {details && <div className="cb-group-count">{helpReceived.length}</div>}
-      </div>
-      <div className="cb-hint" style={{ marginBottom: 10 }}>
-        Each side logs independently, so the two totals can differ, that gap is itself worth noticing. Click a person to see who helped them, click a helper to see the individual entries.
-      </div>
-      {!detailsError && details === null && <TableSkeleton rows={4} />}
-      {!detailsError && details !== null && helpReceived.length === 0 && (
-        <div className="cb-empty">No help logged yet.</div>
-      )}
-      {!detailsError && details !== null && helpReceived.length > 0 && (
+
+        <div className="cb-group-head" style={{ marginTop: 30, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Help reconciliation</div><div className="cb-group-count">{reconciliationRows.length}</div></div>
+        <div className="cb-hint" style={{ marginBottom: 10 }}>Compares what the receiver logged against what the helper logged for the same pairing. Matching is based on total duration, so one 60-minute entry can reconcile with two 30-minute entries.</div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
-            <colgroup><col style={{ width: "38%" }} /><col style={{ width: "26%" }} /><col style={{ width: "26%" }} /><col style={{ width: "10%" }} /></colgroup>
-            <thead>
-              <tr>
-                <th>Person</th>
-                <th className="num">Received (self-reported)</th>
-                <th className="num">Received (per helpers)</th>
-                <th className="num">Helpers</th>
+            <colgroup><col style={{ width: "20%" }} /><col style={{ width: "20%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "10%" }} /><col style={{ width: "14%" }} /></colgroup>
+            <thead><tr><th>Receiver</th><th>Helper</th><th className="num">Receiver reported</th><th className="num">Helper reported</th><th className="num">Difference</th><th>Status</th></tr></thead>
+            <tbody>{reconciliationRows.map((r) => <Fragment key={r.key}>
+              <tr className="cb-row-clickable" onClick={() => setExpandedPair(expandedPair === r.key ? null : r.key)} style={{ background: expandedPair === r.key ? "var(--paper)" : undefined }}>
+                <td>{expandedPair === r.key ? "▾" : "▸"} {r.receiver}</td><td>{r.helper}</td>
+                <td className="num cb-mono">{formatHM(r.receiverSeconds)} · {r.receiverCount}x</td>
+                <td className="num cb-mono">{formatHM(r.helperSeconds)} · {r.helperCount}x</td>
+                <td className="num cb-mono">{r.delta === 0 ? "0m" : `${r.delta > 0 ? "+" : "−"}${formatHM(Math.abs(r.delta))}`}</td>
+                <td>{statusBadge(r.status)}</td>
               </tr>
-            </thead>
-            <tbody>
-              {helpReceived.map((r) => (
-                <Fragment key={r.person}>
-                  <tr
-                    className="cb-row-clickable"
-                    style={{ background: expandedPerson === r.person ? "var(--paper)" : undefined }}
-                    onClick={() => { setExpandedPerson(expandedPerson === r.person ? null : r.person); setExpandedHelper(null); }}
-                  >
-                    <td>{expandedPerson === r.person ? "\u25be" : "\u25b8"} {r.person}</td>
-                    <td className="num cb-mono">{formatHM(r.selfSeconds)} &middot; {r.selfCount}x</td>
-                    <td className="num cb-mono">{formatHM(r.helperSeconds)} &middot; {r.helperCount}x</td>
-                    <td className="num cb-mono">{r.helpersCount}</td>
-                  </tr>
-                  {expandedPerson === r.person && (
-                    <tr>
-                      <td colSpan={4} style={{ padding: 0, background: "var(--paper)" }}>
-                        <div style={{ padding: "12px 16px 16px 32px" }}>
-                          <div className="cb-hint" style={{ marginBottom: 8 }}>Helped by, for {r.person}:</div>
-                          {helperBreakdown.length === 0 && <div className="cb-empty">No detail available.</div>}
-                          {helperBreakdown.length > 0 && (
-                            <table className="cb-table" style={{ background: "transparent" }}>
-                              <thead>
-                                <tr>
-                                  <th>Helper</th>
-                                  <th className="num">As helper reported</th>
-                                  <th className="num">As {r.person} reported</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {helperBreakdown.map((h) => (
-                                  <Fragment key={h.helper}>
-                                    <tr
-                                      className="cb-row-clickable"
-                                      onClick={() => setExpandedHelper(expandedHelper === h.helper ? null : h.helper)}
-                                    >
-                                      <td>{expandedHelper === h.helper ? "\u25be" : "\u25b8"} {h.helper}</td>
-                                      <td className="num cb-mono">{formatHM(h.helperSeconds)} &middot; {h.helperCount}x</td>
-                                      <td className="num cb-mono">{formatHM(h.selfSeconds)} &middot; {h.selfCount}x</td>
-                                    </tr>
-                                    {expandedHelper === h.helper && (
-                                      <tr>
-                                        <td colSpan={3} style={{ padding: 0 }}>
-                                          <div style={{ padding: "10px 16px 14px 48px" }}>
-                                            <table className="cb-table" style={{ background: "transparent" }}>
-                                              <thead>
-                                                <tr>
-                                                  <th>When</th>
-                                                  <th>Reported by</th>
-                                                  <th>Direction</th>
-                                                  <th>Context</th>
-                                                  <th className="num">Duration</th>
-                                                </tr>
-                                              </thead>
-                                              <tbody>
-                                                {pairEntries.map((e) => (
-                                                  <tr key={e.id}>
-                                                    <td>{formatDate(e.created_at)}, {new Date(e.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
-                                                    <td>{e.member_name}</td>
-                                                    <td>{e.direction === "helped" ? `Helped ${e.colleague_name}` : `Received help from ${e.colleague_name}`}</td>
-                                                    <td>{e.context || "—"}</td>
-                                                    <td className="num cb-mono">{formatHM(e.seconds)}{e.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                                                  </tr>
-                                                ))}
-                                              </tbody>
-                                            </table>
-                                          </div>
-                                        </td>
-                                      </tr>
-                                    )}
-                                  </Fragment>
-                                ))}
-                              </tbody>
-                            </table>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )}
-                </Fragment>
-              ))}
-            </tbody>
+              {expandedPair === r.key && <tr><td colSpan={6} style={{ padding: 0, background: "var(--paper)" }}><div style={{ padding: "12px 16px 16px 32px" }}>
+                <div className="cb-hint" style={{ marginBottom: 8 }}>Daily comparison for {r.receiver} and {r.helper}</div>
+                <table className="cb-table" style={{ background: "transparent" }}><thead><tr><th>Date</th><th className="num">Receiver reported</th><th className="num">Helper reported</th><th className="num">Difference</th><th>Status</th></tr></thead>
+                  <tbody>{expandedDailyRows.map((day) => <tr key={day.date}><td>{formatDate(`${day.date}T12:00:00`)}</td><td className="num cb-mono">{formatHM(day.receiverSeconds)} · {day.receiverCount}x</td><td className="num cb-mono">{formatHM(day.helperSeconds)} · {day.helperCount}x</td><td className="num cb-mono">{day.delta === 0 ? "0m" : `${day.delta > 0 ? "+" : "−"}${formatHM(Math.abs(day.delta))}`}</td><td>{statusBadge(day.status)}</td></tr>)}</tbody>
+                </table>
+              </div></td></tr>}
+            </Fragment>)}</tbody>
           </table>
         </div>
-      )}
-      <div className="cb-group-head" style={{ marginTop: 32, justifyContent: "flex-start", gap: 8 }}>
-        <div className="cb-group-title">Individual entries</div>
-        {details && <div className="cb-group-count">{details.length}</div>}
-      </div>
-      {detailsError && <div className="cb-empty">Could not load this right now.</div>}
-      {!detailsError && details === null && <TableSkeleton rows={3} />}
-      {!detailsError && details !== null && details.length === 0 && (
-        <div className="cb-empty">Nothing logged yet.</div>
-      )}
-      {!detailsError && details !== null && details.length > 0 && (
+
+        <div className="cb-group-head" style={{ marginTop: 30, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Individual entries</div><div className="cb-group-count">{filteredDetails.length}</div></div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
-            <colgroup>
-              <col style={{ width: "11%" }} />
-              <col style={{ width: "14%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "43%" }} />
-              <col style={{ width: "8%" }} />
-              <col style={{ width: "10%" }} />
-              <col style={{ width: "2%" }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>Person</th>
-                <th>Action</th>
-                <th>Colleague</th>
-                <th>Context</th>
-                <th className="num">Duration</th>
-                <th>When</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {details.map((d) => (
-                <tr key={d.id}>
-                  <td style={{ verticalAlign: "middle" }}>{d.member_name}</td>
-                  <td style={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>{d.direction === "helped" ? "Helped" : "Received help from"}</td>
-                  <td style={{ verticalAlign: "middle" }}>{d.colleague_name}</td>
-                  <td style={{ verticalAlign: "middle", lineHeight: 1.35 }}>{d.context || "—"}</td>
-                  <td className="num cb-mono" style={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                  <td style={{ verticalAlign: "middle", whiteSpace: "nowrap" }}>{formatDate(d.created_at)}<br />{new Date(d.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</td>
-                  <td style={{ verticalAlign: "middle", textAlign: "center", paddingLeft: 4, paddingRight: 4 }}>
-                    <button
-                      className="cb-icon-btn cb-btn-danger" disabled={!d.task_id}
-                      title={d.task_id ? "Delete this entry" : "Logged before this could be linked to a task, nothing to remove here"}
-                      onClick={() => deleteEntry(d)}
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
+            <colgroup><col style={{ width: "11%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /><col style={{ width: "43%" }} /><col style={{ width: "8%" }} /><col style={{ width: "10%" }} /><col style={{ width: "2%" }} /></colgroup>
+            <thead><tr><th>Person</th><th>Action</th><th>Colleague</th><th>Context</th><th className="num">Duration</th><th>When</th><th></th></tr></thead>
+            <tbody>{filteredDetails.map((d) => <tr key={d.id}>
+              <td>{d.member_name}</td><td>{d.direction === "helped" ? "Helped" : "Received"}</td><td>{d.colleague_name}</td><td>{d.context || "—"}</td><td className="num cb-mono">{formatHM(d.seconds)}{d.adjusted && <span title="This time was edited before confirming" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td><td>{formatDate(d.created_at)}</td><td><button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => deleteEntry(d)}><Trash2 size={13} /></button></td>
+            </tr>)}</tbody>
           </table>
         </div>
-      )}
+      </>}
     </div>
   );
 }
+
 
 function InactivityAuditView({ members }) {
   const localDate = (d) => {
