@@ -170,7 +170,8 @@ DEFAULT_TEMPLATE = {
 }
 
 DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
-BUILTIN_HELPING_TASK_TYPE = "Helping"
+BUILTIN_HELPING_TASK_TYPE = "Helping/Training"
+LEGACY_BUILTIN_HELPING_TASK_TYPE = "Helping"
 DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query", BUILTIN_HELPING_TASK_TYPE]
 DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
 UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__"
@@ -188,13 +189,34 @@ def _ensure_builtin_helping_task_type_for_current_tenant(db: Session):
     existing = db.query(models.TaskTypeOption).filter(
         func.lower(models.TaskTypeOption.name) == BUILTIN_HELPING_TASK_TYPE.lower()
     ).first()
-    if existing is None:
-        db.add(models.TaskTypeOption(name=BUILTIN_HELPING_TASK_TYPE, is_billable=False))
-        db.flush()
-    elif existing.is_billable:
-        # Helping is a ClockBook built-in internal support category and is always non-billable.
+    legacy = db.query(models.TaskTypeOption).filter(
+        func.lower(models.TaskTypeOption.name) == LEGACY_BUILTIN_HELPING_TASK_TYPE.lower()
+    ).first()
+
+    # Rename the short-lived original built-in label in place so existing tenant data,
+    # templates and historical task reporting continue under one category.
+    if existing is None and legacy is not None:
+        legacy.name = BUILTIN_HELPING_TASK_TYPE
+        legacy.is_billable = False
+        existing = legacy
+        legacy = None
+    elif existing is None:
+        existing = models.TaskTypeOption(name=BUILTIN_HELPING_TASK_TYPE, is_billable=False)
+        db.add(existing)
+    else:
         existing.is_billable = False
-        db.flush()
+
+    db.query(models.TemplateTask).filter(
+        func.lower(models.TemplateTask.task_type) == LEGACY_BUILTIN_HELPING_TASK_TYPE.lower()
+    ).update({models.TemplateTask.task_type: BUILTIN_HELPING_TASK_TYPE}, synchronize_session=False)
+    db.query(models.TaskInstance).filter(
+        func.lower(models.TaskInstance.task_type) == LEGACY_BUILTIN_HELPING_TASK_TYPE.lower()
+    ).update({models.TaskInstance.task_type: BUILTIN_HELPING_TASK_TYPE}, synchronize_session=False)
+
+    # If both labels ever existed briefly, collapse the legacy option after references move.
+    if legacy is not None and legacy.id != existing.id:
+        db.delete(legacy)
+    db.flush()
 
 
 def _ensure_builtin_task_types_for_all_tenants(db: Session):
@@ -3955,7 +3977,11 @@ def update_member_pod(member_id: str, payload: schemas.MemberPodUpdate, current_
 
 @app.get("/api/task-types", response_model=list[schemas.TaskTypeOut])
 def list_task_types(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return db.query(models.TaskTypeOption).order_by(models.TaskTypeOption.name).all()
+    task_types = db.query(models.TaskTypeOption).all()
+    return sorted(
+        task_types,
+        key=lambda item: (0 if _is_builtin_task_type_name(item.name) else 1, (item.name or "").lower()),
+    )
 
 
 @app.post("/api/task-types", response_model=schemas.TaskTypeOut, status_code=201)
