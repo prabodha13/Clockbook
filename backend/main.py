@@ -5473,6 +5473,8 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
     # Karbon/ClockBook reconciliation calculation. Non-Super-Admin responses never include
     # this field, so it cannot be recovered by inspecting the browser API response.
     login_to_shutdown_by_day = {}
+    net_login_to_shutdown_by_day = {}
+    inactivity_seconds_by_day = {}
     if current_member.role == "super_admin":
         utc_start = datetime.combine(start_date - timedelta(days=1), datetime.min.time())
         utc_end = datetime.combine(end_date + timedelta(days=2), datetime.min.time())
@@ -5496,6 +5498,29 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
             models.DailyPresenceEvent.work_date <= end_date + timedelta(days=1),
         ).order_by(models.DailyPresenceEvent.work_date, models.DailyPresenceEvent.first_seen_at).all()
         presence_by_day = {row.work_date.isoformat(): row for row in presence_rows if start_date <= row.work_date <= end_date}
+
+        # Net span for the Super Admin Karbon check only. Reuse recorded inactivity
+        # events and the same linked-help treatment as the inactivity audit report,
+        # so time already explained as colleague help is not deducted as inactivity.
+        inactivity_events = db.query(models.InactivityEvent).filter(
+            models.InactivityEvent.member_id == target_id,
+            models.InactivityEvent.started_at < utc_end,
+            models.InactivityEvent.ended_at >= utc_start,
+        ).all()
+        inactivity_help_seconds = {}
+        inactivity_ids = [event.id for event in inactivity_events]
+        if inactivity_ids:
+            for inactivity_event_id, help_seconds in (
+                db.query(models.HelpEvent.inactivity_event_id, models.HelpEvent.seconds)
+                .filter(
+                    models.HelpEvent.source == "sleep_alert",
+                    models.HelpEvent.inactivity_event_id.in_(inactivity_ids),
+                )
+                .all()
+            ):
+                if inactivity_event_id:
+                    inactivity_help_seconds[inactivity_event_id] = inactivity_help_seconds.get(inactivity_event_id, 0.0) + max(float(help_seconds or 0), 0.0)
+
         now_utc = datetime.utcnow()
         shutdown_gap = timedelta(hours=3)
         for day_key, first_login_local in first_login_by_day.items():
@@ -5512,7 +5537,25 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
                 continue
             shutdown_local = _utc_naive_to_local(presence.last_seen_at, member)
             if shutdown_local and shutdown_local >= first_login_local:
-                login_to_shutdown_by_day[day_key] = (shutdown_local - first_login_local).total_seconds()
+                gross_span_seconds = (shutdown_local - first_login_local).total_seconds()
+                login_to_shutdown_by_day[day_key] = gross_span_seconds
+
+                inactive_seconds = 0.0
+                for event in inactivity_events:
+                    event_start_local = _utc_naive_to_local(event.started_at, member)
+                    event_end_local = _utc_naive_to_local(event.ended_at, member)
+                    if not event_start_local or not event_end_local:
+                        continue
+                    overlap_start = max(first_login_local, event_start_local)
+                    overlap_end = min(shutdown_local, event_end_local)
+                    if overlap_end <= overlap_start:
+                        continue
+                    overlap_seconds = (overlap_end - overlap_start).total_seconds()
+                    explained_help = min(overlap_seconds, inactivity_help_seconds.get(event.id, 0.0))
+                    inactive_seconds += max(overlap_seconds - explained_help, 0.0)
+
+                inactivity_seconds_by_day[day_key] = inactive_seconds
+                net_login_to_shutdown_by_day[day_key] = max(gross_span_seconds - inactive_seconds, 0.0)
 
     rows = []
     cursor = start_date
@@ -5529,6 +5572,8 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
         }
         if current_member.role == "super_admin":
             row["first_login_to_shutdown_seconds"] = login_to_shutdown_by_day.get(key)
+            row["inactivity_seconds"] = inactivity_seconds_by_day.get(key)
+            row["net_first_login_to_shutdown_seconds"] = net_login_to_shutdown_by_day.get(key)
         rows.append(row)
         cursor += timedelta(days=1)
     cb_total = sum(r["clockbook_minutes"] for r in rows)
