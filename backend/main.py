@@ -4661,10 +4661,33 @@ def delete_task(task_id: str, current_member: models.Member = Depends(get_curren
             )
             if not within_grace_window:
                 raise HTTPException(403, "Only an admin can delete a task that has already been submitted")
-    if linked_help_event:
-        db.delete(linked_help_event)
+
+    # Timer-start diagnostics deliberately reference the task that was started. These rows
+    # are operational diagnostics rather than submitted time, so remove them with an
+    # unsubmitted task instead of allowing their FK to turn a normal delete into a 500.
+    db.query(models.ClockStartEvent).filter(
+        models.ClockStartEvent.task_id == task_id
+    ).delete(synchronize_session=False)
+
+    # Inactivity audit history can remain useful after the task itself is removed. Keep the
+    # inactivity event, but detach its optional task reference so the task can be deleted.
+    db.query(models.InactivityEvent).filter(
+        models.InactivityEvent.task_id == task_id
+    ).update({models.InactivityEvent.task_id: None}, synchronize_session=False)
+
+    # Help rows are task-derived records. Delete every linked row (not just the first one)
+    # before deleting the task so no dependent record can retain a dangling task_id.
+    db.query(models.HelpEvent).filter(
+        models.HelpEvent.task_id == task_id
+    ).delete(synchronize_session=False)
+
     db.delete(task)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        _log_event("task_delete_blocked_by_reference", task_id=task_id, tenant_id=current_member.tenant_id)
+        raise HTTPException(409, "This task is still referenced by another ClockBook record. Refresh and try again")
     return None
 
 
