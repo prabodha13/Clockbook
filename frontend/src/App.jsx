@@ -4663,7 +4663,15 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = 7 * 54;
+    if (!scrollRef.current || state.loading) return;
+    const today = new Date();
+    const visibleWeekStart = new Date(weekStart);
+    const visibleWeekEnd = new Date(weekStart); visibleWeekEnd.setDate(visibleWeekEnd.getDate() + 7);
+    const isCurrentWeek = today >= visibleWeekStart && today < visibleWeekEnd;
+    const targetHour = isCurrentWeek && today.getHours() >= 8 && today.getHours() <= 18
+      ? Math.max(8, today.getHours() - 1)
+      : 8;
+    scrollRef.current.scrollTop = targetHour * 60;
   }, [weekStart, state.loading]);
 
   const eventsByDay = useMemo(() => {
@@ -4678,6 +4686,8 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
   const hourStart = 0;
   const hourEnd = 24;
   const hourHeight = 60;
+  const calendarColumns = "82px repeat(7, minmax(132px, 1fr))";
+  const calendarScrollbarWidth = 8;
   const gridHeight = (hourEnd - hourStart) * hourHeight;
   const hours = Array.from({ length: 25 }, (_, i) => i);
 
@@ -4781,7 +4791,15 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
       {!state.loading && !state.connected && <div className="cb-empty"><span className="cb-empty-title">Not connected yet</span><br />Connect your Google Calendar to use the interactive calendar.<div style={{ marginTop: 14 }}><button className="cb-btn cb-btn-primary" onClick={onConnectCalendar}><CalendarIcon size={14} />Connect Google Calendar</button></div></div>}
       {!state.loading && state.connected && state.error && <div className="cb-error" style={{ marginBottom: 10 }}>{state.error}</div>}
 
-      {!state.loading && state.connected && <div style={{ background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 18, overflow: "hidden", boxShadow: "0 12px 34px rgba(20,37,29,.06)" }}>
+      {!state.loading && state.connected && <>
+      <style>{`
+        .cb-calendar-scroll { scrollbar-width: thin; scrollbar-color: rgba(91, 102, 96, .5) transparent; }
+        .cb-calendar-scroll::-webkit-scrollbar { width: 8px; }
+        .cb-calendar-scroll::-webkit-scrollbar-track { background: transparent; }
+        .cb-calendar-scroll::-webkit-scrollbar-thumb { background: rgba(91, 102, 96, .42); border-radius: 999px; }
+        .cb-calendar-scroll::-webkit-scrollbar-thumb:hover { background: rgba(91, 102, 96, .62); }
+      `}</style>
+      <div style={{ background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 18, overflow: "hidden", boxShadow: "0 12px 34px rgba(20,37,29,.06)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "12px 14px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button className="cb-btn cb-btn-sm" onClick={() => setWeekStart(startOfTodayWeek())}>Today</button>
@@ -4794,7 +4812,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
 
         <div style={{ overflowX: "auto" }}>
           <div style={{ minWidth: 1040 }}>
-            <div style={{ display: "grid", gridTemplateColumns: "82px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", background: "#FBFCFA" }}>
+            <div style={{ display: "grid", gridTemplateColumns: calendarColumns, paddingRight: calendarScrollbarWidth, boxSizing: "border-box", borderBottom: "1px solid var(--line)", background: "#FBFCFA" }}>
               <div style={{ borderRight: "1px solid var(--line)" }} />
               {weekDays.map((d, idx) => {
                 const isToday = dayKey(d) === todayKey;
@@ -4805,18 +4823,18 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
               })}
             </div>
 
-            <div style={{ display: "grid", gridTemplateColumns: "82px repeat(7, minmax(132px, 1fr))", borderBottom: "1px solid var(--line)", minHeight: 46 }}>
+            <div style={{ display: "grid", gridTemplateColumns: calendarColumns, paddingRight: calendarScrollbarWidth, boxSizing: "border-box", borderBottom: "1px solid var(--line)", minHeight: 44 }}>
               <div style={{ padding: "9px 6px", borderRight: "1px solid var(--line)", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>All day</div>
               {weekDays.map((d, idx) => {
                 const items = (eventsByDay.get(dayKey(d)) || []).filter((ev) => ev.all_day);
-                return <div key={dayKey(d)} onDoubleClick={() => setEditor({ mode: "create", initialStart: new Date(d), initialAllDay: true })} style={{ padding: 5, borderRight: idx === 6 ? "none" : "1px solid var(--line)", minHeight: 46 }}>
-                  {items.map((ev) => <button key={ev.id} onClick={() => setEditor({ mode: "edit", event: ev })} style={{ width: "100%", border: "none", borderRadius: 7, background: "#EEF7F1", color: "#245C43", padding: "5px 7px", marginBottom: 3, textAlign: "left", fontSize: 11, fontWeight: 700, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.summary}</button>)}
+                return <div key={dayKey(d)} onDoubleClick={() => setEditor({ mode: "create", initialStart: new Date(d), initialAllDay: true })} style={{ padding: 5, borderRight: idx === 6 ? "none" : "1px solid var(--line)", minHeight: 44, background: dayKey(d) === todayKey ? "rgba(36,92,67,.018)" : "transparent" }}>
+                  {items.map((ev) => <button key={ev.id} onClick={() => setEditor({ mode: "edit", event: ev })} style={{ width: "100%", border: "none", borderRadius: 7, background: "rgba(36,92,67,.065)", color: "#245C43", padding: "5px 7px", marginBottom: 3, textAlign: "left", fontSize: 11, fontWeight: 700, cursor: "pointer", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{ev.summary}</button>)}
                 </div>;
               })}
             </div>
 
-            <div ref={scrollRef} style={{ maxHeight: 720, overflowY: "auto", position: "relative" }}>
-              <div style={{ display: "grid", gridTemplateColumns: "82px repeat(7, minmax(132px, 1fr))" }}>
+            <div ref={scrollRef} className="cb-calendar-scroll" style={{ maxHeight: 690, overflowY: "auto", position: "relative", scrollbarGutter: "stable" }}>
+              <div style={{ display: "grid", gridTemplateColumns: calendarColumns }}>
                 <div style={{ height: gridHeight, position: "relative", borderRight: "1px solid var(--line)", background: "#FBFCFA" }}>
                   {hours.map((h) => <div key={h} style={{ position: "absolute", top: h * hourHeight - 7, width: "100%", textAlign: "center", fontSize: 10, color: "var(--muted)" }}>{h === 24 ? "" : `${String(h).padStart(2,"0")}:00`}</div>)}
                 </div>
@@ -4826,7 +4844,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
                   return <div key={key}
                     onClick={(e) => { if (e.target === e.currentTarget) openCreateForSlot(d, e.clientY, e.currentTarget.getBoundingClientRect()); }}
                     onDragOver={(e) => e.preventDefault()} onDrop={(e) => handleDrop(d, e)}
-                    style={{ height: gridHeight, position: "relative", borderRight: idx === 6 ? "none" : "1px solid var(--line)", backgroundColor: key === todayKey ? "#FCFEFC" : (idx >= 5 ? "#FCFCFA" : "white"), backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, var(--line) ${hourHeight - 1}px, var(--line) ${hourHeight}px), repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2 - 1}px, rgba(40,60,50,.045) ${hourHeight/2}px)` }}>
+                    style={{ height: gridHeight, position: "relative", borderRight: idx === 6 ? "none" : "1px solid rgba(91,102,96,.16)", backgroundColor: key === todayKey ? "rgba(36,92,67,.018)" : (idx >= 5 ? "#FDFEFC" : "white"), backgroundImage: `repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight - 1}px, rgba(91,102,96,.16) ${hourHeight - 1}px, rgba(91,102,96,.16) ${hourHeight}px), repeating-linear-gradient(to bottom, transparent 0, transparent ${hourHeight/2 - 1}px, rgba(91,102,96,.055) ${hourHeight/2 - 1}px, rgba(91,102,96,.055) ${hourHeight/2}px)` }}>
                     {key === todayKey && nowTop >= 0 && nowTop <= gridHeight && <div style={{ position: "absolute", top: nowTop, left: 0, right: 0, height: 1, background: "#D94A4A", zIndex: 5, pointerEvents: "none" }}><span style={{ position: "absolute", left: -4, top: -3, width: 7, height: 7, borderRadius: 99, background: "#D94A4A" }} /></div>}
                     {items.map((ev, evIdx) => {
                       const pos = eventPosition(ev);
@@ -4847,7 +4865,7 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
             </div>
           </div>
         </div>
-      </div>}
+      </div></>}
 
       {editor && <CalendarEventModal
         event={editor.mode === "edit" ? editor.event : null}
