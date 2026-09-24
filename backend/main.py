@@ -500,6 +500,8 @@ def run_startup_migrations():
     if "tasks" in inspector.get_table_names():
         existing_task_columns = {c["name"] for c in inspector.get_columns("tasks")}
         with engine.begin() as conn:
+            if "helped_member_id" not in existing_task_columns:
+                conn.execute(text("ALTER TABLE tasks ADD COLUMN helped_member_id VARCHAR"))
             if "bank_account_id" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN bank_account_id VARCHAR"))
             if "bank_account_name" not in existing_task_columns:
@@ -4325,6 +4327,19 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
     task_type = (payload.task_type or "").strip()
     _validate_configured_role_and_task_type(db, role, task_type)
 
+    helped_member_id = payload.helped_member_id if task_type.lower() == BUILTIN_HELPING_TASK_TYPE.lower() else None
+    if task_type.lower() == BUILTIN_HELPING_TASK_TYPE.lower():
+        if not helped_member_id:
+            raise HTTPException(400, "Select who was helped/trained")
+        helped_member = db.query(models.Member).filter(
+            models.Member.id == helped_member_id,
+            models.Member.tenant_id == current_member.tenant_id,
+        ).first()
+        if not helped_member:
+            raise HTTPException(400, "Select a valid person who was helped/trained")
+        if helped_member_id == owner_id:
+            raise HTTPException(400, "The person helped/trained must be someone other than the task owner")
+
     source_template_task_id = payload.source_template_task_id
     # Backward compatibility for an already-open browser tab from the previous deployment:
     # resolve its template-name + task-name pair to the real server-side TemplateTask id.
@@ -4399,6 +4414,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         name=task_name,
         role=role,
         task_type=task_type,
+        helped_member_id=helped_member_id,
         owner_id=owner_id,
         status="todo",
         segments=[],

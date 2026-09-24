@@ -293,6 +293,7 @@ class TaskOut(BaseModel):
     name: str
     role: str
     task_type: str
+    helped_member_id: Optional[str] = None
     status: str
     owner_id: Optional[str] = None
     segments: List[Segment]
@@ -340,6 +341,7 @@ class TaskCreate(BaseModel):
     name: str
     role: str = ""
     task_type: str = ""
+    helped_member_id: Optional[str] = None
     owner_id: Optional[str] = None
     bank_account_id: Optional[str] = None
     bank_account_name: str = ""

@@ -266,6 +266,7 @@ class TaskInstance(TenantScopedMixin, Base):
     name = Column(String, nullable=False)
     role = Column(String, default="")
     task_type = Column(String, default="")
+    helped_member_id = Column(String, ForeignKey("members.id"), nullable=True)
     status = Column(String, default="todo")
     owner_id = Column(String, ForeignKey("members.id"), nullable=True)
     segments = Column(JSON, default=list)
