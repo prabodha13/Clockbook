@@ -3047,13 +3047,30 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
         </div>
         <div style={{ ...SETTINGS_BODY_STYLE, minHeight: 0 }}>
           {activeWorkspace ? (
-            <div style={{ display: "grid", gap: 8 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <WorkspaceLogo workspace={activeWorkspace} size={38} />
-                <div>
-                  <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
-                  <div className="cb-hint" style={{ marginTop: 3 }}>Workspace ID: {activeWorkspace.id}</div>
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 18, flexWrap: "wrap" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 11, minWidth: 220 }}>
+                  <WorkspaceLogo workspace={activeWorkspace} size={36} />
+                  <div>
+                    <div style={{ fontSize: 15, fontWeight: 700 }}>{activeWorkspace.name}</div>
+                    <div className="cb-hint" style={{ marginTop: 2 }}>Workspace ID: {activeWorkspace.id}</div>
+                  </div>
                 </div>
+                {workspaces.length > 1 && (
+                  <div style={{ width: 320, maxWidth: "100%" }}>
+                    <label className="cb-label" style={{ display: "block", marginBottom: 4 }}>Switch workspace</label>
+                    <select
+                      className="cb-input"
+                      value={activeWorkspaceId || ""}
+                      onChange={(e) => onSwitchWorkspace && onSwitchWorkspace(e.target.value)}
+                      style={{ width: "100%", minHeight: 36 }}
+                    >
+                      {workspaces.map((workspace) => (
+                        <option key={workspace.id} value={workspace.id}>{workspace.name} · {roleLabel(workspace.role)}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
               {canManageBranding && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
@@ -3066,21 +3083,6 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
                 </div>
               )}
               {brandingMessage && <div className={brandingMessage.toLowerCase().includes("updated") || brandingMessage.toLowerCase().includes("removed") ? "cb-hint" : "cb-error"}>{brandingMessage}</div>}
-              {workspaces.length > 1 && (
-                <div style={{ maxWidth: 320 }}>
-                  <label className="cb-label" style={{ display: "block", marginBottom: 4 }}>Switch workspace</label>
-                  <select
-                    className="cb-input"
-                    value={activeWorkspaceId || ""}
-                    onChange={(e) => onSwitchWorkspace && onSwitchWorkspace(e.target.value)}
-                    style={{ width: "100%" }}
-                  >
-                    {workspaces.map((workspace) => (
-                      <option key={workspace.id} value={workspace.id}>{workspace.name} · {roleLabel(workspace.role)}</option>
-                    ))}
-                  </select>
-                </div>
-              )}
             </div>
           ) : (
             <div className="cb-hint">Workspace information is unavailable.</div>
@@ -3127,17 +3129,20 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
             {workspaceMessage && <div className="cb-hint" style={{ marginTop: 10 }}>{workspaceMessage}</div>}
             {platformTenants.length > 0 && (
               <div style={{ marginTop: 12, borderTop: "1px solid var(--border)", paddingTop: 10 }}>
-                <div className="cb-label" style={{ marginBottom: 8 }}>Platform workspaces</div>
-                <div style={{ display: "grid", gap: 4, maxWidth: 620 }}>
+                <div className="cb-label" style={{ marginBottom: 7 }}>Platform workspaces</div>
+                <div style={{ display: "grid", gap: 4, maxWidth: 700 }}>
+                  <div aria-hidden="true" style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(160px, 220px)", gap: 18, padding: "0 10px 2px", color: "var(--ink-faint)", fontSize: 10.5, fontWeight: 700, letterSpacing: ".04em", textTransform: "uppercase" }}>
+                    <span>Workspace</span><span>Slug</span>
+                  </div>
                   {platformTenants.map((tenant) => {
                     const workspace = workspaces.find((row) => row.id === tenant.id) || tenant;
                     return (
-                      <div key={tenant.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "6px 9px", border: "1px solid var(--border)", borderRadius: 8 }}>
+                      <div key={tenant.id} style={{ display: "grid", gridTemplateColumns: "minmax(260px, 1fr) minmax(160px, 220px)", alignItems: "center", gap: 18, padding: "6px 10px", border: "1px solid var(--border)", borderRadius: 8 }}>
                         <span style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
                           <WorkspaceLogo workspace={workspace} size={28} />
-                          <span style={{ fontWeight: 650 }}>{tenant.name}</span>
+                          <span style={{ fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tenant.name}</span>
                         </span>
-                        <span className="cb-hint">{tenant.slug}</span>
+                        <span className="cb-hint" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tenant.slug}</span>
                       </div>
                     );
                   })}
