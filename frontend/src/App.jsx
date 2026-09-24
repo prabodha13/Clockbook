@@ -1518,7 +1518,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
 
 function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
-  const [clientId, setClientId] = useState(clients[0] ? clients[0].id : "");
+  const [clientId, setClientId] = useState("");
   const [newClientName, setNewClientName] = useState("");
   const [newClientCode, setNewClientCode] = useState("");
 
@@ -1580,7 +1580,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     });
   }
 
-  async function handleSubmit(e) {
+  async function handleSubmit(e, startImmediately = false) {
     e.preventDefault();
     setError("");
     let cId = clientId, cName = "";
@@ -1593,7 +1593,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
         cId = c.id; cName = c.name;
       } else {
         const c = clients.find((c) => c.id === clientId);
-        if (!c) { setBusy(false); return; }
+        if (!c) { setError("Select a client"); setBusy(false); return; }
         cName = c.name;
       }
 
@@ -1660,7 +1660,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
         payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId }];
       }
 
-      await onCreate(payloads);
+      await onCreate(payloads, startImmediately);
     } catch (err) {
       setError(err.message);
       setBusy(false);
@@ -1879,6 +1879,15 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
             <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>
               {taskMode === "template" && selectedTaskIds.length > 1 ? `Add ${selectedTaskIds.length} tasks` : "Add to dashboard"}
+            </button>
+            <button
+              type="button"
+              className="cb-btn cb-btn-primary"
+              disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
+              title={ownerId !== currentUser.id ? "A timer can only be started for your own task" : (taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task to add and start" : "Add this task and start its timer immediately")}
+              onClick={(e) => handleSubmit(e, true)}
+            >
+              Add & Start
             </button>
           </div>
         </form>
@@ -8799,13 +8808,14 @@ export default function App() {
     }
   }
 
-  async function createTasks(payloads) {
+  async function createTasks(payloads, startImmediately = false) {
     const created = [];
     for (const payload of payloads) {
       const task = await api.createTask(payload);
       created.push(task);
     }
     let finalTasks = created;
+    let startedByForgotToTrackRecovery = false;
     if (forgotToTrackGapMsRef.current != null && created.length > 0) {
       const gapMs = forgotToTrackGapMsRef.current;
       forgotToTrackGapMsRef.current = null;
@@ -8813,6 +8823,7 @@ export default function App() {
       try {
         const started = await api.startTask(created[0].id, null, backdatedIso);
         finalTasks = [started, ...created.slice(1)];
+        startedByForgotToTrackRecovery = true;
       } catch (err) {
         // If backdating fails for any reason, the task still exists as a plain to-do,
         // nothing is lost, the person can just start it themselves
@@ -8820,6 +8831,9 @@ export default function App() {
     }
     setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
+    if (startImmediately && finalTasks.length === 1 && !startedByForgotToTrackRecovery) {
+      requestStart(finalTasks[0]);
+    }
   }
 
   async function trackMeetingAsTask(clientId) {
