@@ -347,7 +347,8 @@ function LoginScreen({ onLogin }) {
           display: "flex", alignItems: "center", justifyContent: "center",
           boxShadow: "0 14px 28px rgba(36, 92, 67, 0.18)",
         }}><Clock size={40} strokeWidth={2.2} /></div>
-        <div className="cb-welcome-title" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", color: "#0f172a", marginBottom: 22 }}>ClockBook</div>
+        <div className="cb-welcome-title" style={{ fontSize: 28, fontWeight: 800, letterSpacing: "-0.03em", color: "#0f172a", marginBottom: 6 }}>ClockBook</div>
+        <div style={{ fontSize: 15, fontWeight: 650, color: "#587064", letterSpacing: "0.01em", marginBottom: 24 }}>Track work. Stay accurate.</div>
         <div style={{ fontSize: 56, lineHeight: 1.02, fontWeight: 800, letterSpacing: "-0.05em", color: "#071321", marginBottom: 12 }}>Welcome back</div>
         <div className="cb-welcome-sub" style={{ fontSize: 18, color: "#64748b", maxWidth: 420, margin: "0 auto 34px", lineHeight: 1.45 }}>Sign in to continue to your workspace.</div>
         <form onSubmit={submit} style={{ maxWidth: 530, margin: "0 auto" }}>
