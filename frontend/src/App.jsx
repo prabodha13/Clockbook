@@ -3339,21 +3339,32 @@ function SettingsView({
           </div>
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Task types</div>
-            {taskTypes.map((t) => (
-              <div key={t.id} className="cb-client-account-row" style={{ gap: 10 }}>
-                <div style={{ fontSize: 13.5, flex: 1, minWidth: 0 }}>{t.name}</div>
-                <button
-                  type="button"
-                  className="cb-btn cb-btn-sm"
-                  onClick={() => onUpdateTaskTypeBilling(t.id, !t.is_billable)}
-                  style={{ minWidth: 92, justifyContent: "center", color: t.is_billable ? "#168A45" : "var(--ink-soft)", background: t.is_billable ? "#EAF8EF" : "#F5F6F7" }}
-                  title="Used by Capacity & Utilization"
-                >
-                  {t.is_billable ? "Billable" : "Non-billable"}
-                </button>
-                <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTaskType(t.id)}><Trash2 size={13} /></button>
-              </div>
-            ))}
+            {taskTypes.map((t) => {
+              const isBuiltInHelping = (t.name || "").trim().toLowerCase() === "helping";
+              return (
+                <div key={t.id} className="cb-client-account-row" style={{ gap: 10 }}>
+                  <div style={{ fontSize: 13.5, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
+                    <span>{t.name}</span>
+                    {isBuiltInHelping && (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-soft)", background: "#F1F3F5", border: "1px solid var(--border)", borderRadius: 999, padding: "2px 6px" }}>Built-in</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    className="cb-btn cb-btn-sm"
+                    disabled={isBuiltInHelping}
+                    onClick={() => !isBuiltInHelping && onUpdateTaskTypeBilling(t.id, !t.is_billable)}
+                    style={{ minWidth: 92, justifyContent: "center", color: t.is_billable ? "#168A45" : "var(--ink-soft)", background: t.is_billable ? "#EAF8EF" : "#F5F6F7", opacity: isBuiltInHelping ? 0.72 : 1, cursor: isBuiltInHelping ? "default" : undefined }}
+                    title={isBuiltInHelping ? "Built-in Helping is fixed as non-billable" : "Used by Capacity & Utilization"}
+                  >
+                    {t.is_billable ? "Billable" : "Non-billable"}
+                  </button>
+                  {!isBuiltInHelping && (
+                    <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTaskType(t.id)}><Trash2 size={13} /></button>
+                  )}
+                </div>
+              );
+            })}
             {taskTypes.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No task types added yet.</div>}
             <form onSubmit={submitTaskType} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 8, marginTop: 8, alignItems: "center" }}>
               <input className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
