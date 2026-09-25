@@ -10348,6 +10348,7 @@ export default function App() {
     await refreshTemplates();
   }
   async function renameTemplate(id, field, name, category = "") {
+    const current = templates.find((t) => t.id === id);
     await api.updateTemplate(id, field, name, category, current?.version || 1);
     await refreshTemplates();
   }
@@ -10360,6 +10361,8 @@ export default function App() {
     await refreshTemplates();
   }
   async function updateTemplateTask(templateId, taskId, task) {
+    const template = templates.find((t) => t.id === templateId);
+    const current = template?.tasks?.find((t) => t.id === taskId);
     await api.updateTemplateTask(templateId, taskId, task, current?.version || 1);
     await refreshTemplates();
   }
