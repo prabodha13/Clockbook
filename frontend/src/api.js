@@ -172,6 +172,8 @@ export const api = {
     if (startAt) body.start_at = startAt;
     return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) });
   },
+  recoverTaskTime: (id, seconds) =>
+    request(`/tasks/${id}/recover-time`, { method: "POST", body: JSON.stringify({ seconds }) }),
   createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false, context = "", inactivityEventId = null) =>
     request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted, context, inactivity_event_id: inactivityEventId }) }),
   startAdHocMeeting: (colleagueId = null) =>

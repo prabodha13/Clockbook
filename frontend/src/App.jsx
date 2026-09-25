@@ -1782,7 +1782,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
   );
 }
 
-function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient }) {
+function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient, recoveringForgottenTime = false }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState("");
   const [newClientName, setNewClientName] = useState("");
@@ -1952,7 +1952,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal" data-tour="new-task-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">New task</div>
+          <div className="cb-modal-title">{recoveringForgottenTime ? "New task for forgotten time" : "New task"}</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <form onSubmit={handleSubmit}>
@@ -2186,18 +2186,32 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
           </div>
           <div className="cb-modal-foot">
             <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>
-              {taskMode === "template" && selectedTaskIds.length > 1 ? `Add ${selectedTaskIds.length} tasks` : "Add to dashboard"}
-            </button>
-            <button
-              type="button"
-              className="cb-btn cb-btn-primary"
-              disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
-              title={ownerId !== currentUser.id ? "A timer can only be started for your own task" : (taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task to add and start" : "Add this task and start its timer immediately")}
-              onClick={(e) => handleSubmit(e, true)}
-            >
-              Add & Start
-            </button>
+            {recoveringForgottenTime ? (
+              <button
+                type="button"
+                className="cb-btn cb-btn-primary"
+                disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
+                title={taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task for the recovered time" : "Create this task, add the forgotten time, and continue its timer"}
+                onClick={(e) => handleSubmit(e, true)}
+              >
+                Recover & continue
+              </button>
+            ) : (
+              <>
+                <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>
+                  {taskMode === "template" && selectedTaskIds.length > 1 ? `Add ${selectedTaskIds.length} tasks` : "Add to dashboard"}
+                </button>
+                <button
+                  type="button"
+                  className="cb-btn cb-btn-primary"
+                  disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
+                  title={ownerId !== currentUser.id ? "A timer can only be started for your own task" : (taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task to add and start" : "Add this task and start its timer immediately")}
+                  onClick={(e) => handleSubmit(e, true)}
+                >
+                  Add & Start
+                </button>
+              </>
+            )}
           </div>
         </form>
       </div>
@@ -7606,7 +7620,7 @@ function ManualOverridesReportView() {
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Reports</div>
-          <div className="cb-page-sub">Manual time overrides only. This report reads existing submitted entries and does not change recorded time.</div>
+          <div className="cb-page-sub">Manual time changes, including forgotten-time recovery. This report reads existing submitted entries and does not change recorded time.</div>
         </div>
       </div>
 
@@ -7776,14 +7790,14 @@ function ManualOverridesReportView() {
                 </div>
               </div>
             </div>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>An override is an existing submitted task where the final duration differs from the duration ClockBook tracked. Note shows the note already submitted with that entry.</div>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>Manual changes include submission-time overrides and time explicitly recovered after a user confirms they forgot to start a timer. Recovered time is flagged separately.</div>
             <div className="cb-table-wrap" style={{ overflowX: "hidden" }}>
               <table className="cb-table" style={{ tableLayout: "fixed", width: "100%", minWidth: 0 }}>
-                <colgroup><col style={{ width: "9%" }} /><col style={{ width: "12%" }} /><col style={{ width: "13%" }} /><col style={{ width: "16%" }} /><col style={{ width: "20%" }} /><col style={{ width: "8%" }} /><col style={{ width: "8%" }} /><col style={{ width: "7%" }} /><col style={{ width: "7%" }} /></colgroup>
-                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th>Note</th><th className="num">Tracked</th><th className="num">Final</th><th className="num">Difference</th><th>Submitted</th></tr></thead>
+                <colgroup><col style={{ width: "8%" }} /><col style={{ width: "11%" }} /><col style={{ width: "12%" }} /><col style={{ width: "14%" }} /><col style={{ width: "15%" }} /><col style={{ width: "18%" }} /><col style={{ width: "6%" }} /><col style={{ width: "6%" }} /><col style={{ width: "5%" }} /><col style={{ width: "5%" }} /></colgroup>
+                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th>Type</th><th>Note</th><th className="num">Tracked</th><th className="num">Final</th><th className="num">Difference</th><th>Submitted</th></tr></thead>
                 <tbody>{filteredEntryRows.map((row) => {
                   const delta = Number(row.seconds || 0) - Number(row.tracked_seconds || 0);
-                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td>{row.task || "—"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{row.note || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined }}>{signedDuration(delta)}</td><td>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
+                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td>{row.task || "—"}</td><td style={{ whiteSpace: "normal" }}>{row.adjustment_type || "Manual override"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{row.note || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined }}>{signedDuration(delta)}</td><td>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
                 })}</tbody>
               </table>
               {filteredEntryRows.length === 0 && <div className="cb-empty">No override entries match these filters.</div>}
@@ -8605,6 +8619,101 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
   );
 }
 
+function ForgottenTimeRecoveryModal({ gapMs, tasks, currentUser, onClose, onRecoverExisting, onCreateNew }) {
+  const eligibleTasks = useMemo(() => {
+    const own = (tasks || []).filter((t) => t.owner_id === currentUser.id && (t.status === "paused" || t.status === "todo"));
+    return own.sort((a, b) => {
+      const rank = (t) => t.status === "paused" ? 0 : 1;
+      return rank(a) - rank(b) || String(a.client_name || "").localeCompare(String(b.client_name || "")) || String(a.name || "").localeCompare(String(b.name || ""));
+    });
+  }, [tasks, currentUser.id]);
+  const [mode, setMode] = useState(eligibleTasks.length ? "existing" : "new");
+  const [taskId, setTaskId] = useState(eligibleTasks[0]?.id || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const selected = eligibleTasks.find((t) => t.id === taskId) || null;
+  const recoveredSeconds = Math.max(1, Math.round(gapMs / 1000));
+
+  async function recover() {
+    if (!selected || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onRecoverExisting(selected, recoveredSeconds);
+    } catch (err) {
+      setError(err.message || "Could not recover the forgotten time");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal">
+        <div className="cb-modal-head">
+          <div className="cb-modal-title">Recover forgotten time</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div style={{ padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 16 }}>
+            <div style={{ fontWeight: 700 }}>Recover {niceDuration(gapMs)}</div>
+            <div className="cb-hint" style={{ marginTop: 3 }}>This is recorded as a manual adjustment and flagged as <strong>Forgotten time recovered</strong>.</div>
+          </div>
+
+          <div className="cb-field">
+            <label className="cb-label">Where should this time go?</label>
+            <div className="cb-tabs" style={{ width: "fit-content" }}>
+              <button type="button" className={`cb-tab ${mode === "existing" ? "active" : ""}`} disabled={!eligibleTasks.length} onClick={() => setMode("existing")}>Existing work</button>
+              <button type="button" className={`cb-tab ${mode === "new" ? "active" : ""}`} onClick={() => setMode("new")}>New task</button>
+            </div>
+          </div>
+
+          {mode === "existing" ? (
+            <>
+              <div className="cb-field">
+                <label className="cb-label">In progress / To do</label>
+                <SearchableSelect
+                  options={eligibleTasks}
+                  value={taskId}
+                  onChange={setTaskId}
+                  placeholder="Search your tasks..."
+                  getLabel={(t) => `${t.client_name ? `${t.client_name} - ` : ""}${taskDisplayHeading(t)}`}
+                  getSecondary={(t) => `${t.status === "paused" ? "In progress" : "To do"}${taskPeriodContext(t) ? ` · ${taskPeriodContext(t)}` : ""}`}
+                />
+              </div>
+              {selected && (
+                <div style={{ padding: "11px 12px", border: "1px solid var(--line)", borderRadius: 10 }}>
+                  <div style={{ fontWeight: 700 }}>{taskClientLabel(selected)}{taskClientLabel(selected) ? " · " : ""}{taskDisplayHeading(selected)}</div>
+                  <div className="cb-hint" style={{ marginTop: 4 }}>
+                    {selected.status === "paused" ? "In progress" : "To do"} · {formatHM(elapsedSeconds(selected, Date.now()))} already tracked
+                  </div>
+                  <div className="cb-hint" style={{ marginTop: 4 }}>The recovered time will be added to this task, then its timer will continue from now.</div>
+                </div>
+              )}
+              {!eligibleTasks.length && <div className="cb-empty">You do not have any In progress or To do tasks. Create a new task instead.</div>}
+            </>
+          ) : (
+            <div style={{ padding: "11px 12px", border: "1px solid var(--line)", borderRadius: 10 }}>
+              <div style={{ fontWeight: 700 }}>Create a new task</div>
+              <div className="cb-hint" style={{ marginTop: 4 }}>Choose the client and template as usual. The recovered time will be attached to the new task and clearly flagged.</div>
+            </div>
+          )}
+          {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          {mode === "existing" ? (
+            <button type="button" className="cb-btn cb-btn-primary" disabled={busy || !selected} onClick={recover}>
+              {busy ? "Recovering..." : `Recover ${niceDuration(gapMs)} & continue`}
+            </button>
+          ) : (
+            <button type="button" className="cb-btn cb-btn-primary" disabled={busy} onClick={onCreateNew}>Continue to new task</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm }) {
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9023,6 +9132,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [showForgottenRecovery, setShowForgottenRecovery] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
   const [showQuickMeeting, setShowQuickMeeting] = useState(false);
   const [showManualHelp, setShowManualHelp] = useState(false);
@@ -10321,23 +10431,26 @@ export default function App() {
       created.push(task);
     }
     let finalTasks = created;
-    let startedByForgotToTrackRecovery = false;
+    let recoveredTask = null;
+    let recoveredGapMs = null;
     if (forgotToTrackGapMsRef.current != null && created.length > 0) {
       const gapMs = forgotToTrackGapMsRef.current;
+      recoveredGapMs = gapMs;
       forgotToTrackGapMsRef.current = null;
-      const backdatedIso = new Date(Date.now() - gapMs + clockOffsetRef.current).toISOString();
       try {
-        const started = await api.startTask(created[0].id, null, backdatedIso);
-        finalTasks = [started, ...created.slice(1)];
-        startedByForgotToTrackRecovery = true;
+        const recovered = await api.recoverTaskTime(created[0].id, Math.max(1, Math.round(gapMs / 1000)));
+        finalTasks = [recovered, ...created.slice(1)];
+        recoveredTask = recovered;
       } catch (err) {
-        // If backdating fails for any reason, the task still exists as a plain to-do,
-        // nothing is lost, the person can just start it themselves
+        showToast(err.message || "Could not recover the forgotten time", true);
       }
     }
     setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
-    if (startImmediately && finalTasks.length === 1 && !startedByForgotToTrackRecovery) {
+    if (recoveredTask) {
+      showToast(`${niceDuration(recoveredGapMs)} recovered and flagged as forgotten time`);
+      if (startImmediately) requestStart(recoveredTask);
+    } else if (startImmediately && finalTasks.length === 1) {
       requestStart(finalTasks[0]);
     }
   }
@@ -10584,11 +10697,30 @@ export default function App() {
           onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
         />
       )}
+      {showForgottenRecovery && forgotToTrackGapMsRef.current != null && (
+        <ForgottenTimeRecoveryModal
+          gapMs={forgotToTrackGapMsRef.current}
+          tasks={tasks}
+          currentUser={effectiveCurrentUser}
+          onClose={() => { forgotToTrackGapMsRef.current = null; setShowForgottenRecovery(false); }}
+          onCreateNew={() => { setShowForgottenRecovery(false); setShowNewTask(true); }}
+          onRecoverExisting={async (task, recoveredSeconds) => {
+            const updated = await api.recoverTaskTime(task.id, recoveredSeconds);
+            mergeTask(updated);
+            const recoveredGap = forgotToTrackGapMsRef.current;
+            forgotToTrackGapMsRef.current = null;
+            setShowForgottenRecovery(false);
+            showToast(`${niceDuration(recoveredGap)} recovered and flagged as forgotten time`);
+            requestStart(updated);
+          }}
+        />
+      )}
       {showNewTask && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
-          onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
+          recoveringForgottenTime={forgotToTrackGapMsRef.current != null}
+          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; }} onCreate={createTasks} onAddClient={addClient}
         />
       )}
       {startCountPrompt && (
@@ -10650,7 +10782,8 @@ export default function App() {
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
-            setShowNewTask(true);
+            if (includeLostTime) setShowForgottenRecovery(true);
+            else setShowNewTask(true);
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
             await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted, context);
