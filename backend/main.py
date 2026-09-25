@@ -4196,7 +4196,8 @@ def list_learning_categories(current_member: models.Member = Depends(get_current
 
 @app.post("/api/learning/categories", response_model=schemas.LearningCategoryOut, status_code=201)
 def create_learning_category(payload: schemas.LearningCategoryCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    require_admin(current_member)
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin access required")
     name = payload.name.strip()
     if db.query(models.LearningCategory).filter(func.lower(models.LearningCategory.name) == name.lower()).first():
         raise HTTPException(400, "That L&D category already exists")
@@ -4209,7 +4210,8 @@ def create_learning_category(payload: schemas.LearningCategoryCreate, current_me
 
 @app.delete("/api/learning/categories/{category_id}", status_code=204)
 def delete_learning_category(category_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    require_admin(current_member)
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin access required")
     category = db.get(models.LearningCategory, category_id)
     if not category:
         return None
