@@ -3366,7 +3366,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 
 function SettingsView({
   roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
-  onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onDeleteLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
+  onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onUpdateLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], onChangeInsightsPermission,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
@@ -3377,6 +3377,9 @@ function SettingsView({
   const [newTaskTypeBillable, setNewTaskTypeBillable] = useState(false);
   const [newMetric, setNewMetric] = useState("");
   const [newLearningCategory, setNewLearningCategory] = useState("");
+  const [managedLearningCategories, setManagedLearningCategories] = useState([]);
+  const [editingLearningCategoryId, setEditingLearningCategoryId] = useState(null);
+  const [editingLearningCategoryName, setEditingLearningCategoryName] = useState("");
   const [scanResults, setScanResults] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [repairingId, setRepairingId] = useState(null);
@@ -3398,6 +3401,18 @@ function SettingsView({
   const [calamariMessage, setCalamariMessage] = useState("");
   const [permissionSearch, setPermissionSearch] = useState("");
   const [platformSettingsReady, setPlatformSettingsReady] = useState(false);
+
+  useEffect(() => {
+    if (!realIsSuperAdmin) {
+      setManagedLearningCategories([]);
+      return;
+    }
+    let alive = true;
+    api.getLearningCategories(true)
+      .then((rows) => { if (alive) setManagedLearningCategories(rows); })
+      .catch((err) => { if (alive) setError(err.message || "Could not load learning categories"); });
+    return () => { alive = false; };
+  }, [realIsSuperAdmin]);
 
   useEffect(() => {
     if (!realIsSuperAdmin) return;
@@ -3581,8 +3596,37 @@ function SettingsView({
     e.preventDefault();
     if (!newLearningCategory.trim()) return;
     try {
-      await onAddLearningCategory(newLearningCategory);
+      const created = await onAddLearningCategory(newLearningCategory);
+      setManagedLearningCategories((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
       setNewLearningCategory("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function saveLearningCategory(category) {
+    const name = editingLearningCategoryName.trim();
+    if (!name) return;
+    try {
+      const updated = await onUpdateLearningCategory(category.id, { name }, category.version || 1);
+      setManagedLearningCategories((prev) => prev.map((c) => c.id === updated.id ? updated : c).sort((a, b) => a.name.localeCompare(b.name)));
+      setEditingLearningCategoryId(null);
+      setEditingLearningCategoryName("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function toggleLearningCategory(category) {
+    try {
+      const updated = await onUpdateLearningCategory(category.id, { is_active: !category.is_active }, category.version || 1);
+      setManagedLearningCategories((prev) => prev.map((c) => c.id === updated.id ? updated : c));
+      if (editingLearningCategoryId === category.id) {
+        setEditingLearningCategoryId(null);
+        setEditingLearningCategoryName("");
+      }
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
@@ -3876,22 +3920,33 @@ function SettingsView({
       </div>
       )}
 
-      {effectiveIsAdmin && (
+      {realIsSuperAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
               <div className="cb-tmpl-field">Learning & Development</div>
-              <div className="cb-tmpl-name">Major Categories</div>
+              <div className="cb-tmpl-name">Learning Categories</div>
             </div>
           </div>
           <div style={SETTINGS_BODY_STYLE}>
-            <div className="cb-hint" style={{ marginBottom: 8 }}>These categories are used when L&D tasks are completed and in the Staff Knowledge Library.</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "0 16px" }}>
-              {learningCategories.map((c) => <div key={c.id} className="cb-client-account-row"><div style={{ fontSize: 13.5 }}>{c.name}</div><button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteLearningCategory(c.id)}><Trash2 size={13} /></button></div>)}
+            <div className="cb-hint" style={{ marginBottom: 8 }}>Manage the categories staff can choose when completing L&D. Renaming or archiving a category affects future entries only; historical learning records keep the category originally submitted.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: "0 16px" }}>
+              {managedLearningCategories.map((c) => <div key={c.id} className="cb-client-account-row" style={{ opacity: c.is_active ? 1 : 0.65, gap: 8 }}>
+                {editingLearningCategoryId === c.id ? <>
+                  <input className="cb-input" value={editingLearningCategoryName} onChange={(e) => setEditingLearningCategoryName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveLearningCategory(c); } if (e.key === "Escape") { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); } }} autoFocus />
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-primary" onClick={() => saveLearningCategory(c)}>Save</button>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); }}>Cancel</button>
+                </> : <>
+                  <div style={{ fontSize: 13.5, flex: 1, minWidth: 0 }}><span>{c.name}</span>{!c.is_active && <span className="cb-hint" style={{ marginLeft: 7 }}>(Archived)</span>}</div>
+                  <button type="button" className="cb-icon-btn" title="Rename category" onClick={() => { setEditingLearningCategoryId(c.id); setEditingLearningCategoryName(c.name); }}><Edit3 size={13} /></button>
+                  <button type="button" className="cb-icon-btn" title={c.is_active ? "Archive category" : "Restore category"} onClick={() => toggleLearningCategory(c)}>{c.is_active ? <Ban size={13} /> : <RotateCcw size={13} />}</button>
+                </>}
+              </div>)}
             </div>
+            {managedLearningCategories.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No learning categories configured yet.</div>}
             <form onSubmit={submitLearningCategory} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 430 }}>
               <input className="cb-input" placeholder="e.g. Advisory" value={newLearningCategory} onChange={(e) => setNewLearningCategory(e.target.value)} />
-              <button type="submit" className="cb-btn cb-btn-sm"><Plus size={13} />Add</button>
+              <button type="submit" className="cb-btn cb-btn-sm"><Plus size={13} />Add category</button>
             </form>
           </div>
         </div>
@@ -10092,11 +10147,16 @@ export default function App() {
   async function addLearningCategory(name) {
     const category = await api.createLearningCategory(name.trim());
     setLearningCategories((prev) => [...prev, category].sort((a, b) => a.name.localeCompare(b.name)));
+    return category;
   }
 
-  async function deleteLearningCategory(id) {
-    await api.deleteLearningCategory(id);
-    setLearningCategories((prev) => prev.filter((c) => c.id !== id));
+  async function updateLearningCategory(id, changes, expectedVersion) {
+    const updated = await api.updateLearningCategory(id, changes, expectedVersion);
+    setLearningCategories((prev) => {
+      const without = prev.filter((c) => c.id !== id);
+      return updated.is_active ? [...without, updated].sort((a, b) => a.name.localeCompare(b.name)) : without;
+    });
+    return updated;
   }
 
   async function createLearningDevelopmentTask(payload, startImmediately = false) {
@@ -10377,7 +10437,7 @@ export default function App() {
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onUpdateTaskTypeBilling={updateTaskTypeBilling} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
-                onAddLearningCategory={addLearningCategory} onDeleteLearningCategory={deleteLearningCategory}
+                onAddLearningCategory={addLearningCategory} onUpdateLearningCategory={updateLearningCategory}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
                 members={members} onChangeInsightsPermission={changeMemberInsightsPermission}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
