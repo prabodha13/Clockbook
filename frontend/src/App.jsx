@@ -2192,64 +2192,6 @@ function StartCountModal({ task, onClose, onSubmit }) {
   );
 }
 
-function LearningTaskModal({ roles, currentUser, onClose, onCreate }) {
-  const [name, setName] = useState(BUILTIN_LEARNING_TASK_TYPE);
-  const [role, setRole] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  async function submit(startImmediately = false) {
-    const cleanName = name.trim() || BUILTIN_LEARNING_TASK_TYPE;
-    if (!role) { setError("Select a role"); return; }
-    setBusy(true);
-    setError("");
-    try {
-      await onCreate([{
-        client_id: "", client_name: "", name: cleanName,
-        role, task_type: BUILTIN_LEARNING_TASK_TYPE, owner_id: currentUser.id,
-      }], startImmediately);
-      onClose();
-    } catch (err) {
-      setError(err.message || "Could not add Learning & Development task");
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cb-modal" style={{ maxWidth: 520 }}>
-        <div className="cb-modal-head">
-          <div>
-            <div className="cb-modal-title">Learning & Development</div>
-            <div className="cb-hint" style={{ marginTop: 2 }}>Add the task now. Learning details are only required when you submit it.</div>
-          </div>
-          <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
-        </div>
-        <div className="cb-modal-body">
-          <div className="cb-field">
-            <label className="cb-label">Task name</label>
-            <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Learning & Development" autoFocus />
-          </div>
-          <div className="cb-field">
-            <label className="cb-label">Role</label>
-            <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
-              <option value="">Select a role</option>
-              {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
-            </select>
-          </div>
-          <div className="cb-hint">Major Category, Topic, What I Learned and references are entered only at completion.</div>
-          {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
-        </div>
-        <div className="cb-modal-foot">
-          <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="button" className="cb-btn" onClick={() => submit(false)} disabled={busy}>Add</button>
-          <button type="button" className="cb-btn cb-btn-primary" onClick={() => submit(true)} disabled={busy}>Add & Start</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function LearningReferenceEditor({ label, items, onChange }) {
   function update(index, patch) {
     onChange(items.map((item, i) => i === index ? { ...item, ...patch } : item));
@@ -3930,7 +3872,7 @@ function SettingsView({
       </div>
       )}
 
-      {isSuperAdmin && (
+      {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
@@ -8086,6 +8028,68 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
   );
 }
 
+function LearningDevelopmentTaskModal({ roles, onClose, onCreate }) {
+  const [name, setName] = useState(BUILTIN_LEARNING_TASK_TYPE);
+  const [role, setRole] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function create(startImmediately) {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await onCreate({
+        client_id: "",
+        client_name: "",
+        name: name.trim() || BUILTIN_LEARNING_TASK_TYPE,
+        role,
+        task_type: BUILTIN_LEARNING_TASK_TYPE,
+      }, startImmediately);
+    } catch (err) {
+      setError(err.message || "Could not add Learning & Development task");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 500 }}>
+        <div className="cb-modal-head">
+          <div className="cb-modal-title" style={{ display: "flex", alignItems: "center", gap: 8 }}><GraduationCap size={17} />Learning & Development</div>
+          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+        </div>
+        <div className="cb-modal-body">
+          <div className="cb-hint" style={{ marginBottom: 14 }}>
+            Add the task now. Major Category, Topic and What I Learned are only required when you submit it.
+          </div>
+          <div className="cb-field">
+            <label className="cb-label">Task name</label>
+            <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          </div>
+          <div className="cb-field">
+            <label className="cb-label">Role</label>
+            <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
+              <option value="">Select later / no role</option>
+              {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
+            </select>
+          </div>
+          {error && <div className="cb-error">{error}</div>}
+        </div>
+        <div className="cb-modal-foot">
+          <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+          <button type="button" className="cb-btn cb-btn-primary" disabled={busy} onClick={() => create(false)}>
+            {busy ? "Adding..." : "Add to Dashboard"}
+          </button>
+          <button type="button" className="cb-btn cb-btn-primary" disabled={busy} onClick={() => create(true)}>
+            {busy ? "Adding..." : "Add & Start"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdHocMeetingModal({ members, currentUser, onClose, onStart }) {
   const [colleagueId, setColleagueId] = useState("");
   const [busy, setBusy] = useState(false);
@@ -8881,7 +8885,7 @@ export default function App() {
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
   const [showQuickMeeting, setShowQuickMeeting] = useState(false);
   const [showManualHelp, setShowManualHelp] = useState(false);
-  const [showLearningTask, setShowLearningTask] = useState(false);
+  const [showLearningDevelopmentTask, setShowLearningDevelopmentTask] = useState(false);
   const [completingTask, setCompletingTask] = useState(null);
   const [startCountPrompt, setStartCountPrompt] = useState(null);
   const [showAddMember, setShowAddMember] = useState(false);
@@ -10091,6 +10095,16 @@ export default function App() {
     setLearningCategories((prev) => prev.filter((c) => c.id !== id));
   }
 
+  async function createLearningDevelopmentTask(payload, startImmediately = false) {
+    try {
+      await createTasks([payload], startImmediately);
+      setShowLearningDevelopmentTask(false);
+    } catch (err) {
+      showToast(err.message || "Could not add Learning & Development task", true);
+      throw err;
+    }
+  }
+
   async function createQuickMeeting(payload) {
     try {
       const result = await api.createQuickMeeting(payload);
@@ -10293,7 +10307,7 @@ export default function App() {
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
-                onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)} onLearningDevelopment={() => setShowLearningTask(true)}
+                onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)} onLearningDevelopment={() => setShowLearningDevelopmentTask(true)}
                 clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
                 onCreateTasks={createTasks}
               />
@@ -10401,16 +10415,17 @@ export default function App() {
           onClose={() => setShowAdHocMeeting(false)} onStart={startAdHocMeeting}
         />
       )}
+      {showLearningDevelopmentTask && (
+        <LearningDevelopmentTaskModal
+          roles={roles}
+          onClose={() => setShowLearningDevelopmentTask(false)}
+          onCreate={createLearningDevelopmentTask}
+        />
+      )}
       {showManualHelp && (
         <ManualHelpModal
           members={members} currentUser={effectiveCurrentUser}
           onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
-        />
-      )}
-      {showLearningTask && (
-        <LearningTaskModal
-          roles={roles} currentUser={effectiveCurrentUser}
-          onClose={() => setShowLearningTask(false)} onCreate={createTasks}
         />
       )}
       {showNewTask && (
