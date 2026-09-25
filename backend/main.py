@@ -175,6 +175,7 @@ DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
 BUILTIN_HELPING_TASK_TYPE = "Helping/Training"
 LEGACY_BUILTIN_HELPING_TASK_TYPE = "Helping"
 BUILTIN_LEARNING_TASK_TYPE = "Learning & Development"
+MIN_LEARNING_NOTE_WORDS = 5
 DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query", BUILTIN_HELPING_TASK_TYPE, BUILTIN_LEARNING_TASK_TYPE]
 DEFAULT_LEARNING_CATEGORIES = [
     "Tax", "VAT", "Payroll", "Bookkeeping", "Year-End Accounts", "Accounts Production",
@@ -5035,6 +5036,9 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
             raise HTTPException(400, "Enter the L&D topic before completing")
         if not learning_notes:
             raise HTTPException(400, "Enter What I Learned before completing L&D")
+        learning_note_words = [word for word in learning_notes.split() if any(ch.isalnum() for ch in word)]
+        if len(learning_note_words) < MIN_LEARNING_NOTE_WORDS:
+            raise HTTPException(400, f"What I Learned must contain at least {MIN_LEARNING_NOTE_WORDS} words")
         if not db.query(models.LearningCategory).filter(models.LearningCategory.is_active.is_(True), func.lower(models.LearningCategory.name) == learning_category.lower()).first():
             raise HTTPException(400, "Select a valid L&D Major Category")
         tdm_references = _learning_reference_dicts(payload.tdm_references)
