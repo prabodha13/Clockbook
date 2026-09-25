@@ -16,6 +16,56 @@ function isAdminRole(role) {
   return role === "admin" || role === "super_admin";
 }
 
+function StableSaaSTabs({ value, onChange, options, ariaLabel = "View" }) {
+  return (
+    <div
+      role="tablist"
+      aria-label={ariaLabel}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        padding: 3,
+        border: "1px solid var(--line)",
+        borderRadius: 10,
+        background: "var(--paper-soft)",
+        width: "fit-content",
+      }}
+    >
+      {options.map((option) => {
+        const active = value === option.value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="tab"
+            aria-selected={active}
+            onClick={() => onChange(option.value)}
+            style={{
+              height: 32,
+              padding: "0 12px",
+              border: "1px solid transparent",
+              borderRadius: 7,
+              background: active ? "var(--paper)" : "transparent",
+              color: active ? "var(--ink)" : "var(--ink-muted)",
+              font: "inherit",
+              fontSize: 13,
+              fontWeight: 600,
+              lineHeight: 1,
+              whiteSpace: "nowrap",
+              cursor: "pointer",
+              boxShadow: active ? "0 1px 2px rgba(18, 35, 28, 0.08)" : "none",
+              transition: "background-color 140ms ease, color 140ms ease, box-shadow 140ms ease",
+            }}
+          >
+            {option.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function elapsedSeconds(task, nowMs) {
   let total = 0;
   for (const seg of task.segments || []) {
@@ -3302,11 +3352,16 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
           <div className="cb-page-sub">Find who has already learned about a subject, or review L&D activity if you manage the team.</div>
         </div>
       </div>
-      {isManager && <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, marginBottom: 16, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)", width: "fit-content" }}>
-        <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
-          <button className={`cb-tab cb-tab-plain ${mode === "library" ? "active" : ""}`} onClick={() => setMode("library")}>Staff Knowledge Library</button>
-          <button className={`cb-tab cb-tab-plain ${mode === "management" ? "active" : ""}`} onClick={() => setMode("management")}>Management L&D Report</button>
-        </div>
+      {isManager && <div style={{ marginBottom: 16 }}>
+        <StableSaaSTabs
+          value={mode}
+          onChange={setMode}
+          ariaLabel="Learning & Development view"
+          options={[
+            { value: "library", label: "Staff Knowledge Library" },
+            { value: "management", label: "Management L&D Report" },
+          ]}
+        />
       </div>}
 
       {mode === "library" && <>
@@ -7876,12 +7931,17 @@ function SuperAdminReportsView({ members }) {
   const [mode, setMode] = useState("help");
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, marginBottom: 16, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)", width: "fit-content" }}>
-        <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
-          <button className={`cb-tab cb-tab-plain ${mode === "help" ? "active" : ""}`} onClick={() => setMode("help")}>Help activity</button>
-          <button className={`cb-tab cb-tab-plain ${mode === "overrides" ? "active" : ""}`} onClick={() => setMode("overrides")}>Manual overrides</button>
-          <button className={`cb-tab cb-tab-plain ${mode === "inactivity" ? "active" : ""}`} onClick={() => setMode("inactivity")}>Audit</button>
-        </div>
+      <div style={{ marginBottom: 16 }}>
+        <StableSaaSTabs
+          value={mode}
+          onChange={setMode}
+          ariaLabel="Reports view"
+          options={[
+            { value: "help", label: "Help activity" },
+            { value: "overrides", label: "Manual overrides" },
+            { value: "inactivity", label: "Audit" },
+          ]}
+        />
       </div>
       {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : <InactivityAuditView members={members} />}
     </div>
