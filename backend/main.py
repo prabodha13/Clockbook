@@ -174,7 +174,12 @@ DEFAULT_TEMPLATE = {
 DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
 BUILTIN_HELPING_TASK_TYPE = "Helping/Training"
 LEGACY_BUILTIN_HELPING_TASK_TYPE = "Helping"
-DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query", BUILTIN_HELPING_TASK_TYPE]
+BUILTIN_LEARNING_TASK_TYPE = "Learning & Development"
+DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query", BUILTIN_HELPING_TASK_TYPE, BUILTIN_LEARNING_TASK_TYPE]
+DEFAULT_LEARNING_CATEGORIES = [
+    "Tax", "VAT", "Payroll", "Bookkeeping", "Year-End Accounts", "Accounts Production",
+    "Company Secretarial / CRO", "Systems / Software", "Internal Processes", "Other",
+]
 DEFAULT_TRACKED_METRICS = ["Unreconciled transactions", "Dext bills"]
 UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__"
 UNASSIGNED_CLIENT_NAME = "No client assigned"
@@ -184,7 +189,12 @@ AROUND_TENANT_SLUG = "around-finance"
 
 
 def _is_builtin_task_type_name(value: str) -> bool:
-    return (value or "").strip().lower() == BUILTIN_HELPING_TASK_TYPE.lower()
+    normalized = (value or "").strip().lower()
+    return normalized in {BUILTIN_HELPING_TASK_TYPE.lower(), BUILTIN_LEARNING_TASK_TYPE.lower()}
+
+
+def _is_learning_task_type(value: str) -> bool:
+    return (value or "").strip().lower() == BUILTIN_LEARNING_TASK_TYPE.lower()
 
 
 def _ensure_builtin_helping_task_type_for_current_tenant(db: Session):
@@ -218,6 +228,15 @@ def _ensure_builtin_helping_task_type_for_current_tenant(db: Session):
     # If both labels ever existed briefly, collapse the legacy option after references move.
     if legacy is not None and legacy.id != existing.id:
         db.delete(legacy)
+
+    learning = db.query(models.TaskTypeOption).filter(
+        func.lower(models.TaskTypeOption.name) == BUILTIN_LEARNING_TASK_TYPE.lower()
+    ).first()
+    if learning is None:
+        learning = models.TaskTypeOption(name=BUILTIN_LEARNING_TASK_TYPE, is_billable=False)
+        db.add(learning)
+    else:
+        learning.is_billable = False
     db.flush()
 
 
@@ -228,6 +247,24 @@ def _ensure_builtin_task_types_for_all_tenants(db: Session):
         for tenant_id in tenant_ids:
             db.info["tenant_id"] = tenant_id
             _ensure_builtin_helping_task_type_for_current_tenant(db)
+    finally:
+        if previous is None:
+            db.info.pop("tenant_id", None)
+        else:
+            db.info["tenant_id"] = previous
+
+
+def _ensure_learning_categories_for_all_tenants(db: Session):
+    previous = db.info.get("tenant_id")
+    tenant_ids = [row[0] for row in db.query(models.Tenant.id).all()]
+    try:
+        for tenant_id in tenant_ids:
+            db.info["tenant_id"] = tenant_id
+            existing = {row[0].lower() for row in db.query(models.LearningCategory.name).all()}
+            for name in DEFAULT_LEARNING_CATEGORIES:
+                if name.lower() not in existing:
+                    db.add(models.LearningCategory(name=name))
+            db.flush()
     finally:
         if previous is None:
             db.info.pop("tenant_id", None)
@@ -774,6 +811,7 @@ async def lifespan(app: FastAPI):
         # Built-in task types are platform defaults, so also backfill them into every
         # existing tenant instead of only seeding newly-created workspaces.
         _ensure_builtin_task_types_for_all_tenants(db)
+        _ensure_learning_categories_for_all_tenants(db)
         db.commit()
 
         # Upgrade legacy Google refresh tokens to the same encrypted-at-rest storage already
@@ -1293,6 +1331,9 @@ def _seed_new_tenant(db: Session, tenant_id: str):
         if db.query(models.TrackedMetric).count() == 0:
             for name in DEFAULT_TRACKED_METRICS:
                 db.add(models.TrackedMetric(name=name))
+        if db.query(models.LearningCategory).count() == 0:
+            for name in DEFAULT_LEARNING_CATEGORIES:
+                db.add(models.LearningCategory(name=name))
         db.flush()
     finally:
         if previous is None:
@@ -4105,7 +4146,7 @@ def create_task_type(payload: schemas.TaskTypeCreate, current_member: models.Mem
     require_admin(current_member)
     name = payload.name.strip()
     if _is_builtin_task_type_name(name):
-        raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is a built-in task type")
+        raise HTTPException(400, f"{name} is a built-in task type")
     if db.query(models.TaskTypeOption).filter(models.TaskTypeOption.name == name).first():
         raise HTTPException(400, "That task type already exists")
     task_type = models.TaskTypeOption(name=name, is_billable=bool(payload.is_billable))
@@ -4122,7 +4163,7 @@ def update_task_type_billing(task_type_id: str, payload: schemas.TaskTypeBilling
     if not task_type:
         raise HTTPException(404, "Task type not found")
     if _is_builtin_task_type_name(task_type.name):
-        raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is built in and cannot be changed")
+        raise HTTPException(400, f"{task_type.name} is built in and cannot be changed")
     _require_expected_version(task_type, payload.expected_version)
     task_type.is_billable = bool(payload.is_billable)
     db.commit()
@@ -4136,7 +4177,7 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
     task_type = db.get(models.TaskTypeOption, task_type_id)
     if task_type:
         if _is_builtin_task_type_name(task_type.name):
-            raise HTTPException(400, f"{BUILTIN_HELPING_TASK_TYPE} is built in and cannot be deleted")
+            raise HTTPException(400, f"{task_type.name} is built in and cannot be deleted")
         used_by_template = db.query(models.TemplateTask).filter(models.TemplateTask.task_type == task_type.name).count()
         used_by_active_task = db.query(models.TaskInstance).filter(
             models.TaskInstance.task_type == task_type.name, models.TaskInstance.status != "submitted"
@@ -4146,6 +4187,131 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
         db.delete(task_type)
         db.commit()
     return None
+
+
+@app.get("/api/learning/categories", response_model=list[schemas.LearningCategoryOut])
+def list_learning_categories(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return db.query(models.LearningCategory).order_by(func.lower(models.LearningCategory.name)).all()
+
+
+@app.post("/api/learning/categories", response_model=schemas.LearningCategoryOut, status_code=201)
+def create_learning_category(payload: schemas.LearningCategoryCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    name = payload.name.strip()
+    if db.query(models.LearningCategory).filter(func.lower(models.LearningCategory.name) == name.lower()).first():
+        raise HTTPException(400, "That L&D category already exists")
+    category = models.LearningCategory(name=name)
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@app.delete("/api/learning/categories/{category_id}", status_code=204)
+def delete_learning_category(category_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    category = db.get(models.LearningCategory, category_id)
+    if not category:
+        return None
+    if db.query(models.LearningRecord).filter(func.lower(models.LearningRecord.category) == category.name.lower()).count():
+        raise HTTPException(400, "This category is already used by L&D records and cannot be deleted")
+    db.delete(category)
+    db.commit()
+    return None
+
+
+def _learning_reference_dicts(values):
+    cleaned = []
+    for ref in values or []:
+        title = (getattr(ref, "title", "") or "").strip()
+        url = (getattr(ref, "url", "") or "").strip()
+        if not url:
+            continue
+        if not (url.startswith("https://") or url.startswith("http://")):
+            raise HTTPException(400, "Reference links must start with http:// or https://")
+        cleaned.append({"title": title, "url": url})
+    return cleaned
+
+
+@app.get("/api/learning/library", response_model=list[schemas.LearningLibraryPersonOut])
+def learning_library(keyword: str = "", category: str = "", letter: str = "", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    keyword = (keyword or "").strip()
+    category = (category or "").strip()
+    letter = (letter or "").strip().upper()[:1]
+    if not keyword and not category and not letter:
+        return []
+
+    query = db.query(models.LearningRecord)
+    if category:
+        query = query.filter(func.lower(models.LearningRecord.category) == category.lower())
+    if letter:
+        query = query.filter(func.upper(func.substr(models.LearningRecord.topic, 1, 1)) == letter)
+    records = query.order_by(models.LearningRecord.learned_at.desc()).all()
+    names = {m.id: m.name for m in db.query(models.Member).all()}
+    needle_text = keyword.lower()
+    groups = {}
+    for record in records:
+        topic_text = (record.topic or "").lower()
+        learned_text = (record.what_i_learned or "").lower()
+        relevance = 0
+        if needle_text:
+            if needle_text not in topic_text and needle_text not in learned_text:
+                continue
+            if topic_text == needle_text:
+                relevance += 5
+            elif needle_text in topic_text:
+                relevance += 3
+            if needle_text in learned_text:
+                relevance += 1
+        member_name = record.member_name or names.get(record.member_id, "Unknown")
+        group_key = record.member_id or f"former:{member_name.lower()}"
+        group = groups.setdefault(group_key, {
+            "member_id": record.member_id or group_key, "member_name": member_name, "records": [],
+            "max_relevance": 0, "latest_at": record.learned_at,
+        })
+        group["max_relevance"] = max(group["max_relevance"], relevance)
+        if record.learned_at > group["latest_at"]:
+            group["latest_at"] = record.learned_at
+        group["records"].append(schemas.LearningLibraryRecordOut(
+            topic=record.topic, category=record.category, what_i_learned=record.what_i_learned,
+            member_name=member_name, learned_at=record.learned_at,
+        ))
+
+    ordered = sorted(groups.values(), key=lambda g: (-g["max_relevance"], -len(g["records"]), -g["latest_at"].timestamp(), g["member_name"].lower()))
+    return [schemas.LearningLibraryPersonOut(
+        member_id=g["member_id"], member_name=g["member_name"], relevant_count=len(g["records"]),
+        latest_at=g["latest_at"], records=g["records"],
+    ) for g in ordered]
+
+
+@app.get("/api/learning/report", response_model=list[schemas.LearningManagementRecordOut])
+def learning_management_report(date_from: str = None, date_to: str = None, person_id: str = "", category: str = "", keyword: str = "", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    query = db.query(models.LearningRecord).filter(models.LearningRecord.member_id.in_(allowed_ids))
+    if person_id:
+        if person_id not in allowed_ids:
+            raise HTTPException(403, "That person is outside your management scope")
+        query = query.filter(models.LearningRecord.member_id == person_id)
+    if category:
+        query = query.filter(func.lower(models.LearningRecord.category) == category.lower())
+    try:
+        if date_from:
+            query = query.filter(models.LearningRecord.learned_at >= datetime.strptime(date_from, "%Y-%m-%d"))
+        if date_to:
+            query = query.filter(models.LearningRecord.learned_at < datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1))
+    except ValueError:
+        raise HTTPException(400, "Dates must be YYYY-MM-DD")
+    if keyword.strip():
+        k = f"%{keyword.strip().lower()}%"
+        query = query.filter(or_(func.lower(models.LearningRecord.topic).like(k), func.lower(models.LearningRecord.what_i_learned).like(k)))
+    records = query.order_by(models.LearningRecord.learned_at.desc()).all()
+    names = {m.id: m.name for m in db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).all()}
+    return [schemas.LearningManagementRecordOut(
+        id=r.id, task_id=r.task_id, member_id=r.member_id, member_name=r.member_name or names.get(r.member_id, "Unknown"),
+        learned_at=r.learned_at, duration_seconds=r.duration_seconds, category=r.category, topic=r.topic,
+        what_i_learned=r.what_i_learned, tdm_references=r.tdm_references or [], article_references=r.article_references or [],
+    ) for r in records]
 
 
 @app.get("/api/tracked-metrics", response_model=list[schemas.TrackedMetricOut])
@@ -4757,11 +4923,31 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     # return the already-submitted record without changing its timestamp, metrics or note.
     if task.status == "submitted":
         return task
+    submission_task_type = (payload.task_type if payload.task_type is not None else task.task_type or "").strip()
+    is_learning_submission = _is_learning_task_type(submission_task_type)
+    if is_learning_submission:
+        learning_category = (payload.learning_category or "").strip()
+        learning_topic = (payload.learning_topic or "").strip()
+        learning_notes = (payload.what_i_learned or "").strip()
+        if not learning_category:
+            raise HTTPException(400, "Select a Major Category before completing L&D")
+        if not learning_topic:
+            raise HTTPException(400, "Enter the L&D topic before completing")
+        if not learning_notes:
+            raise HTTPException(400, "Enter What I Learned before completing L&D")
+        if not db.query(models.LearningCategory).filter(func.lower(models.LearningCategory.name) == learning_category.lower()).first():
+            raise HTTPException(400, "Select a valid L&D Major Category")
+        tdm_references = _learning_reference_dicts(payload.tdm_references)
+        article_references = _learning_reference_dicts(payload.article_references)
+    else:
+        learning_category = learning_topic = learning_notes = ""
+        tdm_references = []
+        article_references = []
     if task.tracks_number_label and payload.end_count is None:
         raise HTTPException(400, f"Enter the ending {task.tracks_number_label.lower()} before submitting")
     if payload.end_count is not None and payload.end_count < 0:
         raise HTTPException(400, "Ending metric cannot be negative")
-    if task.client_id == _unassigned_client_id(current_member.tenant_id):
+    if task.client_id == _unassigned_client_id(current_member.tenant_id) and not is_learning_submission:
         if not payload.client_id or payload.client_id == _unassigned_client_id(current_member.tenant_id):
             raise HTTPException(400, "Select a client before completing this meeting")
         client = db.get(models.Client, payload.client_id)
@@ -4783,7 +4969,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     task.note = payload.note
     task.end_count = payload.end_count
     proposed_role = payload.role if payload.role is not None else task.role
-    proposed_task_type = payload.task_type if payload.task_type is not None else task.task_type
+    proposed_task_type = submission_task_type
     _validate_configured_role_and_task_type(db, proposed_role, proposed_task_type)
     if payload.role is not None:
         task.role = payload.role.strip()
@@ -4812,6 +4998,24 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     task.submitted_by_id = current_member.id
     task.submitted_pod_id = current_member.pod_id
     task.pushed_to_karbon = False
+
+    if is_learning_submission:
+        final_seconds = float(task.adjusted_seconds if task.adjusted_seconds is not None else tracked_seconds)
+        learning_record = db.query(models.LearningRecord).filter(models.LearningRecord.task_id == task.id).first()
+        if learning_record is None:
+            learning_record = models.LearningRecord(task_id=task.id, member_id=task.owner_id or current_member.id)
+            db.add(learning_record)
+        learning_record.member_id = task.owner_id or current_member.id
+        owner_member = db.get(models.Member, learning_record.member_id) if learning_record.member_id else None
+        learning_record.member_name = owner_member.name if owner_member else current_member.name
+        learning_record.category = learning_category
+        learning_record.topic = learning_topic
+        learning_record.what_i_learned = learning_notes
+        learning_record.tdm_references = tdm_references
+        learning_record.article_references = article_references
+        learning_record.duration_seconds = max(final_seconds, 0.0)
+        learning_record.learned_at = task.submitted_at
+
     db.commit()
     db.refresh(task)
     return task
@@ -4881,6 +5085,12 @@ def delete_task(task_id: str, current_member: models.Member = Depends(get_curren
     # before deleting the task so no dependent record can retain a dangling task_id.
     db.query(models.HelpEvent).filter(
         models.HelpEvent.task_id == task_id
+    ).delete(synchronize_session=False)
+
+    # L&D knowledge rows are task-derived too. Remove the linked knowledge record before
+    # deleting the task so PostgreSQL foreign keys never turn an intentional delete into a 500.
+    db.query(models.LearningRecord).filter(
+        models.LearningRecord.task_id == task_id
     ).delete(synchronize_session=False)
 
     db.delete(task)

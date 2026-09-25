@@ -238,6 +238,52 @@ class TaskTypeBillingUpdate(BaseModel):
     expected_version: int = Field(ge=1)
 
 
+class LearningCategoryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: str
+    version: int = 1
+    name: str
+
+
+class LearningCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+
+
+class LearningReference(BaseModel):
+    title: str = Field(default="", max_length=240)
+    url: str = Field(min_length=1, max_length=2000)
+
+
+class LearningLibraryRecordOut(BaseModel):
+    topic: str
+    category: str
+    what_i_learned: str
+    member_name: str
+    learned_at: datetime
+
+
+class LearningLibraryPersonOut(BaseModel):
+    member_id: str
+    member_name: str
+    relevant_count: int
+    latest_at: datetime
+    records: List[LearningLibraryRecordOut]
+
+
+class LearningManagementRecordOut(BaseModel):
+    id: str
+    task_id: str
+    member_id: Optional[str] = None
+    member_name: str
+    learned_at: datetime
+    duration_seconds: float
+    category: str
+    topic: str
+    what_i_learned: str
+    tdm_references: List[LearningReference] = Field(default_factory=list)
+    article_references: List[LearningReference] = Field(default_factory=list)
+
+
 class TrackedMetricOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str
@@ -361,8 +407,8 @@ class TaskOut(BaseModel):
 
 
 class TaskCreate(BaseModel):
-    client_id: str = Field(min_length=1, max_length=128)
-    client_name: str = Field(min_length=1, max_length=240)
+    client_id: str = Field(default="", max_length=128)
+    client_name: str = Field(default="", max_length=240)
     name: str = Field(min_length=1, max_length=240)
     role: str = Field(default="", max_length=160)
     task_type: str = Field(default="", max_length=160)
@@ -399,6 +445,11 @@ class TaskPauseBeacon(BaseModel):
 
 class TaskSubmit(BaseModel):
     note: str = Field(default="", max_length=4000)
+    learning_category: Optional[str] = Field(default=None, max_length=160)
+    learning_topic: Optional[str] = Field(default=None, max_length=240)
+    what_i_learned: Optional[str] = Field(default=None, max_length=8000)
+    tdm_references: List[LearningReference] = Field(default_factory=list, max_length=50)
+    article_references: List[LearningReference] = Field(default_factory=list, max_length=50)
     client_id: Optional[str] = Field(default=None, max_length=128)
     end_count: Optional[int] = Field(default=None, ge=0, le=2147483647)
     adjusted_seconds: Optional[float] = Field(default=None, ge=0, le=2678400)

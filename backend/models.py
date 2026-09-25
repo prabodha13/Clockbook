@@ -246,6 +246,13 @@ class TaskTypeOption(TenantScopedMixin, VersionedMixin, Base):
     is_billable = Column(Boolean, nullable=False, default=False)
 
 
+class LearningCategory(TenantScopedMixin, VersionedMixin, Base):
+    __tablename__ = "learning_categories"
+    __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_learning_categories_tenant_name"),)
+    id = Column(String, primary_key=True, default=lambda: gen_id("ldcat"))
+    name = Column(String, nullable=False)
+
+
 class TrackedMetric(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "tracked_metrics"
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_metrics_tenant_name"),)
@@ -325,6 +332,27 @@ class TaskInstance(TenantScopedMixin, Base):
     source_template_category = Column(String, nullable=True)
     submitted_pod_id = Column(String, nullable=True)
     last_heartbeat_at = Column(DateTime, nullable=True)
+
+
+class LearningRecord(TenantScopedMixin, Base):
+    __tablename__ = "learning_records"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "task_id", name="uq_learning_records_tenant_task"),
+        Index("ix_learning_records_tenant_member_date", "tenant_id", "member_id", "learned_at"),
+        Index("ix_learning_records_tenant_category_date", "tenant_id", "category", "learned_at"),
+    )
+    id = Column(String, primary_key=True, default=lambda: gen_id("ldr"))
+    task_id = Column(String, ForeignKey("tasks.id"), nullable=False)
+    member_id = Column(String, ForeignKey("members.id", ondelete="SET NULL"), nullable=True)
+    member_name = Column(String, nullable=False, default="Unknown")
+    category = Column(String, nullable=False)
+    topic = Column(String, nullable=False)
+    what_i_learned = Column(Text, nullable=False)
+    tdm_references = Column(JSON, default=list)
+    article_references = Column(JSON, default=list)
+    duration_seconds = Column(Float, nullable=False, default=0.0)
+    learned_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class HelpEvent(TenantScopedMixin, Base):
