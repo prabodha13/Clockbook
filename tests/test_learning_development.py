@@ -146,26 +146,67 @@ def test_management_ld_report_respects_admin_scope_and_includes_full_fields():
         s.close()
 
 
-def test_learning_category_management_is_super_admin_only():
+def test_learning_categories_are_super_admin_managed_and_history_is_snapshot():
     s = database.SessionLocal()
     try:
-        tenant_id = "tenant_ld_categories"
-        _tenant(s, tenant_id, "tenant-ld-categories")
-        admin = _member(s, tenant_id, "admin-ld-categories@example.com", role="admin", name="Admin")
-        super_admin = _member(s, tenant_id, "super-ld-categories@example.com", role="super_admin", name="Super Admin")
+        tenant_id = "tenant_ld_category_lifecycle"
+        _tenant(s, tenant_id, "tenant-ld-category-lifecycle")
+        super_admin = _member(s, tenant_id, "super-ld-category@example.com", role="super_admin", name="Super")
+        admin = _member(s, tenant_id, "admin-ld-category@example.com", role="admin", name="Admin")
+        staff = _member(s, tenant_id, "staff-ld-category@example.com", name="Staff")
         _seed_learning(s, tenant_id)
+        category = s.query(models.LearningCategory).filter(models.LearningCategory.name == "Tax").one()
+        reserved = main._unassigned_client_id(tenant_id)
+        task = models.TaskInstance(client_id=reserved, client_name=main.UNASSIGNED_CLIENT_NAME, name=main.BUILTIN_LEARNING_TASK_TYPE, task_type=main.BUILTIN_LEARNING_TASK_TYPE, owner_id=staff.id, status="submitted", segments=[])
+        s.add(task); s.flush()
+        s.add(models.LearningRecord(task_id=task.id, member_id=staff.id, member_name=staff.name, category="Tax", topic="Old tax topic", what_i_learned="Historical snapshot", duration_seconds=60, learned_at=datetime.utcnow(), tdm_references=[], article_references=[]))
+        s.commit()
 
         with pytest.raises(HTTPException) as denied:
-            main.create_learning_category(schemas.LearningCategoryCreate(name="Advisory"), current_member=admin, db=s)
+            main.update_learning_category(category.id, schemas.LearningCategoryUpdate(name="Tax / Revenue", expected_version=category.version), current_member=admin, db=s)
         assert denied.value.status_code == 403
 
-        created = main.create_learning_category(schemas.LearningCategoryCreate(name="Advisory"), current_member=super_admin, db=s)
-        assert created.name == "Advisory"
+        updated = main.update_learning_category(category.id, schemas.LearningCategoryUpdate(name="Tax / Revenue", expected_version=category.version), current_member=super_admin, db=s)
+        assert updated.name == "Tax / Revenue"
+        historical = s.query(models.LearningRecord).filter(models.LearningRecord.task_id == task.id).one()
+        assert historical.category == "Tax"
 
-        with pytest.raises(HTTPException) as denied_delete:
-            main.delete_learning_category(created.id, current_member=admin, db=s)
-        assert denied_delete.value.status_code == 403
+        archived = main.update_learning_category(updated.id, schemas.LearningCategoryUpdate(is_active=False, expected_version=updated.version), current_member=super_admin, db=s)
+        assert archived.is_active is False
+        active = main.list_learning_categories(include_archived=False, current_member=staff, db=s)
+        assert all(c.id != archived.id for c in active)
+        all_rows = main.list_learning_categories(include_archived=True, current_member=super_admin, db=s)
+        assert any(c.id == archived.id for c in all_rows)
+    finally:
+        s.close()
 
-        assert main.delete_learning_category(created.id, current_member=super_admin, db=s) is None
+
+def test_learning_library_frequency_breaks_equal_relevance_ties():
+    s = database.SessionLocal()
+    try:
+        tenant_id = "tenant_ld_library_frequency"
+        _tenant(s, tenant_id, "tenant-ld-library-frequency")
+        viewer = _member(s, tenant_id, "viewer-frequency@example.com", name="Viewer")
+        frequent = _member(s, tenant_id, "frequent@example.com", name="Frequent")
+        single = _member(s, tenant_id, "single@example.com", name="Single")
+        _seed_learning(s, tenant_id)
+        reserved = main._unassigned_client_id(tenant_id)
+        now = datetime.utcnow()
+        specs = [
+            ("task_freq_1", frequent, "VAT basics", now - timedelta(days=3)),
+            ("task_freq_2", frequent, "VAT filing", now - timedelta(days=2)),
+            ("task_freq_3", frequent, "VAT rates", now - timedelta(days=1)),
+            ("task_single_1", single, "VAT overview", now),
+        ]
+        for task_id, member, topic, learned_at in specs:
+            s.add(models.TaskInstance(id=task_id, client_id=reserved, client_name=main.UNASSIGNED_CLIENT_NAME, name=main.BUILTIN_LEARNING_TASK_TYPE, task_type=main.BUILTIN_LEARNING_TASK_TYPE, owner_id=member.id, status="submitted", segments=[]))
+            s.flush()
+            s.add(models.LearningRecord(task_id=task_id, member_id=member.id, member_name=member.name, category="VAT", topic=topic, what_i_learned="VAT learning", duration_seconds=60, learned_at=learned_at, tdm_references=[], article_references=[]))
+        s.commit()
+
+        result = main.learning_library(keyword="VAT", category="", letter="", current_member=viewer, db=s)
+        assert result[0].member_name == "Frequent"
+        assert result[0].relevant_count == 3
+        assert result[1].member_name == "Single"
     finally:
         s.close()
