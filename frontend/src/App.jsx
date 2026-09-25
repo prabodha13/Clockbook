@@ -2461,7 +2461,6 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
               <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
                 <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
-                <div className="cb-hint">Minimum 5 words.</div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "start" }}>
                 <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
@@ -2478,7 +2477,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
-              || (isLearningTask && (!learningCategory || !learningTopic.trim() || whatILearned.trim().split(/\s+/).filter(Boolean).length < 5))
+              || (isLearningTask && (!learningCategory || !learningTopic.trim() || !whatILearned.trim()))
               || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
@@ -7580,16 +7579,21 @@ function ManualOverridesReportView() {
 
   const topUsers = userRows.slice(0, 5);
   const maxUserSeconds = Math.max(1, ...topUsers.map((u) => u.absolute));
-  const trendMax = Math.max(1, ...trend.flatMap((d) => [d.added, d.reduced]));
+  const trendMax = Math.max(1, ...trend.flatMap((d) => [d.added, d.reduced, Math.abs((d.added || 0) - (d.reduced || 0))]));
   const chartW = 720, chartH = 220, padL = 48, padR = 16, padT = 16, padB = 42;
-  const addedColor = "#B5590F";
-  const reducedColor = "#2E5C7A";
-
-  const linePoints = (key) => trend.map((d, i) => {
-    const x = trend.length <= 1 ? padL + (chartW - padL - padR) / 2 : padL + i * (chartW - padL - padR) / (trend.length - 1);
-    const y = padT + (chartH - padT - padB) * (1 - (d[key] || 0) / trendMax);
-    return `${x},${y}`;
-  }).join(" ");
+  const addedColor = "#2E5C7A";
+  const reducedColor = "#B5590F";
+  const netTrendColor = "#7C3AED";
+  const plotTop = padT;
+  const plotBottom = chartH - padB;
+  const plotHeight = plotBottom - plotTop;
+  const zeroY = plotTop + plotHeight / 2;
+  const slotWidth = trend.length ? (chartW - padL - padR) / trend.length : (chartW - padL - padR);
+  const barWidth = Math.max(6, Math.min(24, slotWidth * 0.28));
+  const trendX = (i) => padL + slotWidth * (i + 0.5);
+  const magnitudeY = (seconds) => (Math.abs(Number(seconds || 0)) / trendMax) * (plotHeight / 2);
+  const netY = (d) => zeroY - (((d.added || 0) - (d.reduced || 0)) / trendMax) * (plotHeight / 2);
+  const netLinePoints = trend.map((d, i) => `${trendX(i)},${netY(d)}`).join(" ");
 
   function signedDuration(seconds) {
     if (Math.abs(seconds) < 1) return "0m";
@@ -7656,7 +7660,7 @@ function ManualOverridesReportView() {
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
                   <div>
                     <div className="cb-group-title">Override trend over time</div>
-                    <div className="cb-hint" style={{ marginTop: 3 }}>{trendGranularity === "day" ? "Daily" : trendGranularity === "week" ? "Weekly" : "Monthly"} time added versus reduced. Periods with no manual adjustment stay at zero.</div>
+                    <div className="cb-hint" style={{ marginTop: 3 }}>{trendGranularity === "day" ? "Daily" : trendGranularity === "week" ? "Weekly" : "Monthly"} time added and reduced, with net change shown as the trend line. Periods with no manual adjustment stay at zero.</div>
                   </div>
                   <div style={{ width: 260, maxWidth: "42%", flex: "0 0 auto" }}>
                     <SearchableSelect
@@ -7671,37 +7675,41 @@ function ManualOverridesReportView() {
                 {trend.length <= 1 ? <div className="cb-empty" style={{ minHeight: 220, display: "grid", placeItems: "center" }}>Choose a multi-day period to see a trend.</div> : <>
                   <div style={{ position: "relative" }} onMouseLeave={() => setTrendHover(null)}>
                   <svg viewBox={`0 0 ${chartW} ${chartH}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label={`Manual override trend for ${trendUser}`}>
-                    {[0, 0.5, 1].map((r) => { const y = padT + (chartH - padT - padB) * r; return <line key={r} x1={padL} x2={chartW - padR} y1={y} y2={y} stroke="var(--line)" strokeWidth="1" />; })}
-                    <text x={padL - 8} y={padT + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">{formatHM(trendMax)}</text>
-                    <text x={padL - 8} y={chartH - padB + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">0m</text>
-                    <polyline fill="none" stroke={addedColor} strokeWidth="2.7" strokeLinejoin="round" strokeLinecap="round" points={linePoints("added")} />
-                    <polyline fill="none" stroke={reducedColor} strokeWidth="2.7" strokeLinejoin="round" strokeLinecap="round" points={linePoints("reduced")} />
+                    {[plotTop, zeroY, plotBottom].map((y) => <line key={y} x1={padL} x2={chartW - padR} y1={y} y2={y} stroke="var(--line)" strokeWidth="1" />)}
+                    <text x={padL - 8} y={plotTop + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">{formatHM(trendMax)}</text>
+                    <text x={padL - 8} y={zeroY + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">0m</text>
+                    <text x={padL - 8} y={plotBottom + 4} fontSize="10" fill="var(--ink-faint)" textAnchor="end">−{formatHM(trendMax)}</text>
                     {trend.map((d, i) => {
-                      const x = trend.length <= 1 ? padL + (chartW - padL - padR) / 2 : padL + i * (chartW - padL - padR) / (trend.length - 1);
-                      const addedY = padT + (chartH - padT - padB) * (1 - (d.added || 0) / trendMax);
-                      const reducedY = padT + (chartH - padT - padB) * (1 - (d.reduced || 0) / trendMax);
+                      const x = trendX(i);
+                      const addedHeight = magnitudeY(d.added);
+                      const reducedHeight = magnitudeY(d.reduced);
                       const labelEvery = trend.length <= 7 ? 1 : trend.length <= 14 ? 2 : Math.ceil(trend.length / 7);
                       const showLabel = i === 0 || i === trend.length - 1 || i % labelEvery === 0;
-                      const step = trend.length <= 1 ? (chartW - padL - padR) : (chartW - padL - padR) / (trend.length - 1);
-                      const hitLeft = i === 0 ? padL : x - step / 2;
-                      const hitRight = i === trend.length - 1 ? chartW - padR : x + step / 2;
+                      const hitLeft = padL + slotWidth * i;
                       const hovered = trendHover?.key === d.key;
+                      const net = (d.added || 0) - (d.reduced || 0);
                       return <Fragment key={d.key}>
-                        {hovered && <line x1={x} x2={x} y1={padT} y2={chartH - padB} stroke="var(--line-strong, #cbd5cf)" strokeWidth="1" strokeDasharray="3 4" />}
-                        <circle cx={x} cy={addedY} r={hovered ? "4.5" : "3"} fill={addedColor} />
-                        <circle cx={x} cy={reducedY} r={hovered ? "4.5" : "3"} fill={reducedColor} />
+                        {hovered && <line x1={x} x2={x} y1={plotTop} y2={plotBottom} stroke="var(--line-strong, #cbd5cf)" strokeWidth="1" strokeDasharray="3 4" />}
+                        {addedHeight > 0 && <rect x={x - barWidth - 1} y={zeroY - addedHeight} width={barWidth} height={addedHeight} rx="2" fill={addedColor} />}
+                        {reducedHeight > 0 && <rect x={x + 1} y={zeroY} width={barWidth} height={reducedHeight} rx="2" fill={reducedColor} />}
                         <rect
                           x={hitLeft}
-                          y={padT}
-                          width={Math.max(8, hitRight - hitLeft)}
-                          height={chartH - padT - padB}
+                          y={plotTop}
+                          width={Math.max(8, slotWidth)}
+                          height={plotHeight}
                           fill="transparent"
                           style={{ cursor: "crosshair" }}
-                          onMouseEnter={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, x })}
-                          onMouseMove={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, x })}
+                          onMouseEnter={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, net, x })}
+                          onMouseMove={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, net, x })}
                         />
-                        {showLabel && <text x={x} y={chartH - 13} fontSize="10" fill="var(--ink-faint)" textAnchor={i === 0 ? "start" : i === trend.length - 1 ? "end" : "middle"}>{d.label}</text>}
+                        {showLabel && <text x={x} y={chartH - 13} fontSize="10" fill="var(--ink-faint)" textAnchor="middle">{d.label}</text>}
                       </Fragment>;
+                    })}
+                    <polyline fill="none" stroke={netTrendColor} strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round" points={netLinePoints} />
+                    {trend.map((d, i) => {
+                      const x = trendX(i);
+                      const hovered = trendHover?.key === d.key;
+                      return <circle key={`net-${d.key}`} cx={x} cy={netY(d)} r={hovered ? "4.6" : "3.2"} fill={netTrendColor} />;
                     })}
                   </svg>
                   {trendHover && <div style={{
@@ -7723,11 +7731,13 @@ function ManualOverridesReportView() {
                     <div style={{ fontWeight: 750, marginBottom: 4 }}>{trendHover.label}</div>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time added</span><span className="cb-mono">{formatHM(trendHover.added)}</span></div>
                     <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time reduced</span><span className="cb-mono">{formatHM(trendHover.reduced)}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 2, paddingTop: 2, borderTop: "1px solid rgba(255,255,255,.16)" }}><span>Net change</span><span className="cb-mono">{signedDuration(trendHover.net)}</span></div>
                   </div>}
                   </div>
                   <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: -4 }}>
-                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: addedColor }} />Time added</span>
-                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: reducedColor }} />Time reduced</span>
+                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 9, borderRadius: 2, background: addedColor }} />Time added</span>
+                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 9, borderRadius: 2, background: reducedColor }} />Time reduced</span>
+                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: netTrendColor }} />Net trend</span>
                   </div>
                 </>}
               </div>
@@ -9938,7 +9948,6 @@ export default function App() {
 
   async function changeMemberRole(memberId, role) {
     try {
-      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberRole(memberId, role, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
@@ -9948,7 +9957,6 @@ export default function App() {
 
   async function changeMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom = null) {
     try {
-      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -9960,7 +9968,6 @@ export default function App() {
 
   async function changeMemberTimezone(memberId, timezoneName) {
     try {
-      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberTimezone(memberId, timezoneName, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -9972,7 +9979,6 @@ export default function App() {
 
   async function changeMemberInsightsPermission(memberId, enabled) {
     try {
-      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberInsightsPermission(memberId, enabled, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast(`${enabled ? "Enabled" : "Disabled"} leave & capacity insights for ${updated.name}`);
@@ -10003,7 +10009,6 @@ export default function App() {
 
   async function assignMemberPod(memberId, podId) {
     try {
-      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberPod(memberId, podId, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -10153,7 +10158,6 @@ export default function App() {
   }
 
   async function updateClient(clientId, name, code) {
-    const current = clients.find((c) => c.id === clientId);
     const updated = await api.updateClient(clientId, name, code, current?.version || 1);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
@@ -10198,7 +10202,6 @@ export default function App() {
   }
 
   async function updateTaskTypeBilling(id, isBillable) {
-    const current = taskTypes.find((t) => t.id === id);
     const updated = await api.updateTaskTypeBilling(id, isBillable, current?.version || 1);
     setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
