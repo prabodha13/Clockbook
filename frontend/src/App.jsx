@@ -45,8 +45,9 @@ function StableSaaSTabs({ value, onChange, options, ariaLabel = "View" }) {
               height: 32,
               padding: "0 12px",
               border: "1px solid transparent",
+              borderBottom: active ? "2px solid var(--green)" : "2px solid transparent",
               borderRadius: 7,
-              background: active ? "var(--paper)" : "transparent",
+              background: "transparent",
               color: active ? "var(--ink)" : "var(--ink-muted)",
               font: "inherit",
               fontSize: 13,
@@ -54,8 +55,8 @@ function StableSaaSTabs({ value, onChange, options, ariaLabel = "View" }) {
               lineHeight: 1,
               whiteSpace: "nowrap",
               cursor: "pointer",
-              boxShadow: active ? "0 1px 2px rgba(18, 35, 28, 0.08)" : "none",
-              transition: "background-color 140ms ease, color 140ms ease, box-shadow 140ms ease",
+              boxShadow: "none",
+              transition: "color 140ms ease, border-color 140ms ease",
             }}
           >
             {option.label}
@@ -7789,17 +7790,21 @@ function InactivityAuditView({ members }) {
   const weekAgo = new Date();
   weekAgo.setDate(today.getDate() - 6);
   const todayKey = localDate(today);
+  const yesterday = new Date(today);
+  yesterday.setDate(today.getDate() - 1);
+  const yesterdayKey = localDate(yesterday);
   const [dateMode, setDateMode] = useState("today");
   const [dateFrom, setDateFrom] = useState(localDate(weekAgo));
   const [dateTo, setDateTo] = useState(todayKey);
 
   const auditDateRange = useMemo(() => {
     if (dateMode === "today") return { from: todayKey, to: todayKey };
+    if (dateMode === "yesterday") return { from: yesterdayKey, to: yesterdayKey };
     if (dateMode === "custom") return { from: dateFrom, to: dateTo };
     const range = dateRangeForPreset(dateMode);
     if (!range) return { from: todayKey, to: todayKey };
     return { from: localDate(new Date(range.fromIso)), to: localDate(new Date(range.toIso)) };
-  }, [dateMode, dateFrom, dateTo, todayKey]);
+  }, [dateMode, dateFrom, dateTo, todayKey, yesterdayKey]);
   const [enabled, setEnabled] = useState(null);
   const [events, setEvents] = useState(null);
   const [activityRows, setActivityRows] = useState(null);
@@ -7870,6 +7875,7 @@ function InactivityAuditView({ members }) {
             <div className="cb-label">Period</div>
             <div className="cb-tabs">
               <button className={`cb-tab ${dateMode === "today" ? "active" : ""}`} onClick={() => setDateMode("today")}>Today</button>
+              <button className={`cb-tab ${dateMode === "yesterday" ? "active" : ""}`} onClick={() => setDateMode("yesterday")}>Yesterday</button>
               <button className={`cb-tab ${dateMode === "this_week" ? "active" : ""}`} onClick={() => setDateMode("this_week")}>This week</button>
               <button className={`cb-tab ${dateMode === "last_week" ? "active" : ""}`} onClick={() => setDateMode("last_week")}>Last week</button>
               <button className={`cb-tab ${dateMode === "this_month" ? "active" : ""}`} onClick={() => setDateMode("this_month")}>This month</button>
