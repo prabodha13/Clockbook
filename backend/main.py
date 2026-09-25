@@ -4190,19 +4190,51 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
 
 
 @app.get("/api/learning/categories", response_model=list[schemas.LearningCategoryOut])
-def list_learning_categories(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return db.query(models.LearningCategory).order_by(func.lower(models.LearningCategory.name)).all()
+def list_learning_categories(include_archived: bool = False, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    query = db.query(models.LearningCategory)
+    if include_archived:
+        if current_member.role != "super_admin":
+            raise HTTPException(403, "Only Super Admins can manage archived L&D categories")
+    else:
+        query = query.filter(models.LearningCategory.is_active.is_(True))
+    return query.order_by(func.lower(models.LearningCategory.name)).all()
 
 
 @app.post("/api/learning/categories", response_model=schemas.LearningCategoryOut, status_code=201)
 def create_learning_category(payload: schemas.LearningCategoryCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin access required")
+        raise HTTPException(403, "Only Super Admins can manage L&D categories")
     name = payload.name.strip()
     if db.query(models.LearningCategory).filter(func.lower(models.LearningCategory.name) == name.lower()).first():
         raise HTTPException(400, "That L&D category already exists")
-    category = models.LearningCategory(name=name)
+    category = models.LearningCategory(name=name, is_active=True)
     db.add(category)
+    db.commit()
+    db.refresh(category)
+    return category
+
+
+@app.patch("/api/learning/categories/{category_id}", response_model=schemas.LearningCategoryOut)
+def update_learning_category(category_id: str, payload: schemas.LearningCategoryUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only Super Admins can manage L&D categories")
+    category = db.get(models.LearningCategory, category_id)
+    if not category:
+        raise HTTPException(404, "L&D category not found")
+    _require_expected_version(category, payload.expected_version)
+    if payload.name is not None:
+        name = payload.name.strip()
+        duplicate = db.query(models.LearningCategory).filter(
+            models.LearningCategory.id != category.id,
+            func.lower(models.LearningCategory.name) == name.lower(),
+        ).first()
+        if duplicate:
+            raise HTTPException(400, "That L&D category already exists")
+        # LearningRecord.category is a historical snapshot string. Renaming the configured
+        # category deliberately affects future submissions only and never rewrites old records.
+        category.name = name
+    if payload.is_active is not None:
+        category.is_active = bool(payload.is_active)
     db.commit()
     db.refresh(category)
     return category
@@ -4211,12 +4243,12 @@ def create_learning_category(payload: schemas.LearningCategoryCreate, current_me
 @app.delete("/api/learning/categories/{category_id}", status_code=204)
 def delete_learning_category(category_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin access required")
+        raise HTTPException(403, "Only Super Admins can manage L&D categories")
     category = db.get(models.LearningCategory, category_id)
     if not category:
         return None
     if db.query(models.LearningRecord).filter(func.lower(models.LearningRecord.category) == category.name.lower()).count():
-        raise HTTPException(400, "This category is already used by L&D records and cannot be deleted")
+        raise HTTPException(400, "This category has historical L&D records. Archive it instead of deleting it.")
     db.delete(category)
     db.commit()
     return None
@@ -4937,7 +4969,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
             raise HTTPException(400, "Enter the L&D topic before completing")
         if not learning_notes:
             raise HTTPException(400, "Enter What I Learned before completing L&D")
-        if not db.query(models.LearningCategory).filter(func.lower(models.LearningCategory.name) == learning_category.lower()).first():
+        if not db.query(models.LearningCategory).filter(models.LearningCategory.is_active.is_(True), func.lower(models.LearningCategory.name) == learning_category.lower()).first():
             raise HTTPException(400, "Select a valid L&D Major Category")
         tdm_references = _learning_reference_dicts(payload.tdm_references)
         article_references = _learning_reference_dicts(payload.article_references)

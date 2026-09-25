@@ -251,6 +251,7 @@ class LearningCategory(TenantScopedMixin, VersionedMixin, Base):
     __table_args__ = (UniqueConstraint("tenant_id", "name", name="uq_learning_categories_tenant_name"),)
     id = Column(String, primary_key=True, default=lambda: gen_id("ldcat"))
     name = Column(String, nullable=False)
+    is_active = Column(Boolean, nullable=False, default=True)
 
 
 class TrackedMetric(TenantScopedMixin, VersionedMixin, Base):

@@ -243,10 +243,17 @@ class LearningCategoryOut(BaseModel):
     id: str
     version: int = 1
     name: str
+    is_active: bool = True
 
 
 class LearningCategoryCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
+
+
+class LearningCategoryUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=160)
+    is_active: Optional[bool] = None
+    expected_version: int = Field(ge=1)
 
 
 class LearningReference(BaseModel):
