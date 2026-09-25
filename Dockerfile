@@ -17,9 +17,17 @@ WORKDIR /app
 COPY backend/requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Keep the existing runtime layout: backend files live directly in /app.
 COPY backend/ ./
 
-# Copy the built React app into the backend folder
+# Also keep a backend/ package copy because alembic/env.py expects /app/backend.
+COPY backend/ ./backend/
+
+# Include Alembic configuration and migrations in the production image.
+COPY alembic.ini ./alembic.ini
+COPY alembic/ ./alembic/
+
+# Copy the built React app into the backend folder used by the running app.
 COPY --from=frontend /app/backend/dist ./dist
 
 # Railway injects $PORT at runtime
