@@ -11,6 +11,8 @@ class BaseModel(PydanticBaseModel):
 class Segment(BaseModel):
     start: str = Field(min_length=1, max_length=64)
     end: Optional[str] = Field(default=None, max_length=64)
+    source: Optional[str] = Field(default=None, max_length=64)
+    recovered_seconds: Optional[float] = Field(default=None, ge=0, le=28800)
 
 
 class MemberOut(BaseModel):
@@ -472,6 +474,10 @@ class TaskSubmit(BaseModel):
 class TaskStart(BaseModel):
     start_count: Optional[int] = Field(default=None, ge=0, le=2147483647)
     start_at: Optional[str] = Field(default=None, max_length=64)
+
+
+class TaskRecoverTime(BaseModel):
+    seconds: float = Field(gt=0, le=28800)
 
 
 class TaskReassign(BaseModel):

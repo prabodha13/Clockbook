@@ -4759,6 +4759,72 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
     db.refresh(task)
     return task
 
+@app.post("/api/tasks/{task_id}/recover-time", response_model=schemas.TaskOut)
+def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Add a bounded, explicitly-audited block of forgotten time to an existing task.
+
+    The recovered block is stored as a closed timer segment so it contributes to the task's
+    duration without rewriting an earlier timer segment. It is tagged separately from normal
+    tracking and recorded in the immutable audit ledger as forgotten-time recovery.
+    """
+    _lock_timer_owner(db, current_member.id)
+    task = _get_task_for_update(db, task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    if task.owner_id and task.owner_id != current_member.id:
+        raise HTTPException(403, "This task belongs to someone else")
+    if task.status == "submitted":
+        raise HTTPException(400, "Submitted tasks cannot receive recovered time")
+    if task.status == "running":
+        raise HTTPException(400, "Pause the running task before recovering forgotten time")
+
+    seconds = float(payload.seconds)
+    now = datetime.utcnow()
+    start = now - timedelta(seconds=seconds)
+
+    # Do not allow recovered time to overlap time already recorded for this person. This keeps
+    # forgotten-time recovery additive without creating double-counted timer periods.
+    owned_tasks = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id == current_member.id).all()
+    for owned in owned_tasks:
+        for seg in (owned.segments or []):
+            try:
+                seg_start = parse_utc_naive(seg.get("start"))
+                seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
+            except Exception:
+                continue
+            if start < seg_end and now > seg_start:
+                raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
+
+    recovered = {
+        "start": start.isoformat() + "Z",
+        "end": now.isoformat() + "Z",
+        "source": "forgotten_time_recovery",
+        "recovered_seconds": round(seconds, 1),
+    }
+    task.segments = [*(task.segments or []), recovered]
+    if not task.owner_id:
+        task.owner_id = current_member.id
+    if task.status == "todo":
+        task.status = "paused"
+
+    db.add(models.AuditEvent(
+        tenant_id=current_member.tenant_id,
+        actor_member_id=current_member.id,
+        action="forgotten_time_recovered",
+        entity_type="TaskInstance",
+        entity_id=task.id,
+        changes={
+            "seconds": round(seconds, 1),
+            "source": "forgotten_time_recovery",
+            "start": recovered["start"],
+            "end": recovered["end"],
+        },
+    ))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
 @app.post("/api/tasks/{task_id}/start", response_model=schemas.TaskOut)
 def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     # Treat Start as one serialized state transition per person. This keeps the existing
@@ -4969,8 +5035,6 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
             raise HTTPException(400, "Enter the L&D topic before completing")
         if not learning_notes:
             raise HTTPException(400, "Enter What I Learned before completing L&D")
-        if len(learning_notes.split()) < 5:
-            raise HTTPException(400, "Enter at least 5 words describing what you learned")
         if not db.query(models.LearningCategory).filter(models.LearningCategory.is_active.is_(True), func.lower(models.LearningCategory.name) == learning_category.lower()).first():
             raise HTTPException(400, "Select a valid L&D Major Category")
         tdm_references = _learning_reference_dicts(payload.tdm_references)
@@ -6396,9 +6460,21 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             continue
         if to_dt and (work_started_at is None or work_started_at > to_dt):
             continue
-        tracked_seconds = elapsed_seconds(t.segments)
-        is_adjusted = t.adjusted_seconds is not None
-        final_seconds = t.adjusted_seconds if is_adjusted else tracked_seconds
+        tracked_seconds_with_recovery = elapsed_seconds(t.segments)
+        forgotten_recovered_seconds = sum(
+            elapsed_seconds([seg]) for seg in (t.segments or [])
+            if isinstance(seg, dict) and seg.get("source") == "forgotten_time_recovery"
+        )
+        automatically_tracked_seconds = max(tracked_seconds_with_recovery - forgotten_recovered_seconds, 0.0)
+        has_submit_override = t.adjusted_seconds is not None
+        is_adjusted = has_submit_override or forgotten_recovered_seconds > 0
+        final_seconds = t.adjusted_seconds if has_submit_override else tracked_seconds_with_recovery
+        adjustment_type = (
+            "Manual override + forgotten time recovered" if has_submit_override and forgotten_recovered_seconds > 0
+            else "Forgotten time recovered" if forgotten_recovered_seconds > 0
+            else "Manual override" if has_submit_override
+            else ""
+        )
         change = None
         if t.start_count is not None and t.end_count is not None:
             change = t.end_count - t.start_count
@@ -6413,10 +6489,12 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
             "role": t.role,
             "task_type": t.task_type,
             "seconds": round(final_seconds, 1),
-            "tracked_seconds": round(tracked_seconds, 1) if is_adjusted else None,
+            "tracked_seconds": round(automatically_tracked_seconds, 1) if is_adjusted else None,
             "hours": round(final_seconds / 3600, 2),
-            "tracked_hours": round(tracked_seconds / 3600, 2) if is_adjusted else None,
+            "tracked_hours": round(automatically_tracked_seconds / 3600, 2) if is_adjusted else None,
             "adjusted": is_adjusted,
+            "adjustment_type": adjustment_type,
+            "forgotten_time_recovered_seconds": round(forgotten_recovered_seconds, 1),
             "note": t.note,
             "tracked_by": members.get(t.submitted_by_id, ""),
             "pushed": t.pushed_to_karbon,
