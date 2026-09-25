@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
   CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
   Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake, Search, HelpCircle,
-  Mail, Lock, Eye, EyeOff, ShieldCheck,
+  Mail, Lock, Eye, EyeOff, ShieldCheck, GraduationCap, BookOpen, ExternalLink,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 
@@ -572,6 +572,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     { id: "insights", label: "Insights", icon: LayoutDashboard },
     { id: "export", label: "Export", icon: FileSpreadsheet },
     ...(karbonConnected ? [{ id: "reconcile", label: "Karbon Check", icon: CheckCircle2 }] : []),
+    { id: "learning", label: "Learning & Development", icon: GraduationCap },
     { id: "staff", label: "Staff", icon: Users },
     ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
     ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
@@ -626,7 +627,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
           <div className="cb-tracking-dot" />
           <div className="cb-tracking-text" style={{ minWidth: 0, flex: 1 }}>
             <div className="cb-tracking-label" style={{ marginBottom: 2, fontSize: 11.5 }}>{isPaused ? "Paused" : "Now tracking"}</div>
-            <div className="cb-tracking-name" style={{ lineHeight: 1.25, overflow: "hidden", textOverflow: "ellipsis" }}>{pinnedTask.client_name}: {taskDisplayHeading(pinnedTask)}</div>
+            <div className="cb-tracking-name" style={{ lineHeight: 1.25, overflow: "hidden", textOverflow: "ellipsis" }}>{taskClientLabel(pinnedTask)}: {taskDisplayHeading(pinnedTask)}</div>
           </div>
           <div className="cb-tracking-time cb-mono" style={{ fontSize: 14, fontWeight: 750, padding: "0 4px" }}>{formatHMS(elapsed)}</div>
           <div className="cb-tracking-actions" style={{ gap: 6 }}>
@@ -707,7 +708,7 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
   return (
     <div className="cb-row">
       <div className="cb-row-main">
-        {!hideClient && <div className="cb-row-client"><Building2 size={11} />{task.client_name}</div>}
+        {!hideClient && <div className="cb-row-client"><Building2 size={11} />{taskClientLabel(task)}</div>}
         <div className="cb-row-task" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span>{taskDisplayHeading(task)}</span>
           {taskPeriodContext(task) && (
@@ -804,6 +805,7 @@ function resolvedBankAccountId(row, taskId, clientAccounts) {
 }
 
 const BUILTIN_HELPING_TASK_TYPE = "Helping/Training";
+const BUILTIN_LEARNING_TASK_TYPE = "Learning & Development";
 
 function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, members, currentUser, onClose, onDone, onCreateTasks }) {
   const [rows, setRows] = useState(() =>
@@ -1191,7 +1193,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -1223,8 +1225,9 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const inProgressByClient = (() => {
     const map = new Map();
     for (const t of filteredInProgress) {
-      if (!map.has(t.client_name)) map.set(t.client_name, []);
-      map.get(t.client_name).push(t);
+      const clientLabel = taskClientLabel(t);
+      if (!map.has(clientLabel)) map.set(clientLabel, []);
+      map.get(clientLabel).push(t);
     }
     return Array.from(map.keys())
       .sort((a, b) => a.localeCompare(b))
@@ -1360,6 +1363,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
           )}
           <div style={{ display: "flex", alignItems: "center", gap: 7, paddingLeft: 2 }}>
             <button className="cb-btn" data-tour="ad-hoc-meeting" onClick={onAdHocMeeting}><Video size={15} />Ad hoc meeting</button>
+            <button className="cb-btn" onClick={onLearningDevelopment}><GraduationCap size={15} />Learning & Development</button>
             <button className="cb-btn" data-tour="helper" onClick={onManualHelp}><HeartHandshake size={15} />Helper</button>
             <button className="cb-btn cb-btn-primary" data-tour="new-task-button" onClick={onNewTask}><Plus size={15} />New task</button>
           </div>
@@ -1598,6 +1602,11 @@ function taskDisplayHeading(task) {
     ? `${task.source_template_name} - ${task.name}`
     : task.name;
   return taskHeading(taskName, task.bank_account_name, task.pay_period_type, task.pay_period_number);
+}
+
+function taskClientLabel(task) {
+  if (task?.task_type === BUILTIN_LEARNING_TASK_TYPE && String(task?.client_id || "").startsWith(UNASSIGNED_CLIENT_ID)) return BUILTIN_LEARNING_TASK_TYPE;
+  return task?.client_name || "";
 }
 
 function exportTaskText(row) {
@@ -2158,7 +2167,7 @@ function StartCountModal({ task, onClose, onSubmit }) {
         </div>
         <div className="cb-modal-body">
           <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
+            <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{taskClientLabel(task)}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 500 }}>{task.name}</div>
           </div>
           <div className="cb-field">
@@ -2183,12 +2192,37 @@ function StartCountModal({ task, onClose, onSubmit }) {
   );
 }
 
-function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit }) {
+function LearningReferenceEditor({ label, items, onChange }) {
+  function update(index, patch) {
+    onChange(items.map((item, i) => i === index ? { ...item, ...patch } : item));
+  }
+  function remove(index) { onChange(items.filter((_, i) => i !== index)); }
+  return (
+    <div className="cb-field">
+      <label className="cb-label">{label} <span style={{ fontWeight: 400, color: "var(--ink-faint)" }}>(optional)</span></label>
+      {items.map((item, index) => (
+        <div key={index} style={{ display: "grid", gridTemplateColumns: "minmax(130px,.8fr) minmax(220px,1.5fr) 34px", gap: 7, marginBottom: 7 }}>
+          <input className="cb-input" placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
+          <input className="cb-input" type="url" placeholder="https://..." value={item.url} onChange={(e) => update(index, { url: e.target.value })} />
+          <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove reference" onClick={() => remove(index)}><Trash2 size={13} /></button>
+        </div>
+      ))}
+      <button type="button" className="cb-btn cb-btn-sm" onClick={() => onChange([...items, { title: "", url: "" }])}><Plus size={13} />Add reference</button>
+    </div>
+  );
+}
+
+function CompleteModal({ task, now, roles, taskTypes, clients, learningCategories = [], onClose, onSubmit }) {
   const [note, setNote] = useState(task.note || "");
   const [endCount, setEndCount] = useState(task.end_count != null ? String(task.end_count) : "");
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState(task.role || "");
   const [taskType, setTaskType] = useState(task.task_type || "");
+  const [learningCategory, setLearningCategory] = useState("");
+  const [learningTopic, setLearningTopic] = useState("");
+  const [whatILearned, setWhatILearned] = useState("");
+  const [tdmReferences, setTdmReferences] = useState([]);
+  const [articleReferences, setArticleReferences] = useState([]);
   const configuredPeriodTypes = useMemo(() => (
     (task.period_types || []).length > 0 ? [...(task.period_types || [])] : (task.needs_pay_period ? ["weekly", "fortnightly", "monthly"] : [])
   ), [task.period_types, task.needs_pay_period]);
@@ -2200,8 +2234,10 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
   const [periodStart, setPeriodStart] = useState(task.period_start || "");
   const [periodEnd, setPeriodEnd] = useState(task.period_end || "");
   const isWeeklyBookkeeping = periodType === "weekly" && isBookkeepingWork(task);
-  const needsClient = task.client_id === UNASSIGNED_CLIENT_ID;
-  const [clientId, setClientId] = useState(needsClient ? "" : task.client_id);
+  const effectiveTaskType = task.task_type || taskType;
+  const isLearningTask = effectiveTaskType === BUILTIN_LEARNING_TASK_TYPE;
+  const needsClient = task.client_id === UNASSIGNED_CLIENT_ID && !isLearningTask;
+  const [clientId, setClientId] = useState(task.client_id === UNASSIGNED_CLIENT_ID ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
   // Snapshot the tracked time once, when the modal first opens. This used to be recalculated
   // from the live clock on every render, so if the task kept running while this dialog was
@@ -2351,6 +2387,28 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
               )}
             </div>
           )}
+          {isLearningTask && (
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, marginBottom: 14, background: "var(--paper-soft)" }}>
+              <div className="cb-group-title" style={{ marginBottom: 10 }}>Learning & Development details</div>
+              <div className="cb-field">
+                <label className="cb-label">Major Category *</label>
+                <select className="cb-select" value={learningCategory} onChange={(e) => setLearningCategory(e.target.value)}>
+                  <option value="">Select category</option>
+                  {learningCategories.map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">Topic *</label>
+                <input className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
+              </div>
+              <div className="cb-field">
+                <label className="cb-label">What I Learned *</label>
+                <textarea className="cb-textarea" rows={4} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
+              </div>
+              <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
+              <LearningReferenceEditor label="Articles / External References" items={articleReferences} onChange={setArticleReferences} />
+            </div>
+          )}
           <div className="cb-field">
             <label className="cb-label"><StickyNote size={12} style={{ verticalAlign: -1, marginRight: 4 }} />Note (optional)</label>
             <textarea className="cb-textarea" placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
@@ -2360,6 +2418,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
+              || (isLearningTask && (!learningCategory || !learningTopic.trim() || !whatILearned.trim()))
               || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
@@ -2374,6 +2433,11 @@ function CompleteModal({ task, now, roles, taskTypes, clients, onClose, onSubmit
                 needsPeriod ? {
                   type: periodType, year: periodYear ? parseInt(periodYear, 10) : null,
                   number: periodNumber ? parseInt(periodNumber, 10) : null, start: periodStart || null, end: periodEnd || null,
+                } : null,
+                isLearningTask ? {
+                  category: learningCategory, topic: learningTopic.trim(), whatILearned: whatILearned.trim(),
+                  tdmReferences: tdmReferences.filter((r) => r.url.trim()).map((r) => ({ title: r.title.trim(), url: r.url.trim() })),
+                  articleReferences: articleReferences.filter((r) => r.url.trim()).map((r) => ({ title: r.title.trim(), url: r.url.trim() })),
                 } : null
               );
             }}
@@ -3158,9 +3222,143 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
   );
 }
 
+function LearningDevelopmentView({ currentUser, members, categories }) {
+  const isManager = isAdminRole(currentUser.role);
+  const [mode, setMode] = useState("library");
+  const [keyword, setKeyword] = useState("");
+  const [category, setCategory] = useState("");
+  const [letter, setLetter] = useState("");
+  const [libraryRows, setLibraryRows] = useState([]);
+  const [libraryBusy, setLibraryBusy] = useState(false);
+  const [libraryError, setLibraryError] = useState("");
+  const libraryActivated = !!(keyword.trim() || category || letter);
+
+  const loadLibrary = useCallback(async () => {
+    if (!libraryActivated) { setLibraryRows([]); setLibraryError(""); return; }
+    setLibraryBusy(true); setLibraryError("");
+    try { setLibraryRows(await api.getLearningLibrary(keyword.trim(), category, letter)); }
+    catch (err) { setLibraryError(err.message || "Could not load the knowledge library"); }
+    finally { setLibraryBusy(false); }
+  }, [keyword, category, letter, libraryActivated]);
+
+  useEffect(() => { const t = setTimeout(loadLibrary, 180); return () => clearTimeout(t); }, [loadLibrary]);
+
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [personId, setPersonId] = useState("");
+  const [reportCategory, setReportCategory] = useState("");
+  const [reportKeyword, setReportKeyword] = useState("");
+  const [reportRows, setReportRows] = useState([]);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [reportError, setReportError] = useState("");
+
+  const managerMembers = useMemo(() => {
+    if (currentUser.role === "super_admin") return members;
+    return members.filter((m) => m.role !== "super_admin" && (!currentUser.pod_id || m.pod_id === currentUser.pod_id));
+  }, [members, currentUser]);
+
+  const loadReport = useCallback(async () => {
+    if (!isManager || mode !== "management") return;
+    setReportBusy(true); setReportError("");
+    try { setReportRows(await api.getLearningReport(dateFrom, dateTo, personId, reportCategory, reportKeyword.trim())); }
+    catch (err) { setReportError(err.message || "Could not load the L&D report"); }
+    finally { setReportBusy(false); }
+  }, [isManager, mode, dateFrom, dateTo, personId, reportCategory, reportKeyword]);
+
+  useEffect(() => { const t = setTimeout(loadReport, 180); return () => clearTimeout(t); }, [loadReport]);
+
+  const byPerson = useMemo(() => {
+    const map = new Map();
+    for (const row of reportRows) map.set(row.member_name, (map.get(row.member_name) || 0) + Number(row.duration_seconds || 0));
+    return Array.from(map.entries()).map(([name, seconds]) => ({ name, seconds })).sort((a, b) => b.seconds - a.seconds);
+  }, [reportRows]);
+  const byCategory = useMemo(() => {
+    const map = new Map();
+    for (const row of reportRows) map.set(row.category, (map.get(row.category) || 0) + Number(row.duration_seconds || 0));
+    return Array.from(map.entries()).map(([name, seconds]) => ({ name, seconds })).sort((a, b) => b.seconds - a.seconds);
+  }, [reportRows]);
+  const totalSeconds = reportRows.reduce((sum, row) => sum + Number(row.duration_seconds || 0), 0);
+  const maxPerson = Math.max(1, ...byPerson.map((r) => r.seconds));
+  const maxCategory = Math.max(1, ...byCategory.map((r) => r.seconds));
+
+  function ReferenceLinks({ items }) {
+    if (!items?.length) return <span style={{ color: "var(--ink-faint)" }}>—</span>;
+    return <div style={{ display: "grid", gap: 3 }}>{items.map((ref, i) => <a key={`${ref.url}-${i}`} href={ref.url} target="_blank" rel="noreferrer" style={{ color: "var(--green)", textDecoration: "none", display: "inline-flex", gap: 4, alignItems: "center" }}><ExternalLink size={11} />{ref.title || ref.url}</a>)}</div>;
+  }
+
+  return (
+    <div>
+      <div className="cb-page-head" style={{ marginBottom: 14 }}>
+        <div>
+          <div className="cb-page-title cb-serif">Learning & Development</div>
+          <div className="cb-page-sub">Find who has already learned about a subject, or review L&D activity if you manage the team.</div>
+        </div>
+      </div>
+      {isManager && <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, marginBottom: 16, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)", width: "fit-content" }}>
+        <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
+          <button className={`cb-tab cb-tab-plain ${mode === "library" ? "active" : ""}`} onClick={() => setMode("library")}>Staff Knowledge Library</button>
+          <button className={`cb-tab cb-tab-plain ${mode === "management" ? "active" : ""}`} onClick={() => setMode("management")}>Management L&D Report</button>
+        </div>
+      </div>}
+
+      {mode === "library" && <>
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 14, marginBottom: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1.5fr) minmax(190px,.8fr)", gap: 10, alignItems: "end" }}>
+            <div><div className="cb-label">Keyword search</div><div style={{ position: "relative" }}><Search size={15} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-faint)" }} /><input className="cb-input" style={{ paddingLeft: 34 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Search topic or what was learned..." /></div></div>
+            <div><div className="cb-label">Major Category</div><select className="cb-select" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+          </div>
+          <div style={{ marginTop: 12 }}>
+            <div className="cb-label" style={{ marginBottom: 6 }}>Browse A-Z</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+              {"ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("").map((ch) => <button key={ch} className={`cb-btn cb-btn-sm ${letter === ch ? "cb-btn-primary" : ""}`} style={{ minWidth: 32, justifyContent: "center", padding: "5px 7px" }} onClick={() => setLetter(letter === ch ? "" : ch)}>{ch}</button>)}
+            </div>
+          </div>
+        </div>
+        {!libraryActivated ? <div className="cb-empty" style={{ padding: "34px 18px" }}><BookOpen size={24} style={{ marginBottom: 8, color: "var(--green)" }} /><div style={{ fontWeight: 700, marginBottom: 4 }}>Search the knowledge library</div><div>Enter a keyword, choose a Major Category, or browse by letter. Records are not shown until you search.</div></div>
+        : libraryBusy ? <TableSkeleton rows={4} />
+        : libraryError ? <div className="cb-empty">{libraryError}</div>
+        : libraryRows.length === 0 ? <div className="cb-empty">No learning records matched that search.</div>
+        : <div style={{ display: "grid", gap: 12 }}>{libraryRows.map((person) => <div key={person.member_id} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "var(--paper-soft)" }}>
+              <div><div style={{ fontSize: 17, fontWeight: 800 }}>{person.member_name}</div><div className="cb-hint">{person.relevant_count} relevant learning record{person.relevant_count === 1 ? "" : "s"}</div></div>
+              <div className="cb-hint">Ask this person first if their experience matches what you need.</div>
+            </div>
+            <div>{person.records.map((record, i) => <div key={`${record.topic}-${record.learned_at}-${i}`} style={{ padding: "13px 14px", borderBottom: i < person.records.length - 1 ? "1px solid var(--line)" : "none" }}>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}><div style={{ fontWeight: 750, fontSize: 15 }}>{record.topic}</div><span style={{ fontSize: 11, padding: "2px 7px", border: "1px solid var(--line)", borderRadius: 999, color: "var(--ink-soft)" }}>{record.category}</span></div>
+              <div style={{ marginTop: 6, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{record.what_i_learned}</div>
+            </div>)}</div>
+          </div>)}</div>}
+      </>}
+
+      {mode === "management" && isManager && <>
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, background: "var(--paper)", marginBottom: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(140px,1fr))", gap: 9, alignItems: "end" }}>
+            <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
+            <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
+            <div><div className="cb-label">Person</div><SearchableSelect options={managerMembers} value={personId} onChange={setPersonId} placeholder="All people" getLabel={(m) => m.name} /></div>
+            <div><div className="cb-label">Category</div><select className="cb-select" value={reportCategory} onChange={(e) => setReportCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+            <div><div className="cb-label">Keyword</div><input className="cb-input" value={reportKeyword} onChange={(e) => setReportKeyword(e.target.value)} placeholder="Topic or learning..." /></div>
+          </div>
+        </div>
+        {reportError ? <div className="cb-empty">{reportError}</div> : reportBusy ? <TableSkeleton rows={5} /> : <>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 10, marginBottom: 14 }}>
+            {[['L&D records', reportRows.length], ['L&D hours', formatHM(totalSeconds)], ['People learning', new Set(reportRows.map((r) => r.member_id)).size]].map(([label, value]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 13, background: "var(--paper)" }}><div className="cb-hint">{label}</div><div style={{ fontSize: 22, fontWeight: 800, marginTop: 3 }}>{value}</div></div>)}
+          </div>
+          {reportRows.length > 0 && <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 16 }}>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, background: "var(--paper)" }}><div className="cb-group-title" style={{ marginBottom: 10 }}>L&D hours by person</div>{byPerson.map((r) => <div key={r.name} style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) 1.5fr 72px", gap: 8, alignItems: "center", marginBottom: 8 }}><span>{r.name}</span><div style={{ height: 8, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, r.seconds / maxPerson * 100)}%`, height: "100%", background: "var(--green)" }} /></div><span className="cb-mono" style={{ textAlign: "right" }}>{formatHM(r.seconds)}</span></div>)}</div>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, background: "var(--paper)" }}><div className="cb-group-title" style={{ marginBottom: 10 }}>L&D hours by category</div>{byCategory.map((r) => <div key={r.name} style={{ display: "grid", gridTemplateColumns: "minmax(140px,1fr) 1.4fr 72px", gap: 8, alignItems: "center", marginBottom: 8 }}><span>{r.name}</span><div style={{ height: 8, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, r.seconds / maxCategory * 100)}%`, height: "100%", background: "var(--green)" }} /></div><span className="cb-mono" style={{ textAlign: "right" }}>{formatHM(r.seconds)}</span></div>)}</div>
+          </div>}
+          <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Person</th><th>Date</th><th className="num">Duration</th><th>Category</th><th>Topic</th><th>What I Learned</th><th>TDM references</th><th>Article references</th></tr></thead><tbody>{reportRows.length === 0 ? <tr><td colSpan={8}><div className="cb-empty">No L&D records match these filters.</div></td></tr> : reportRows.map((r) => <tr key={r.id}><td style={{ fontWeight: 650 }}>{r.member_name}</td><td>{formatDate(r.learned_at)}</td><td className="num cb-mono">{formatHM(r.duration_seconds)}</td><td>{r.category}</td><td>{r.topic}</td><td style={{ minWidth: 260, whiteSpace: "pre-wrap" }}>{r.what_i_learned}</td><td><ReferenceLinks items={r.tdm_references} /></td><td><ReferenceLinks items={r.article_references} /></td></tr>)}</tbody></table></div>
+        </>}
+      </>}
+    </div>
+  );
+}
+
+
 function SettingsView({
-  roles, taskTypes, trackedMetrics, onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
-  onAddTrackedMetric, onDeleteTrackedMetric, pods, isSuperAdmin, onAddPod, onDeletePod,
+  roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
+  onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onDeleteLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], onChangeInsightsPermission,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
@@ -3170,6 +3368,7 @@ function SettingsView({
   const [newTaskType, setNewTaskType] = useState("");
   const [newTaskTypeBillable, setNewTaskTypeBillable] = useState(false);
   const [newMetric, setNewMetric] = useState("");
+  const [newLearningCategory, setNewLearningCategory] = useState("");
   const [scanResults, setScanResults] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [repairingId, setRepairingId] = useState(null);
@@ -3364,6 +3563,18 @@ function SettingsView({
     try {
       await onAddTrackedMetric(newMetric);
       setNewMetric("");
+    } catch (err) {
+      setError(err.message);
+      setTimeout(() => setError(""), 4000);
+    }
+  }
+
+  async function submitLearningCategory(e) {
+    e.preventDefault();
+    if (!newLearningCategory.trim()) return;
+    try {
+      await onAddLearningCategory(newLearningCategory);
+      setNewLearningCategory("");
     } catch (err) {
       setError(err.message);
       setTimeout(() => setError(""), 4000);
@@ -3598,26 +3809,26 @@ function SettingsView({
           <div style={{ flex: 1, minWidth: 220 }}>
             <div className="cb-label" style={{ marginBottom: 8 }}>Task types</div>
             {taskTypes.map((t) => {
-              const isBuiltInHelping = (t.name || "").trim().toLowerCase() === "helping/training";
+              const isBuiltIn = [BUILTIN_HELPING_TASK_TYPE, BUILTIN_LEARNING_TASK_TYPE].includes((t.name || "").trim());
               return (
                 <div key={t.id} className="cb-client-account-row" style={{ gap: 10 }}>
                   <div style={{ fontSize: 13.5, flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap" }}>
                     <span>{t.name}</span>
-                    {isBuiltInHelping && (
+                    {isBuiltIn && (
                       <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-soft)", background: "#F1F3F5", border: "1px solid var(--border)", borderRadius: 999, padding: "2px 6px" }}>Built-in</span>
                     )}
                   </div>
                   <button
                     type="button"
                     className="cb-btn cb-btn-sm"
-                    disabled={isBuiltInHelping}
-                    onClick={() => !isBuiltInHelping && onUpdateTaskTypeBilling(t.id, !t.is_billable)}
-                    style={{ minWidth: 92, justifyContent: "center", color: t.is_billable ? "#168A45" : "var(--ink-soft)", background: t.is_billable ? "#EAF8EF" : "#F5F6F7", opacity: isBuiltInHelping ? 0.72 : 1, cursor: isBuiltInHelping ? "default" : undefined }}
-                    title={isBuiltInHelping ? "Built-in Helping/Training is fixed as non-billable" : "Used by Capacity & Utilization"}
+                    disabled={isBuiltIn}
+                    onClick={() => !isBuiltIn && onUpdateTaskTypeBilling(t.id, !t.is_billable)}
+                    style={{ minWidth: 92, justifyContent: "center", color: t.is_billable ? "#168A45" : "var(--ink-soft)", background: t.is_billable ? "#EAF8EF" : "#F5F6F7", opacity: isBuiltIn ? 0.72 : 1, cursor: isBuiltIn ? "default" : undefined }}
+                    title={isBuiltIn ? `${t.name} is built in and fixed as non-billable` : "Used by Capacity & Utilization"}
                   >
                     {t.is_billable ? "Billable" : "Non-billable"}
                   </button>
-                  {!isBuiltInHelping && (
+                  {!isBuiltIn && (
                     <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTaskType(t.id)}><Trash2 size={13} /></button>
                   )}
                 </div>
@@ -3655,6 +3866,27 @@ function SettingsView({
           {error && <div className="cb-error" style={{ width: "100%" }}>{error}</div>}
         </div>
       </div>
+      )}
+
+      {effectiveIsAdmin && (
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
+            <div>
+              <div className="cb-tmpl-field">Learning & Development</div>
+              <div className="cb-tmpl-name">Major Categories</div>
+            </div>
+          </div>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 8 }}>These categories are used when L&D tasks are completed and in the Staff Knowledge Library.</div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: "0 16px" }}>
+              {learningCategories.map((c) => <div key={c.id} className="cb-client-account-row"><div style={{ fontSize: 13.5 }}>{c.name}</div><button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteLearningCategory(c.id)}><Trash2 size={13} /></button></div>)}
+            </div>
+            <form onSubmit={submitLearningCategory} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 430 }}>
+              <input className="cb-input" placeholder="e.g. Advisory" value={newLearningCategory} onChange={(e) => setNewLearningCategory(e.target.value)} />
+              <button type="submit" className="cb-btn cb-btn-sm"><Plus size={13} />Add</button>
+            </form>
+          </div>
+        </div>
       )}
 
       {effectiveIsAdmin && (
@@ -8568,6 +8800,7 @@ export default function App() {
   const [roles, setRoles] = useState([]);
   const [taskTypes, setTaskTypes] = useState([]);
   const [trackedMetrics, setTrackedMetrics] = useState([]);
+  const [learningCategories, setLearningCategories] = useState([]);
   const [pods, setPods] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
@@ -8808,9 +9041,9 @@ export default function App() {
 
   const loadAll = useCallback(async () => {
     try {
-      const [m, c, t, tk, b, r, tt, tm] = await Promise.all([
+      const [m, c, t, tk, b, r, tt, tm, lc] = await Promise.all([
         api.getMembers(), api.getClients(), api.getTemplates(), api.getTasks(), api.getBankAccounts(),
-        api.getRoles(), api.getTaskTypes(), api.getTrackedMetrics(),
+        api.getRoles(), api.getTaskTypes(), api.getTrackedMetrics(), api.getLearningCategories(),
       ]);
       setMembers(m);
       setClients(c);
@@ -8820,6 +9053,7 @@ export default function App() {
       setRoles(r);
       setTaskTypes(tt);
       setTrackedMetrics(tm);
+      setLearningCategories(lc);
       setLoadError("");
       try {
         setPods(await api.getPods());
@@ -9667,9 +9901,9 @@ export default function App() {
     }
   }
 
-  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId, period) {
+  async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId, period, learning) {
     try {
-      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId, period);
+      const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId, period, learning);
       mergeTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
@@ -9782,6 +10016,27 @@ export default function App() {
   async function deleteTrackedMetric(id) {
     await api.deleteTrackedMetric(id);
     setTrackedMetrics((prev) => prev.filter((m) => m.id !== id));
+  }
+
+  async function addLearningCategory(name) {
+    const category = await api.createLearningCategory(name.trim());
+    setLearningCategories((prev) => [...prev, category].sort((a, b) => a.name.localeCompare(b.name)));
+  }
+
+  async function deleteLearningCategory(id) {
+    await api.deleteLearningCategory(id);
+    setLearningCategories((prev) => prev.filter((c) => c.id !== id));
+  }
+
+  async function startLearningDevelopment() {
+    try {
+      await createTasks([{
+        client_id: "", client_name: "", name: BUILTIN_LEARNING_TASK_TYPE,
+        role: "", task_type: BUILTIN_LEARNING_TASK_TYPE,
+      }], true);
+    } catch (err) {
+      showToast(err.message || "Could not start Learning & Development", true);
+    }
   }
 
   async function createQuickMeeting(payload) {
@@ -9986,7 +10241,7 @@ export default function App() {
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
-                onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)}
+                onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)} onLearningDevelopment={startLearningDevelopment}
                 clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
                 onCreateTasks={createTasks}
               />
@@ -10030,6 +10285,9 @@ export default function App() {
                 showLoginToShutdown={effectiveIsSuperAdmin}
               />
             )}
+            {view === "learning" && (
+              <LearningDevelopmentView currentUser={effectiveCurrentUser} members={members} categories={learningCategories} />
+            )}
             {view === "staff" && (
               <StaffView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
@@ -10046,9 +10304,10 @@ export default function App() {
             {view === "reports" && effectiveIsSuperAdmin && <SuperAdminReportsView members={members} />}
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
-                roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
+                roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
                 onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onUpdateTaskTypeBilling={updateTaskTypeBilling} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
+                onAddLearningCategory={addLearningCategory} onDeleteLearningCategory={deleteLearningCategory}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
                 members={members} onChangeInsightsPermission={changeMemberInsightsPermission}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
@@ -10119,7 +10378,7 @@ export default function App() {
           onClose={() => setCompletingTask(null)} onConfirm={finishAdHocMeeting}
         />
       ) : completingTask ? (
-        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} clients={clients} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
+        <CompleteModal task={completingTask} now={now} roles={roles} taskTypes={taskTypes} clients={clients} learningCategories={learningCategories} onClose={() => setCompletingTask(null)} onSubmit={submitCompletion} />
       ) : null}
       {showAddMember && (
         <InviteMemberModal onClose={() => setShowAddMember(false)} onInvite={addTeammate} currentUser={effectiveCurrentUser} />

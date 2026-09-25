@@ -144,6 +144,25 @@ export const api = {
     if (capacityPodId) q.set("capacity_pod_id", capacityPodId);
     return request(`/insights${q.toString() ? `?${q.toString()}` : ""}`);
   },
+  getLearningCategories: () => request("/learning/categories"),
+  createLearningCategory: (name) => request("/learning/categories", { method: "POST", body: JSON.stringify({ name }) }),
+  deleteLearningCategory: (id) => request(`/learning/categories/${id}`, { method: "DELETE" }),
+  getLearningLibrary: (keyword = "", category = "", letter = "") => {
+    const q = new URLSearchParams();
+    if (keyword) q.set("keyword", keyword);
+    if (category) q.set("category", category);
+    if (letter) q.set("letter", letter);
+    return request(`/learning/library${q.toString() ? `?${q.toString()}` : ""}`);
+  },
+  getLearningReport: (dateFrom = "", dateTo = "", personId = "", category = "", keyword = "") => {
+    const q = new URLSearchParams();
+    if (dateFrom) q.set("date_from", dateFrom);
+    if (dateTo) q.set("date_to", dateTo);
+    if (personId) q.set("person_id", personId);
+    if (category) q.set("category", category);
+    if (keyword) q.set("keyword", keyword);
+    return request(`/learning/report${q.toString() ? `?${q.toString()}` : ""}`);
+  },
   getTasks: () => request("/tasks"),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
   startTask: (id, startCount, startAt) => {
@@ -189,7 +208,7 @@ export const api = {
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
   getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>
     request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`),
-  submitTask: (id, note, endCount, adjustedSeconds, role, taskType, clientId, period) =>
+  submitTask: (id, note, endCount, adjustedSeconds, role, taskType, clientId, period, learning = null) =>
     request(`/tasks/${id}/submit`, {
       method: "POST",
       body: JSON.stringify({
@@ -198,6 +217,9 @@ export const api = {
         role: role != null ? role : null, task_type: taskType != null ? taskType : null,
         period_type: period?.type || null, period_year: period?.year || null, period_number: period?.number || null,
         period_start: period?.start || null, period_end: period?.end || null,
+        learning_category: learning?.category || null, learning_topic: learning?.topic || null,
+        what_i_learned: learning?.whatILearned || null,
+        tdm_references: learning?.tdmReferences || [], article_references: learning?.articleReferences || [],
       }),
     }),
   reassignTask: (id, ownerId) =>
