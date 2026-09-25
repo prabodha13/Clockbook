@@ -9771,12 +9771,34 @@ export default function App() {
   // ---------------------------------------------------------------
 
   const NO_TRACK_THRESHOLD_MS = 10 * 60 * 1000;
-  const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(null);
-  const noTrackSinceRef = useRef(Date.now());
+  const NO_TRACK_PENDING_KEY = "clockbook_pending_no_track_alert";
+  const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(() => {
+    // Keep an unanswered no-track prompt through a normal browser refresh. Session storage is
+    // intentionally used instead of permanent local storage: the prompt belongs to this tab's
+    // current work session and should disappear when the tab/session itself is closed.
+    try {
+      const saved = sessionStorage.getItem(NO_TRACK_PENDING_KEY);
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      return Number.isFinite(Number(parsed?.since)) ? { since: Number(parsed.since) } : null;
+    } catch (_) {
+      return null;
+    }
+  });
+  const noTrackSinceRef = useRef(idleNoTrackAlert?.since || Date.now());
   const noTrackSnoozeUntilRef = useRef(0);
   const noTrackHandledRef = useRef(false);
   const forgotToTrackGapMsRef = useRef(null);
   const noTrackBrowserNotificationRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      if (idleNoTrackAlert?.since) sessionStorage.setItem(NO_TRACK_PENDING_KEY, JSON.stringify({ since: idleNoTrackAlert.since }));
+      else sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
+    } catch (_) {
+      // Storage can be unavailable in hardened/private browser contexts; the live prompt still works.
+    }
+  }, [idleNoTrackAlert]);
 
   function showNoTrackBrowserNotification(gapMs, silent = false) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
