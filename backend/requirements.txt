@@ -6,3 +6,4 @@ psycopg2-binary==2.9.9
 pydantic==2.9.2
 bcrypt==4.2.0
 httpx==0.28.1
+alembic==1.13.3
