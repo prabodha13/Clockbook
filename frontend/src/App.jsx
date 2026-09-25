@@ -857,6 +857,7 @@ function resolvedBankAccountId(row, taskId, clientAccounts) {
 
 const BUILTIN_HELPING_TASK_TYPE = "Helping/Training";
 const BUILTIN_LEARNING_TASK_TYPE = "Learning & Development";
+const MIN_LEARNING_NOTE_WORDS = 5;
 
 function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, members, currentUser, onClose, onDone, onCreateTasks }) {
   const [rows, setRows] = useState(() =>
@@ -2305,6 +2306,8 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
   const isWeeklyBookkeeping = periodType === "weekly" && isBookkeepingWork(task);
   const effectiveTaskType = task.task_type || taskType;
   const isLearningTask = effectiveTaskType === BUILTIN_LEARNING_TASK_TYPE;
+  const learningNoteWordCount = whatILearned.trim() ? whatILearned.trim().split(/\s+/).filter((word) => /[A-Za-z0-9]/.test(word)).length : 0;
+  const learningNoteTooShort = isLearningTask && learningNoteWordCount < MIN_LEARNING_NOTE_WORDS;
   const needsClient = task.client_id === UNASSIGNED_CLIENT_ID && !isLearningTask;
   const [clientId, setClientId] = useState(task.client_id === UNASSIGNED_CLIENT_ID ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
@@ -2475,6 +2478,9 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
               <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
                 <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
+                <div style={{ marginTop: 5, fontSize: 12, color: learningNoteTooShort && whatILearned.trim() ? "var(--danger)" : "var(--ink-faint)" }}>
+                  Minimum {MIN_LEARNING_NOTE_WORDS} words{whatILearned.trim() ? ` · ${learningNoteWordCount} entered` : ""}
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "start" }}>
                 <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
@@ -2491,7 +2497,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
-              || (isLearningTask && (!learningCategory || !learningTopic.trim() || !whatILearned.trim()))
+              || (isLearningTask && (!learningCategory || !learningTopic.trim() || learningNoteTooShort))
               || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
