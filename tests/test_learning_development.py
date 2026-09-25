@@ -70,6 +70,19 @@ def test_ld_can_start_without_fields_but_completion_requires_learning_details():
         assert missing.value.status_code == 400
         assert "Major Category" in missing.value.detail
 
+        with pytest.raises(HTTPException) as too_short:
+            main.submit_task(
+                task.id,
+                schemas.TaskSubmit(
+                    learning_category="Tax",
+                    learning_topic="Close company surcharge",
+                    what_i_learned="Learned surcharge timing rules",
+                ),
+                current_member=member, db=s,
+            )
+        assert too_short.value.status_code == 400
+        assert "at least 5 words" in too_short.value.detail
+
         submitted = main.submit_task(
             task.id,
             schemas.TaskSubmit(
