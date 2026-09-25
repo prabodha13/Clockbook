@@ -2276,7 +2276,6 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
   const [learningCategory, setLearningCategory] = useState("");
   const [learningTopic, setLearningTopic] = useState("");
   const [whatILearned, setWhatILearned] = useState("");
-  const whatILearnedWordCount = whatILearned.trim() ? whatILearned.trim().split(/\s+/).filter(Boolean).length : 0;
   const [tdmReferences, setTdmReferences] = useState([]);
   const [articleReferences, setArticleReferences] = useState([]);
   const configuredPeriodTypes = useMemo(() => (
@@ -2462,9 +2461,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
               <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
                 <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
-                <div className="cb-hint" style={{ marginTop: 5, color: whatILearnedWordCount > 0 && whatILearnedWordCount < 5 ? "var(--danger)" : undefined }}>
-                  Minimum 5 words{whatILearnedWordCount > 0 ? ` · ${whatILearnedWordCount}/5` : ""}
-                </div>
+                <div className="cb-hint">Minimum 5 words.</div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "start" }}>
                 <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
@@ -2481,7 +2478,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
-              || (isLearningTask && (!learningCategory || !learningTopic.trim() || whatILearnedWordCount < 5))
+              || (isLearningTask && (!learningCategory || !learningTopic.trim() || whatILearned.trim().split(/\s+/).filter(Boolean).length < 5))
               || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
@@ -9941,6 +9938,7 @@ export default function App() {
 
   async function changeMemberRole(memberId, role) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberRole(memberId, role, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
@@ -9950,6 +9948,7 @@ export default function App() {
 
   async function changeMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom = null) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -9961,6 +9960,7 @@ export default function App() {
 
   async function changeMemberTimezone(memberId, timezoneName) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberTimezone(memberId, timezoneName, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -9972,6 +9972,7 @@ export default function App() {
 
   async function changeMemberInsightsPermission(memberId, enabled) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberInsightsPermission(memberId, enabled, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast(`${enabled ? "Enabled" : "Disabled"} leave & capacity insights for ${updated.name}`);
@@ -10002,6 +10003,7 @@ export default function App() {
 
   async function assignMemberPod(memberId, podId) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberPod(memberId, podId, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -10151,6 +10153,7 @@ export default function App() {
   }
 
   async function updateClient(clientId, name, code) {
+    const current = clients.find((c) => c.id === clientId);
     const updated = await api.updateClient(clientId, name, code, current?.version || 1);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
@@ -10195,6 +10198,7 @@ export default function App() {
   }
 
   async function updateTaskTypeBilling(id, isBillable) {
+    const current = taskTypes.find((t) => t.id === id);
     const updated = await api.updateTaskTypeBilling(id, isBillable, current?.version || 1);
     setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
