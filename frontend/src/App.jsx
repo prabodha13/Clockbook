@@ -2198,16 +2198,20 @@ function LearningReferenceEditor({ label, items, onChange }) {
   }
   function remove(index) { onChange(items.filter((_, i) => i !== index)); }
   return (
-    <div className="cb-field">
+    <div className="cb-field" style={{ minWidth: 0, marginBottom: 0 }}>
       <label className="cb-label">{label} <span style={{ fontWeight: 400, color: "var(--ink-faint)" }}>(optional)</span></label>
-      {items.map((item, index) => (
-        <div key={index} style={{ display: "grid", gridTemplateColumns: "minmax(130px,.8fr) minmax(220px,1.5fr) 34px", gap: 7, marginBottom: 7 }}>
-          <input className="cb-input" placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
-          <input className="cb-input" type="url" placeholder="https://..." value={item.url} onChange={(e) => update(index, { url: e.target.value })} />
-          <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove reference" onClick={() => remove(index)}><Trash2 size={13} /></button>
+      <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+        {items.map((item, index) => (
+          <div key={index} style={{ display: "grid", gridTemplateColumns: "minmax(0, .8fr) minmax(0, 1.45fr) 34px", gap: 7, alignItems: "center", minWidth: 0 }}>
+            <input className="cb-input" style={{ minWidth: 0 }} placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
+            <input className="cb-input" style={{ minWidth: 0 }} type="url" placeholder="https://..." value={item.url} onChange={(e) => update(index, { url: e.target.value })} />
+            <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove reference" aria-label={`Remove ${label} reference ${index + 1}`} onClick={() => remove(index)}><Trash2 size={13} /></button>
+          </div>
+        ))}
+        <div>
+          <button type="button" className="cb-btn cb-btn-sm" onClick={() => onChange([...items, { title: "", url: "" }])}><Plus size={13} />Add reference</button>
         </div>
-      ))}
-      <button type="button" className="cb-btn cb-btn-sm" onClick={() => onChange([...items, { title: "", url: "" }])}><Plus size={13} />Add reference</button>
+      </div>
     </div>
   );
 }
@@ -2407,7 +2411,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
                 <label className="cb-label">What I Learned *</label>
                 <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
               </div>
-              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12, alignItems: "start" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "start" }}>
                 <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
                 <LearningReferenceEditor label="Articles / External References" items={articleReferences} onChange={setArticleReferences} />
               </div>
