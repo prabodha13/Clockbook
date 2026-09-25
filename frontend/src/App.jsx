@@ -9937,6 +9937,7 @@ export default function App() {
 
   async function changeMemberRole(memberId, role) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberRole(memberId, role, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
@@ -9946,6 +9947,7 @@ export default function App() {
 
   async function changeMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom = null) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -9957,6 +9959,7 @@ export default function App() {
 
   async function changeMemberTimezone(memberId, timezoneName) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberTimezone(memberId, timezoneName, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -9968,6 +9971,7 @@ export default function App() {
 
   async function changeMemberInsightsPermission(memberId, enabled) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberInsightsPermission(memberId, enabled, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast(`${enabled ? "Enabled" : "Disabled"} leave & capacity insights for ${updated.name}`);
@@ -9998,6 +10002,7 @@ export default function App() {
 
   async function assignMemberPod(memberId, podId) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberPod(memberId, podId, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -10147,6 +10152,7 @@ export default function App() {
   }
 
   async function updateClient(clientId, name, code) {
+    const current = clients.find((c) => c.id === clientId);
     const updated = await api.updateClient(clientId, name, code, current?.version || 1);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
@@ -10191,6 +10197,7 @@ export default function App() {
   }
 
   async function updateTaskTypeBilling(id, isBillable) {
+    const current = taskTypes.find((t) => t.id === id);
     const updated = await api.updateTaskTypeBilling(id, isBillable, current?.version || 1);
     setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
