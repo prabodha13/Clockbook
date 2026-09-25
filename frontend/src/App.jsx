@@ -2258,13 +2258,13 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
 
   return (
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="cb-modal">
+      <div className="cb-modal" style={isLearningTask ? { maxWidth: 760 } : undefined}>
         <div className="cb-modal-head">
           <div className="cb-modal-title">Complete task</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <div className="cb-modal-body">
-          <div style={{ marginBottom: 16 }}>
+          <div style={{ marginBottom: isLearningTask ? 10 : 16 }}>
             <div style={{ fontSize: 13, color: "var(--ink-soft)" }}>{task.client_name}{task.bank_account_name ? `: ${task.bank_account_name}` : ""}</div>
             <div style={{ fontSize: 16, fontWeight: 500 }}>{task.name}</div>
             <div style={{ fontSize: 12, color: "var(--ink-faint)", marginTop: 4 }}>
@@ -2388,30 +2388,34 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
             </div>
           )}
           {isLearningTask && (
-            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, marginBottom: 14, background: "var(--paper-soft)" }}>
-              <div className="cb-group-title" style={{ marginBottom: 10 }}>Learning & Development details</div>
-              <div className="cb-field">
-                <label className="cb-label">Major Category *</label>
-                <select className="cb-select" value={learningCategory} onChange={(e) => setLearningCategory(e.target.value)}>
-                  <option value="">Select category</option>
-                  {learningCategories.map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}
-                </select>
+            <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 12, marginBottom: 10, background: "var(--paper-soft)" }}>
+              <div className="cb-group-title" style={{ marginBottom: 8 }}>Learning & Development details</div>
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, .9fr) minmax(0, 1.4fr)", gap: 10, alignItems: "end" }}>
+                <div className="cb-field" style={{ marginBottom: 10 }}>
+                  <label className="cb-label">Major Category *</label>
+                  <select className="cb-select" value={learningCategory} onChange={(e) => setLearningCategory(e.target.value)}>
+                    <option value="">Select category</option>
+                    {learningCategories.map((c) => <option key={c.id || c.name} value={c.name}>{c.name}</option>)}
+                  </select>
+                </div>
+                <div className="cb-field" style={{ marginBottom: 10 }}>
+                  <label className="cb-label">Topic *</label>
+                  <input className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
+                </div>
               </div>
-              <div className="cb-field">
-                <label className="cb-label">Topic *</label>
-                <input className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
-              </div>
-              <div className="cb-field">
+              <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
-                <textarea className="cb-textarea" rows={4} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
+                <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
               </div>
-              <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
-              <LearningReferenceEditor label="Articles / External References" items={articleReferences} onChange={setArticleReferences} />
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)", gap: 12, alignItems: "start" }}>
+                <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
+                <LearningReferenceEditor label="Articles / External References" items={articleReferences} onChange={setArticleReferences} />
+              </div>
             </div>
           )}
           <div className="cb-field">
             <label className="cb-label"><StickyNote size={12} style={{ verticalAlign: -1, marginRight: 4 }} />Note (optional)</label>
-            <textarea className="cb-textarea" placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
+            <textarea className="cb-textarea" rows={2} placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
         <div className="cb-modal-foot">
