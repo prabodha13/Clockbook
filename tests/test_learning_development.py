@@ -144,3 +144,28 @@ def test_management_ld_report_respects_admin_scope_and_includes_full_fields():
         assert rows[0].what_i_learned == "Learned filing rules"
     finally:
         s.close()
+
+
+def test_learning_category_management_is_super_admin_only():
+    s = database.SessionLocal()
+    try:
+        tenant_id = "tenant_ld_categories"
+        _tenant(s, tenant_id, "tenant-ld-categories")
+        admin = _member(s, tenant_id, "admin-ld-categories@example.com", role="admin", name="Admin")
+        super_admin = _member(s, tenant_id, "super-ld-categories@example.com", role="super_admin", name="Super Admin")
+        _seed_learning(s, tenant_id)
+
+        with pytest.raises(HTTPException) as denied:
+            main.create_learning_category(schemas.LearningCategoryCreate(name="Advisory"), current_member=admin, db=s)
+        assert denied.value.status_code == 403
+
+        created = main.create_learning_category(schemas.LearningCategoryCreate(name="Advisory"), current_member=super_admin, db=s)
+        assert created.name == "Advisory"
+
+        with pytest.raises(HTTPException) as denied_delete:
+            main.delete_learning_category(created.id, current_member=admin, db=s)
+        assert denied_delete.value.status_code == 403
+
+        assert main.delete_learning_category(created.id, current_member=super_admin, db=s) is None
+    finally:
+        s.close()
