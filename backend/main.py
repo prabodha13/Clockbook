@@ -4970,7 +4970,7 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
         if not learning_notes:
             raise HTTPException(400, "Enter What I Learned before completing L&D")
         if len(learning_notes.split()) < 5:
-            raise HTTPException(400, "Enter at least 5 words in What I Learned before completing L&D")
+            raise HTTPException(400, "Enter at least 5 words describing what you learned")
         if not db.query(models.LearningCategory).filter(models.LearningCategory.is_active.is_(True), func.lower(models.LearningCategory.name) == learning_category.lower()).first():
             raise HTTPException(400, "Select a valid L&D Major Category")
         tdm_references = _learning_reference_dicts(payload.tdm_references)
