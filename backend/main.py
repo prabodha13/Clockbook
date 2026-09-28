@@ -1021,7 +1021,13 @@ def _require_task_in_scope(current_member, task, db: Session, owner_can_access=T
 def _revoke_member_sessions(db: Session, member_id: str):
     # ClockBook deliberately has no inactivity/session timeout. Tokens live for the browser
     # session, but security-sensitive account changes must be able to invalidate them now.
-    db.query(models.Session).filter(models.Session.member_id == member_id).delete(synchronize_session=False)
+    # Bulk DELETE does not reliably inherit the ORM loader criteria used for tenant scoping,
+    # so include the active tenant explicitly rather than depending on implicit filtering.
+    query = db.query(models.Session).filter(models.Session.member_id == member_id)
+    tenant_id = db.info.get("tenant_id")
+    if tenant_id:
+        query = query.filter(models.Session.tenant_id == tenant_id)
+    query.delete(synchronize_session=False)
 
 
 def _lock_timer_owner(db: Session, member_id: str):
@@ -4760,6 +4766,27 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
     db.refresh(task)
     return task
 
+def _task_belongs_to_local_work_date(task: models.TaskInstance, member: models.Member, work_date):
+    """Return True when the task was created or actually worked on during work_date.
+
+    This is intentionally based on the member's configured timezone. An older task may still
+    qualify when it has a real timer segment on the recovery date, but an untouched task from
+    yesterday/last week cannot be used as a destination for today's forgotten time.
+    """
+    if task.created_at and _utc_naive_to_local(task.created_at, member).date() == work_date:
+        return True
+    for seg in (task.segments or []):
+        if not isinstance(seg, dict) or not seg.get("start"):
+            continue
+        try:
+            seg_start = parse_utc_naive(seg.get("start"))
+        except Exception:
+            continue
+        if _utc_naive_to_local(seg_start, member).date() == work_date:
+            return True
+    return False
+
+
 @app.post("/api/tasks/{task_id}/recover-time", response_model=schemas.TaskOut)
 def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     """Add a bounded, explicitly-audited block of forgotten time to an existing task.
@@ -4782,6 +4809,15 @@ def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_me
     seconds = float(payload.seconds)
     now = datetime.utcnow()
     start = now - timedelta(seconds=seconds)
+    recovery_date = _utc_naive_to_local(now, current_member).date()
+    recovery_start_date = _utc_naive_to_local(start, current_member).date()
+
+    # Forgotten-time recovery is intentionally a same-work-day correction. It must not be
+    # used to backfill an older day, and the destination task must belong to today's work.
+    if recovery_start_date != recovery_date:
+        raise HTTPException(400, "Forgotten time can only be recovered for the current work date")
+    if not _task_belongs_to_local_work_date(task, current_member, recovery_date):
+        raise HTTPException(400, "Forgotten time can only be added to a task from the current work date")
 
     # Do not allow recovered time to overlap time already recorded for this person. This keeps
     # forgotten-time recovery additive without creating double-counted timer periods.
