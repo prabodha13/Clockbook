@@ -5017,6 +5017,144 @@ def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_me
     return task
 
 
+@app.post("/api/tasks/recover-time/batch", response_model=list[schemas.TaskOut])
+def recover_task_time_batch(payload: dict, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Split one forgotten-time window across multiple tasks atomically.
+
+    Allocations are ordered chronologically from the beginning of the forgotten window to now.
+    Every resulting segment remains explicitly tagged as forgotten-time recovery and every task
+    receives its own immutable audit event.  The entire request commits once, so a validation
+    error cannot leave only part of the forgotten window recovered.
+    """
+    raw_allocations = payload.get("allocations") if isinstance(payload, dict) else None
+    try:
+        total_seconds = float(payload.get("total_seconds"))
+    except (TypeError, ValueError, AttributeError):
+        raise HTTPException(400, "total_seconds must be a positive number")
+
+    if not isinstance(raw_allocations, list) or not raw_allocations:
+        raise HTTPException(400, "Add at least one recovery allocation")
+    if len(raw_allocations) > 20:
+        raise HTTPException(400, "Too many recovery allocations")
+    if total_seconds < 1 or total_seconds > 24 * 60 * 60:
+        raise HTTPException(400, "Recovered time must be between 1 second and 24 hours")
+
+    allocations = []
+    seen_task_ids = set()
+    allocated_total = 0.0
+    for index, raw in enumerate(raw_allocations):
+        if not isinstance(raw, dict):
+            raise HTTPException(400, "Each recovery allocation must be an object")
+        task_id = str(raw.get("task_id") or "").strip()
+        if not task_id:
+            raise HTTPException(400, f"Allocation {index + 1} is missing a task")
+        if task_id in seen_task_ids:
+            raise HTTPException(400, "Use each task only once in a recovery split")
+        seen_task_ids.add(task_id)
+        try:
+            seconds = float(raw.get("seconds"))
+        except (TypeError, ValueError):
+            raise HTTPException(400, f"Allocation {index + 1} has an invalid duration")
+        if seconds < 1:
+            raise HTTPException(400, "Every recovery allocation must be at least 1 second")
+        allocated_total += seconds
+        allocations.append((task_id, seconds))
+
+    if abs(allocated_total - total_seconds) > 0.5:
+        raise HTTPException(400, "Recovery allocations must add up exactly to the forgotten time")
+
+    _lock_timer_owner(db, current_member.id)
+    now = datetime.utcnow()
+    start = now - timedelta(seconds=total_seconds)
+    recovery_date = _utc_naive_to_local(now, current_member).date()
+    recovery_start_date = _utc_naive_to_local(start, current_member).date()
+    if recovery_start_date != recovery_date:
+        raise HTTPException(400, "Forgotten time can only be recovered for the current work date")
+
+    tasks_by_id = {}
+    for task_id, _seconds in allocations:
+        task = _get_task_for_update(db, task_id)
+        if not task:
+            raise HTTPException(404, "Task not found")
+        if task.owner_id and task.owner_id != current_member.id:
+            raise HTTPException(403, "This task belongs to someone else")
+        if task.status == "submitted":
+            raise HTTPException(400, "Submitted tasks cannot receive recovered time")
+        if task.status == "running":
+            raise HTTPException(400, "Pause the running task before recovering forgotten time")
+        if not _task_belongs_to_local_work_date(task, current_member, recovery_date):
+            raise HTTPException(400, "Forgotten time can only be added to tasks from the current work date")
+        tasks_by_id[task_id] = task
+
+    # Validate the whole missing window before changing any task.  The split segments will be
+    # contiguous inside this window, so one overlap check protects every allocation at once.
+    owned_tasks = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id == current_member.id).all()
+    for owned in owned_tasks:
+        for seg in (owned.segments or []):
+            if not isinstance(seg, dict) or not seg.get("start"):
+                continue
+            try:
+                seg_start = parse_utc_naive(seg.get("start"))
+                seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
+            except Exception:
+                continue
+            if start < seg_end and now > seg_start:
+                raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
+
+    batch_id = secrets.token_urlsafe(12)
+    cursor = start
+    touched = []
+    for index, (task_id, seconds) in enumerate(allocations):
+        task = tasks_by_id[task_id]
+        segment_end = cursor + timedelta(seconds=seconds)
+        recovered = {
+            "start": cursor.isoformat() + "Z",
+            "end": segment_end.isoformat() + "Z",
+            "source": "forgotten_time_recovery",
+            "recovered_seconds": round(seconds, 1),
+            "recovery_batch_id": batch_id,
+            "recovery_allocation_index": index,
+            "recovery_total_seconds": round(total_seconds, 1),
+        }
+        task.segments = [*(task.segments or []), recovered]
+        if not task.owner_id:
+            task.owner_id = current_member.id
+        if task.status == "todo":
+            task.status = "paused"
+        db.add(models.AuditEvent(
+            tenant_id=current_member.tenant_id,
+            actor_member_id=current_member.id,
+            action="forgotten_time_recovered",
+            entity_type="TaskInstance",
+            entity_id=task.id,
+            changes={
+                "seconds": round(seconds, 1),
+                "source": "forgotten_time_recovery",
+                "start": recovered["start"],
+                "end": recovered["end"],
+                "recovery_batch_id": batch_id,
+                "recovery_allocation_index": index,
+                "recovery_total_seconds": round(total_seconds, 1),
+            },
+        ))
+        touched.append(task)
+        cursor = segment_end
+
+    # Floating point inputs can leave sub-second drift.  The validation tolerance above is
+    # intentionally tiny; close the final segment exactly at the authoritative server time.
+    if touched:
+        last_task = touched[-1]
+        last_segments = list(last_task.segments or [])
+        if last_segments:
+            last_segments[-1] = {**last_segments[-1], "end": now.isoformat() + "Z"}
+            last_task.segments = last_segments
+
+    db.commit()
+    for task in touched:
+        db.refresh(task)
+    return touched
+
+
 @app.post("/api/tasks/{task_id}/start", response_model=schemas.TaskOut)
 def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     # Treat Start as one serialized state transition per person. This keeps the existing
