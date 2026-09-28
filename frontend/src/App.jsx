@@ -5905,6 +5905,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [customTo, setCustomTo] = useState("");
   const [data, setData] = useState(null);
   const [teamData, setTeamData] = useState(null);
+  const [teamComparisonHasRun, setTeamComparisonHasRun] = useState(false);
   // null means every currently visible team member is selected. Super Admins can narrow
   // Team View to specific people without changing the underlying reconciliation logic.
   // Admin/Staff demo modes ignore this filter entirely and continue to use their normal scope.
@@ -5919,6 +5920,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [noteRow, setNoteRow] = useState(null);
   const autoCompareTimerRef = useRef(null);
   const autoComparePendingRef = useRef(false);
+  const lastTeamComparisonRangeRef = useRef("");
   const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
   const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
 
@@ -5979,6 +5981,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
       setSelectedTeamPodId("");
       setSelectedTeamMemberIds(null);
       setTeamData(null);
+      setTeamComparisonHasRun(false);
     }
   }, [selectedTeamPodId, sortedTeamPods]);
 
@@ -6005,6 +6008,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     if (!range) return;
     if (viewMode === "team") {
       if (!isAdmin || forceSelfOnly || selectedTeamOptions.length === 0) return;
+      lastTeamComparisonRangeRef.current = `${range.from}|${range.to}`;
+      setTeamComparisonHasRun(true);
       setBusy(true); setError(""); setTeamData(null); setTeamProgress("");
       const results = [];
       try {
@@ -6037,11 +6042,12 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     finally { setBusy(false); }
   }
 
-  // Team View behaves like a live SaaS filter: once the user changes the period or
-  // selected team members, rerun the existing comparison automatically. The
-  // reconciliation function itself is unchanged; this only changes when it is invoked.
+  // Team View waits for the user to run the first comparison manually. After that,
+  // only period changes refresh the existing comparison automatically. Team/Pod
+  // selection changes deliberately require another explicit Run comparison so users
+  // can finish setting the comparison scope before any Karbon requests are sent.
   useEffect(() => {
-    if (viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+    if (!teamComparisonHasRun || viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
       autoComparePendingRef.current = false;
       if (autoCompareTimerRef.current) {
         clearTimeout(autoCompareTimerRef.current);
@@ -6049,6 +6055,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
       }
       return;
     }
+    const rangeKey = `${range.from}|${range.to}`;
+    if (rangeKey === lastTeamComparisonRangeRef.current) return;
     if (busy) {
       autoComparePendingRef.current = true;
       return;
@@ -6065,14 +6073,19 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         autoCompareTimerRef.current = null;
       }
     };
-  }, [viewMode, isAdmin, forceSelfOnly, range?.from, range?.to, teamSelectionKey]);
+  }, [teamComparisonHasRun, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to]);
 
-  // If filters change while a comparison is already running, wait for that request to
-  // finish and then refresh once with the latest selection instead of starting overlapping
+  // If the period changes while a comparison is already running, wait for the active
+  // request to finish and refresh once with the latest period rather than overlapping
   // Karbon requests.
   useEffect(() => {
     if (busy || !autoComparePendingRef.current) return;
-    if (viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+    if (!teamComparisonHasRun || viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+      autoComparePendingRef.current = false;
+      return;
+    }
+    const rangeKey = `${range.from}|${range.to}`;
+    if (rangeKey === lastTeamComparisonRangeRef.current) {
       autoComparePendingRef.current = false;
       return;
     }
@@ -6088,7 +6101,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         autoCompareTimerRef.current = null;
       }
     };
-  }, [busy, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to, teamSelectionKey]);
+  }, [busy, teamComparisonHasRun, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to]);
 
   const signed = (minutes) => {
     const n = Math.round(minutes || 0);
@@ -6157,7 +6170,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
 
     {isAdmin && !forceSelfOnly && <div className="cb-tabs" style={{ width: "fit-content", marginBottom: 16 }}>
       <button type="button" className={`cb-tab ${viewMode === "individual" ? "active" : ""}`} onClick={() => { setViewMode("individual"); setError(""); }}>Individual view</button>
-      <button type="button" className={`cb-tab ${viewMode === "team" ? "active" : ""}`} onClick={() => { setViewMode("team"); setError(""); }}>Team view</button>
+      <button type="button" className={`cb-tab ${viewMode === "team" ? "active" : ""}`} onClick={() => { setViewMode("team"); setError(""); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; setTeamData(null); }}>Team view</button>
     </div>}
 
     <div style={styles.controlPanel}>
@@ -6172,6 +6185,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
               setSelectedTeamPodId(e.target.value);
               setSelectedTeamMemberIds(null);
               setTeamData(null);
+              setTeamComparisonHasRun(false);
+              lastTeamComparisonRangeRef.current = "";
               setExpandedMembers(new Set());
             }}
             style={{ width: "100%", minHeight: 38 }}
@@ -6197,8 +6212,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
               </button>
               {teamPickerOpen && <div role="listbox" aria-multiselectable="true" style={{ position: "absolute", zIndex: 80, top: "calc(100% + 5px)", left: 0, minWidth: 300, maxHeight: 320, overflowY: "auto", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)", padding: 8 }}>
                 <div style={{ display: "flex", gap: 6, padding: "2px 2px 8px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
-                  <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setSelectedTeamMemberIds(null); setTeamData(null); }}>Select all</button>
-                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => { setSelectedTeamMemberIds(new Set()); setTeamData(null); }}>Clear</button>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setSelectedTeamMemberIds(null); setTeamData(null); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; }}>Select all</button>
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => { setSelectedTeamMemberIds(new Set()); setTeamData(null); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; }}>Clear</button>
                 </div>
                 {podScopedTeamOptions.map((member) => {
                   const checked = selectedTeamMemberIds === null || selectedTeamMemberIds.has(member.id);
@@ -6210,6 +6225,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                         return next;
                       });
                       setTeamData(null);
+                      setTeamComparisonHasRun(false);
+                      lastTeamComparisonRangeRef.current = "";
                     }} />
                     <span>{member.name}</span>
                   </label>;
@@ -6227,7 +6244,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div></div>
         {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
         <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !range || (viewMode === "individual" ? !effectiveMemberId : selectedTeamOptions.length === 0)}>
-          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? "Refresh comparison" : "Compare with Karbon")}
+          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? (teamComparisonHasRun ? "Refresh comparison" : "Run comparison") : "Compare with Karbon")}
         </button>
       </div>
     </div>
