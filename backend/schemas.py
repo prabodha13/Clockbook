@@ -33,6 +33,7 @@ class MemberOut(BaseModel):
     capacity_effective_from: Optional[date] = None
     timezone_name: str = "Asia/Colombo"
     can_view_leave_capacity_insights: bool = False
+    additional_permissions: List[str] = Field(default_factory=list)
     staff_tour_completed: bool = False
 
 
@@ -102,6 +103,11 @@ class MemberTimezoneUpdate(BaseModel):
 
 class MemberInsightsPermissionUpdate(BaseModel):
     enabled: bool
+    expected_version: int = Field(ge=1)
+
+
+class MemberAdditionalPermissionsUpdate(BaseModel):
+    permissions: List[str] = Field(default_factory=list, max_length=32)
     expected_version: int = Field(ge=1)
 
 

@@ -522,6 +522,9 @@ def run_startup_migrations():
             if "can_view_leave_capacity_insights" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN can_view_leave_capacity_insights BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET can_view_leave_capacity_insights = FALSE WHERE can_view_leave_capacity_insights IS NULL"))
+            if "additional_permissions" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN additional_permissions JSON"))
+                conn.execute(text("UPDATE members SET additional_permissions = '[]' WHERE additional_permissions IS NULL"))
             if "staff_tour_completed" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN staff_tour_completed BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET staff_tour_completed = FALSE WHERE staff_tour_completed IS NULL"))
@@ -964,6 +967,45 @@ def _require_expected_version(record, expected_version):
 
 def is_admin_or_above(role):
     return role in ("admin", "super_admin")
+
+
+# Fine-grained permissions that a Super Admin may delegate without creating another role.
+# Security/workspace ownership controls deliberately stay Super-Admin-only.
+PERMISSION_INSIGHTS_LEAVE_CAPACITY = "insights_leave_capacity"
+PERMISSION_REPORT_HELP = "report_help"
+PERMISSION_REPORT_OVERRIDES = "report_manual_overrides"
+PERMISSION_REPORT_AUDIT = "report_audit"
+DELEGATABLE_ADMIN_PERMISSIONS = {
+    PERMISSION_REPORT_HELP,
+    PERMISSION_REPORT_OVERRIDES,
+    PERMISSION_REPORT_AUDIT,
+}
+ALL_DELEGATABLE_PERMISSIONS = DELEGATABLE_ADMIN_PERMISSIONS | {PERMISSION_INSIGHTS_LEAVE_CAPACITY}
+
+
+def _additional_permissions(member):
+    raw = getattr(member, "additional_permissions", None) or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = []
+    return {str(item) for item in raw if str(item) in ALL_DELEGATABLE_PERMISSIONS}
+
+
+def _has_permission(member, permission):
+    if member.role == "super_admin":
+        return True
+    if permission == PERMISSION_INSIGHTS_LEAVE_CAPACITY and bool(getattr(member, "can_view_leave_capacity_insights", False)):
+        return True
+    return permission in _additional_permissions(member)
+
+
+def _require_delegated_admin_permission(member, permission, message="This action requires additional admin permission"):
+    if member.role == "super_admin":
+        return
+    if member.role != "admin" or not _has_permission(member, permission):
+        raise HTTPException(403, message)
 
 
 def _member_in_admin_scope(current_member, target_member):
@@ -2572,6 +2614,10 @@ def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, curren
             raise HTTPException(400, "At least one admin is required")
     role_changed = member.role != payload.role
     member.role = payload.role
+    if role_changed and payload.role != "admin":
+        # Staff may retain personal leave/capacity Insights access, but report permissions
+        # are meaningful only for Admins and must not survive a downgrade.
+        member.additional_permissions = sorted(_additional_permissions(member) - DELEGATABLE_ADMIN_PERMISSIONS)
     if role_changed:
         _revoke_member_sessions(db, member.id)
     db.commit()
@@ -2612,6 +2658,39 @@ def update_member_insights_permission(member_id: str, payload: schemas.MemberIns
         raise HTTPException(404, "Member not found")
     _require_expected_version(member, payload.expected_version)
     member.can_view_leave_capacity_insights = bool(payload.enabled)
+    permissions = _additional_permissions(member)
+    if payload.enabled:
+        permissions.add(PERMISSION_INSIGHTS_LEAVE_CAPACITY)
+    else:
+        permissions.discard(PERMISSION_INSIGHTS_LEAVE_CAPACITY)
+    member.additional_permissions = sorted(permissions)
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@app.patch("/api/members/{member_id}/additional-permissions", response_model=schemas.MemberOut)
+def update_member_additional_permissions(member_id: str, payload: schemas.MemberAdditionalPermissionsUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can manage additional permissions")
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    if member.role == "super_admin":
+        raise HTTPException(400, "Super Admins already have full access")
+    _require_expected_version(member, payload.expected_version)
+    requested = {str(item) for item in payload.permissions}
+    unknown = requested - ALL_DELEGATABLE_PERMISSIONS
+    if unknown:
+        raise HTTPException(400, "Unknown permission: " + ", ".join(sorted(unknown)))
+    if member.role != "admin":
+        invalid = requested & DELEGATABLE_ADMIN_PERMISSIONS
+        if invalid:
+            raise HTTPException(400, "Report permissions can only be granted to Admins")
+    member.additional_permissions = sorted(requested)
+    # Keep the established field synchronized so existing Insights logic and older clients
+    # continue to behave exactly as before while the permission appears in one unified UI.
+    member.can_view_leave_capacity_insights = PERMISSION_INSIGHTS_LEAVE_CAPACITY in requested
     db.commit()
     db.refresh(member)
     return member
@@ -3067,8 +3146,7 @@ def create_inactivity_event(payload: schemas.InactivityEventCreate, current_memb
 
 @app.get("/api/inactivity-events/status")
 def inactivity_audit_status(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "This report requires a super admin")
+    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_AUDIT, "You do not have access to the Audit report")
     return {"enabled": inactivity_audit_enabled(db)}
 
 
@@ -3095,11 +3173,11 @@ def update_delegation_suggestion_exclusions(payload: schemas.DelegationSuggestio
 
 @app.get("/api/inactivity-events", response_model=list[schemas.InactivityEventDetail])
 def get_inactivity_events(date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "This report requires a super admin")
+    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_AUDIT, "You do not have access to the Audit report")
     if not inactivity_audit_enabled(db):
         return []
-    query = db.query(models.InactivityEvent).order_by(models.InactivityEvent.started_at.desc())
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    query = db.query(models.InactivityEvent).filter(models.InactivityEvent.member_id.in_(allowed_ids)).order_by(models.InactivityEvent.started_at.desc())
     if date_from:
         try:
             start = datetime.strptime(date_from, "%Y-%m-%d")
@@ -3130,7 +3208,7 @@ def get_inactivity_events(date_from: str = None, date_to: str = None, current_me
         if inactivity_event_id:
             linked_help_seconds[inactivity_event_id] = linked_help_seconds.get(inactivity_event_id, 0.0) + max(float(help_seconds or 0), 0.0)
 
-    member_names = {m.id: m.name for m in db.query(models.Member).all()}
+    member_names = {m.id: m.name for m in db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).all()}
     result = []
     for e in events:
         explained = min(float(e.seconds or 0), linked_help_seconds.get(e.id, 0.0))
@@ -3149,13 +3227,13 @@ def get_inactivity_events(date_from: str = None, date_to: str = None, current_me
 
 @app.get("/api/help-events/summary", response_model=list[schemas.HelpSummaryRow])
 def help_events_summary(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can view this report")
+    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_HELP, "You do not have access to the Help activity report")
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
     # Every member who has either given or received help shows up here, so this starts from
     # the member list rather than the events, or someone with only one side of the ledger
     # (e.g. only ever helped, never received) would be missing from their own row
-    members = db.query(models.Member).all()
-    events = db.query(models.HelpEvent).all()
+    members = db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).all()
+    events = db.query(models.HelpEvent).filter(models.HelpEvent.member_id.in_(allowed_ids)).all()
     by_member = {m.id: {"member_id": m.id, "member_name": m.name, "helped_seconds": 0.0, "received_seconds": 0.0, "helped_count": 0, "received_count": 0} for m in members}
     for e in events:
         row = by_member.get(e.member_id)
@@ -3172,15 +3250,15 @@ def help_events_summary(current_member: models.Member = Depends(get_current_memb
 
 @app.get("/api/help-events/detail", response_model=list[schemas.HelpEventDetail])
 def help_events_detail(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can view this report")
-    events = db.query(models.HelpEvent).order_by(models.HelpEvent.created_at.desc()).all()
-    names = {m.id: m.name for m in db.query(models.Member).all()}
+    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_HELP, "You do not have access to the Help activity report")
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    events = db.query(models.HelpEvent).filter(models.HelpEvent.member_id.in_(allowed_ids)).order_by(models.HelpEvent.created_at.desc()).all()
+    names = {m.id: m.name for m in db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).all()}
     return [
         schemas.HelpEventDetail(
             id=e.id,
             member_name=names.get(e.member_id, "Unknown"),
-            colleague_name=names.get(e.colleague_id, "Unknown"),
+            colleague_name=names.get(e.colleague_id, "Other team member"),
             direction=e.direction,
             seconds=e.seconds,
             created_at=e.created_at,
@@ -3858,10 +3936,10 @@ def get_insights(
             "trend": capacity_trend,
             "calamari_adjustment_seconds": round(sum(target_unavailable.values()), 1),
             "calamari": _calamari_public_meta(individual_calamari_meta),
-        } if (current_member.role == "super_admin" or bool(getattr(current_member, "can_view_leave_capacity_insights", False))) else None),
-        "team_capacity": (team_capacity if (current_member.role == "super_admin" or (is_admin_or_above(current_member.role) and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
-        "leave_trends": (leave_trends if (current_member.role == "super_admin" or bool(getattr(current_member, "can_view_leave_capacity_insights", False))) else None),
-        "team_leave_trends": (team_leave_trends if (current_member.role == "super_admin" or (is_admin_or_above(current_member.role) and bool(getattr(current_member, "can_view_leave_capacity_insights", False)))) else None),
+        } if _has_permission(current_member, PERMISSION_INSIGHTS_LEAVE_CAPACITY) else None),
+        "team_capacity": (team_capacity if (current_member.role == "super_admin" or (current_member.role == "admin" and _has_permission(current_member, PERMISSION_INSIGHTS_LEAVE_CAPACITY))) else None),
+        "leave_trends": (leave_trends if _has_permission(current_member, PERMISSION_INSIGHTS_LEAVE_CAPACITY) else None),
+        "team_leave_trends": (team_leave_trends if (current_member.role == "super_admin" or (current_member.role == "admin" and _has_permission(current_member, PERMISSION_INSIGHTS_LEAVE_CAPACITY))) else None),
         "support_trend": support_trend,
         "tracked_trend": tracked_trend,
         "work_mix": work_mix,
@@ -6373,8 +6451,7 @@ def audit_presence_heartbeat(current_member: models.Member = Depends(get_current
 
 @app.get("/api/audit/activity-summary")
 def audit_activity_summary(date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "This report requires a super admin")
+    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_AUDIT, "You do not have access to the Audit report")
     try:
         start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else datetime.utcnow().date()
         end_date = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else start_date
@@ -6383,15 +6460,17 @@ def audit_activity_summary(date_from: str = None, date_to: str = None, current_m
     if end_date < start_date:
         raise HTTPException(400, "End date must be on or after start date")
 
-    members = db.query(models.Member).order_by(models.Member.name).all()
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    members = db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).order_by(models.Member.name).all()
     # Pull a generous UTC envelope; grouping is done in each user's configured local zone.
     utc_start = datetime.combine(start_date - timedelta(days=1), datetime.min.time())
     utc_end = datetime.combine(end_date + timedelta(days=2), datetime.min.time())
-    login_events = db.query(models.LoginEvent).filter(models.LoginEvent.created_at >= utc_start, models.LoginEvent.created_at < utc_end).all()
-    clock_events = db.query(models.ClockStartEvent).filter(models.ClockStartEvent.started_at >= utc_start, models.ClockStartEvent.started_at < utc_end).all()
+    login_events = db.query(models.LoginEvent).filter(models.LoginEvent.member_id.in_(allowed_ids), models.LoginEvent.created_at >= utc_start, models.LoginEvent.created_at < utc_end).all()
+    clock_events = db.query(models.ClockStartEvent).filter(models.ClockStartEvent.member_id.in_(allowed_ids), models.ClockStartEvent.started_at >= utc_start, models.ClockStartEvent.started_at < utc_end).all()
     # Pull one extra local day of presence so a heartbeat just after midnight can prove the
     # previous day was continuous rather than incorrectly marking 23:xx as a shutdown.
     presence_rows = db.query(models.DailyPresenceEvent).filter(
+        models.DailyPresenceEvent.member_id.in_(allowed_ids),
         models.DailyPresenceEvent.work_date >= start_date,
         models.DailyPresenceEvent.work_date <= end_date + timedelta(days=1),
     ).all()
