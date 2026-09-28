@@ -152,3 +152,44 @@ def test_downgrading_admin_removes_admin_only_permissions_but_keeps_insights_per
         assert downgraded.can_view_leave_capacity_insights is True
     finally:
         s.close()
+
+
+def test_admin_can_receive_selected_super_admin_capabilities_but_not_grant_permissions():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_admin_permissions_capabilities")
+        super_admin = _member(s, tenant.id, "caps-super@example.com", "super_admin")
+        admin = _member(s, tenant.id, "caps-admin@example.com", "admin")
+        admin = main.update_member_additional_permissions(
+            admin.id,
+            schemas.MemberAdditionalPermissionsUpdate(
+                permissions=[
+                    main.PERMISSION_MANAGE_PODS,
+                    main.PERMISSION_ADD_STAFF_MANUALLY,
+                    main.PERMISSION_MANAGE_LEARNING_CATEGORIES,
+                    main.PERMISSION_MANAGE_DELEGATION_EXCLUSIONS,
+                    main.PERMISSION_MANAGE_WORKSPACE_BRANDING,
+                    main.PERMISSION_MANAGE_INTEGRATIONS,
+                    main.PERMISSION_MANAGE_AUDIT_RECORDING,
+                ],
+                expected_version=admin.version,
+            ),
+            current_member=super_admin,
+            db=s,
+        )
+        pod = main.create_pod(schemas.PodCreate(name="Delegated pod"), current_member=admin, db=s)
+        assert pod.name == "Delegated pod"
+        category = main.create_learning_category(schemas.LearningCategoryCreate(name="Delegated learning"), current_member=admin, db=s)
+        assert category.name == "Delegated learning"
+        branding = main.update_workspace_branding(schemas.WorkspaceBrandingUpdate(logo_data_url=None), current_member=admin, db=s)
+        assert branding["workspace_id"] == tenant.id
+        with pytest.raises(HTTPException) as denied:
+            main.update_member_additional_permissions(
+                admin.id,
+                schemas.MemberAdditionalPermissionsUpdate(permissions=[], expected_version=admin.version),
+                current_member=admin,
+                db=s,
+            )
+        assert denied.value.status_code == 403
+    finally:
+        s.close()
