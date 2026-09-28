@@ -10743,23 +10743,23 @@ export default function App() {
   }
 
   if (authState === "loading") {
-    return <div className="cb-root"><LoadingScreen /></div>;
+    return <div className="cb-root" spellCheck={true}><LoadingScreen /></div>;
   }
   if (authState === "invite" && invitationToken) {
-    return <div className="cb-root"><InvitationAcceptScreen token={invitationToken} onAccepted={acceptInvitation} /></div>;
+    return <div className="cb-root" spellCheck={true}><InvitationAcceptScreen token={invitationToken} onAccepted={acceptInvitation} /></div>;
   }
   if (authState === "claim") {
-    return <div className="cb-root"><ClaimScreen unclaimed={unclaimedMembers} onClaim={handleClaim} /></div>;
+    return <div className="cb-root" spellCheck={true}><ClaimScreen unclaimed={unclaimedMembers} onClaim={handleClaim} /></div>;
   }
   if (authState === "login") {
-    return <div className="cb-root"><LoginScreen onLogin={handleLogin} /></div>;
+    return <div className="cb-root" spellCheck={true}><LoginScreen onLogin={handleLogin} /></div>;
   }
   if (dataLoading) {
-    return <div className="cb-root"><LoadingScreen /></div>;
+    return <div className="cb-root" spellCheck={true}><LoadingScreen /></div>;
   }
   if (loadError) {
     return (
-      <div className="cb-root">
+      <div className="cb-root" spellCheck={true}>
         <div className="cb-center-screen">
           <div className="cb-welcome">
             <div className="cb-welcome-title cb-serif">Cannot reach the server</div>
@@ -10772,7 +10772,7 @@ export default function App() {
   }
 
   return (
-    <div className="cb-root">
+    <div className="cb-root" spellCheck={true}>
       <div className="cb-shell">
         <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} karbonConnected={integrationStatus.karbon_connected} />
         <div className="cb-main">
