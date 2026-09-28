@@ -193,3 +193,85 @@ def test_admin_can_receive_selected_super_admin_capabilities_but_not_grant_permi
         assert denied.value.status_code == 403
     finally:
         s.close()
+
+
+
+def test_manage_super_admins_adds_super_admins_to_read_scope_but_not_account_mutation_scope():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_manage_super_admin_visibility")
+        super_admin = _member(s, tenant.id, "visible-super@example.com", "super_admin")
+        granting_super_admin = _member(s, tenant.id, "granting-super@example.com", "super_admin")
+        admin = _member(s, tenant.id, "visible-admin@example.com", "admin")
+        staff = _member(s, tenant.id, "visible-staff@example.com", "member")
+
+        before = main._insights_allowed_member_ids(admin, s)
+        assert staff.id in before
+        assert super_admin.id not in before
+
+        admin = main.update_member_additional_permissions(
+            admin.id,
+            schemas.MemberAdditionalPermissionsUpdate(
+                permissions=[main.PERMISSION_MANAGE_SUPER_ADMINS],
+                expected_version=admin.version,
+            ),
+            current_member=granting_super_admin,
+            db=s,
+        )
+        after = main._insights_allowed_member_ids(admin, s)
+        assert staff.id in after
+        assert super_admin.id in after
+        assert granting_super_admin.id in after
+
+        # Visibility never becomes authority to alter a Super Admin account.
+        assert main._member_in_admin_scope(admin, super_admin) is False
+        with pytest.raises(HTTPException) as denied:
+            main.update_member_capacity(
+                super_admin.id,
+                schemas.MemberCapacityUpdate(weekly_capacity_hours=35, expected_version=super_admin.version),
+                current_member=admin,
+                db=s,
+            )
+        assert denied.value.status_code == 403
+    finally:
+        s.close()
+
+
+def test_manage_super_admins_allows_admin_to_receive_super_admin_tasks_in_read_scope():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_manage_super_admin_tasks")
+        granting_super_admin = _member(s, tenant.id, "task-granting-super@example.com", "super_admin")
+        visible_super_admin = _member(s, tenant.id, "task-visible-super@example.com", "super_admin")
+        admin = _member(s, tenant.id, "task-admin@example.com", "admin")
+
+        client = models.Client(name="Internal")
+        s.add(client)
+        s.commit()
+        task = models.TaskInstance(
+            owner_id=visible_super_admin.id,
+            submitted_by_id=visible_super_admin.id,
+            client_id=client.id,
+            client_name="Internal",
+            name="Super admin work",
+            role="Manager",
+            task_type="Admin",
+            status="todo",
+            segments=[],
+        )
+        s.add(task)
+        s.commit()
+
+        assert task.id not in {row.id for row in main.list_tasks(current_member=admin, db=s)}
+        admin = main.update_member_additional_permissions(
+            admin.id,
+            schemas.MemberAdditionalPermissionsUpdate(
+                permissions=[main.PERMISSION_MANAGE_SUPER_ADMINS],
+                expected_version=admin.version,
+            ),
+            current_member=granting_super_admin,
+            db=s,
+        )
+        assert task.id in {row.id for row in main.list_tasks(current_member=admin, db=s)}
+    finally:
+        s.close()
