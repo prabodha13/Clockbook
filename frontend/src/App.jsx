@@ -8,6 +8,310 @@ import {
   Mail, Lock, Eye, EyeOff, ShieldCheck, GraduationCap, BookOpen, ExternalLink,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
+import { ENGLISH_WORDS_RAW } from "./spellcheckDictionary.js";
+
+const CLOCKBOOK_SPELLCHECK_WORDS = new Set([
+  "clockbook", "karbon", "xero", "brightpay", "brightbooks", "brightbook", "dext", "calamari",
+  "shopify", "sumup", "revolut", "modulr", "cloudpay", "webflow", "skytab", "shift4",
+  "ros", "cro", "rbo", "vies", "rtd", "intrastat", "rct", "pswt", "eori", "prsa", "paye",
+  "prsi", "bik", "sepa", "vat", "xbrl", "ixbrl", "ct1", "frs", "saas", "oauth", "api",
+  "csv", "pdf", "aws", "postgresql", "postgres", "fastapi", "uvicorn", "sqlalchemy", "github",
+  "google", "microsoft", "dropbox", "sharepoint", "onedrive", "slack", "fireflies", "cognito",
+  "notion", "docusign", "wise", "stripe", "worldpay", "amazon", "payroll", "bookkeeping",
+  "timesheet", "timesheets", "workflow", "workflows", "superadmin", "admin", "billable",
+]);
+
+const LOCAL_SPELL_WORDS = new Set(ENGLISH_WORDS_RAW.split("\n"));
+for (const word of CLOCKBOOK_SPELLCHECK_WORDS) LOCAL_SPELL_WORDS.add(word);
+
+let spellBuckets = null;
+function getSpellBuckets() {
+  if (spellBuckets) return spellBuckets;
+  spellBuckets = new Map();
+  for (const word of LOCAL_SPELL_WORDS) {
+    if (!word || word.length < 2 || !/^[a-z]/.test(word)) continue;
+    const key = `${word[0]}:${word.length}`;
+    if (!spellBuckets.has(key)) spellBuckets.set(key, []);
+    spellBuckets.get(key).push(word);
+  }
+  return spellBuckets;
+}
+
+function normalizeSpellWord(word) {
+  return String(word || "")
+    .replace(/[’]/g, "'")
+    .replace(/^'+|'+$/g, "")
+    .toLowerCase();
+}
+
+function looksLikeCodeOrAcronym(raw) {
+  if (!raw) return true;
+  if (/\d/.test(raw) || /[_/@\\]/.test(raw)) return true;
+  if (raw.length <= 12 && raw === raw.toUpperCase() && /[A-Z]/.test(raw)) return true;
+  // Mixed-case product/client codes (e.g. iXBRL, PayPal, ABCdE) are safer to leave alone.
+  if (/[A-Z].*[A-Z]/.test(raw.slice(1))) return true;
+  return false;
+}
+
+function isKnownSpellWord(raw, ignoredWords) {
+  const word = normalizeSpellWord(raw);
+  if (word.length < 3 || looksLikeCodeOrAcronym(raw)) return true;
+  if (ignoredWords?.has(word) || LOCAL_SPELL_WORDS.has(word)) return true;
+  if (word.endsWith("'s") && LOCAL_SPELL_WORDS.has(word.slice(0, -2))) return true;
+
+  // The Hunspell dictionary already contains most inflections, but these conservative
+  // fallbacks prevent ordinary forms from being over-flagged when only a root is present.
+  const suffixes = [
+    ["ies", "y"], ["ing", ""], ["ing", "e"], ["ed", ""], ["ed", "e"],
+    ["es", ""], ["s", ""], ["ly", ""], ["er", ""], ["est", ""],
+  ];
+  for (const [suffix, replacement] of suffixes) {
+    if (word.length > suffix.length + 2 && word.endsWith(suffix)) {
+      const base = word.slice(0, -suffix.length) + replacement;
+      if (LOCAL_SPELL_WORDS.has(base)) return true;
+    }
+  }
+  return false;
+}
+
+function damerauDistanceAtMostTwo(a, b) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const prevPrev = new Array(b.length + 1).fill(0);
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    let rowMin = cur[0];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let value = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + cost,
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        value = Math.min(value, prevPrev[j - 2] + 1);
+      }
+      cur[j] = value;
+      rowMin = Math.min(rowMin, value);
+    }
+    if (rowMin > 2) return 3;
+    for (let j = 0; j < prev.length; j += 1) prevPrev[j] = prev[j];
+    prev = cur;
+  }
+  return prev[b.length] <= 2 ? prev[b.length] : 3;
+}
+
+function spellSuggestions(rawWord, limit = 3) {
+  const word = normalizeSpellWord(rawWord);
+  if (word.length < 3) return [];
+  const buckets = getSpellBuckets();
+  const candidates = [];
+  for (let len = Math.max(2, word.length - 2); len <= word.length + 2; len += 1) {
+    const bucket = buckets.get(`${word[0]}:${len}`) || [];
+    for (const candidate of bucket) {
+      const distance = damerauDistanceAtMostTwo(word, candidate);
+      if (distance <= 2) candidates.push({ candidate, distance });
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance || Math.abs(a.candidate.length - word.length) - Math.abs(b.candidate.length - word.length) || a.candidate.localeCompare(b.candidate));
+  return candidates.slice(0, limit).map((entry) => entry.candidate);
+}
+
+function spellTokens(text, ignoredWords) {
+  const tokens = [];
+  const re = /[A-Za-z][A-Za-z'’-]*/g;
+  let match;
+  while ((match = re.exec(text || ""))) {
+    const raw = match[0];
+    if (!isKnownSpellWord(raw, ignoredWords)) {
+      tokens.push({ raw, normalized: normalizeSpellWord(raw), start: match.index, end: match.index + raw.length });
+    }
+  }
+  return tokens;
+}
+
+function isSpellcheckElement(el) {
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+  if (el.disabled || el.readOnly) return false;
+  if (el instanceof HTMLTextAreaElement) return true;
+  const type = String(el.type || "text").toLowerCase();
+  return type === "text" || type === "search";
+}
+
+function spellOverlayParts(text, issues) {
+  if (!issues.length) return [{ text, misspelled: false, key: "all" }];
+  const result = [];
+  let cursor = 0;
+  issues.forEach((issue, index) => {
+    if (issue.start > cursor) result.push({ text: text.slice(cursor, issue.start), misspelled: false, key: `n-${index}` });
+    result.push({ text: text.slice(issue.start, issue.end), misspelled: true, key: `e-${index}` });
+    cursor = issue.end;
+  });
+  if (cursor < text.length) result.push({ text: text.slice(cursor), misspelled: false, key: "tail" });
+  return result;
+}
+
+function LocalSpellcheckAssist() {
+  const [active, setActive] = useState(null);
+  const [ignoredWords, setIgnoredWords] = useState(() => new Set());
+  const [revision, setRevision] = useState(0);
+
+  useEffect(() => {
+    let frame = 0;
+    const refresh = (target = document.activeElement) => {
+      if (!isSpellcheckElement(target)) {
+        setActive(null);
+        return;
+      }
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const text = target.value || "";
+        const issues = spellTokens(text, ignoredWords);
+        const rect = target.getBoundingClientRect();
+        const style = window.getComputedStyle(target);
+        setActive({
+          element: target,
+          text,
+          issues,
+          rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom },
+          scrollTop: target.scrollTop || 0,
+          scrollLeft: target.scrollLeft || 0,
+          style: {
+            fontFamily: style.fontFamily,
+            fontSize: style.fontSize,
+            fontWeight: style.fontWeight,
+            fontStyle: style.fontStyle,
+            lineHeight: style.lineHeight === "normal" ? `${Math.round(parseFloat(style.fontSize || "16") * 1.2)}px` : style.lineHeight,
+            letterSpacing: style.letterSpacing,
+            textAlign: style.textAlign,
+            paddingTop: style.paddingTop,
+            paddingRight: style.paddingRight,
+            paddingBottom: style.paddingBottom,
+            paddingLeft: style.paddingLeft,
+            whiteSpace: target instanceof HTMLTextAreaElement ? "pre-wrap" : "pre",
+          },
+        });
+      });
+    };
+    const onFocus = (event) => refresh(event.target);
+    const onInput = (event) => { if (isSpellcheckElement(event.target)) refresh(event.target); };
+    const onScroll = (event) => { if (event.target === document || event.target === window || isSpellcheckElement(document.activeElement)) refresh(document.activeElement); };
+    const onResize = () => refresh(document.activeElement);
+    document.addEventListener("focusin", onFocus, true);
+    document.addEventListener("input", onInput, true);
+    document.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("focusin", onFocus, true);
+      document.removeEventListener("input", onInput, true);
+      document.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+  }, [ignoredWords, revision]);
+
+  const replaceIssue = useCallback((issue, replacement) => {
+    const el = active?.element;
+    if (!el || !document.body.contains(el)) return;
+    const current = el.value || "";
+    const next = current.slice(0, issue.start) + replacement + current.slice(issue.end);
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (setter) setter.call(el, next); else el.value = next;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+    const caret = issue.start + replacement.length;
+    try { el.setSelectionRange(caret, caret); } catch (_) {}
+    setRevision((n) => n + 1);
+  }, [active]);
+
+  if (!active || !active.issues.length) return null;
+
+  const unique = [];
+  const seen = new Set();
+  for (const issue of active.issues) {
+    if (!seen.has(issue.normalized)) {
+      seen.add(issue.normalized);
+      unique.push({ ...issue, suggestions: spellSuggestions(issue.raw) });
+      if (unique.length >= 4) break;
+    }
+  }
+  const overlayParts = spellOverlayParts(active.text, active.issues);
+  const panelTop = Math.min(window.innerHeight - 16, active.rect.bottom + 6);
+  const panelWidth = Math.min(Math.max(active.rect.width, 280), 460);
+  const panelLeft = Math.max(8, Math.min(active.rect.left, window.innerWidth - panelWidth - 8));
+
+  return createPortal(
+    <>
+      <div
+        aria-hidden="true"
+        style={{
+          position: "fixed", zIndex: 9998, pointerEvents: "none", overflow: "hidden",
+          top: active.rect.top, left: active.rect.left, width: active.rect.width, height: active.rect.height,
+          boxSizing: "border-box", border: "1px solid transparent", borderRadius: 6,
+          ...active.style,
+          color: "transparent", background: "transparent",
+        }}
+      >
+        <div style={{ transform: `translate(${-active.scrollLeft}px, ${-active.scrollTop}px)`, minWidth: "100%", whiteSpace: active.style.whiteSpace, overflowWrap: "break-word" }}>
+          {overlayParts.map((part) => (
+            <span
+              key={part.key}
+              style={part.misspelled ? { textDecorationLine: "underline", textDecorationStyle: "wavy", textDecorationColor: "#c62828", textDecorationThickness: "1.5px", textUnderlineOffset: "2px" } : undefined}
+            >
+              {part.text}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div
+        role="status"
+        aria-live="polite"
+        style={{
+          position: "fixed", zIndex: 9999, top: panelTop, left: panelLeft, width: panelWidth,
+          background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", border: "1px solid var(--line, #d8ded9)",
+          borderRadius: 9, boxShadow: "0 8px 24px rgba(0,0,0,.14)", padding: "9px 10px", fontSize: 12,
+        }}
+      >
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>Spelling suggestion</div>
+        {unique.map((issue) => (
+          <div key={`${issue.normalized}-${issue.start}`} style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", marginTop: 5 }}>
+            <span style={{ textDecorationLine: "underline", textDecorationStyle: "wavy", textDecorationColor: "#c62828", textUnderlineOffset: 2 }}>{issue.raw}</span>
+            <span style={{ color: "var(--ink-muted, #69736d)" }}>→</span>
+            {issue.suggestions.length ? issue.suggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => replaceIssue(issue, suggestion)}
+                style={{ border: "1px solid var(--line, #d8ded9)", borderRadius: 6, background: "var(--paper, #fff)", color: "inherit", padding: "3px 7px", cursor: "pointer", font: "inherit" }}
+              >
+                {suggestion}
+              </button>
+            )) : <span style={{ color: "var(--ink-muted, #69736d)" }}>No close suggestion</span>}
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setIgnoredWords((prev) => {
+                  const next = new Set(prev);
+                  next.add(issue.normalized);
+                  return next;
+                });
+              }}
+              style={{ border: 0, background: "transparent", color: "var(--ink-muted, #69736d)", padding: "3px 4px", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+            >
+              Ignore
+            </button>
+          </div>
+        ))}
+        {active.issues.length > unique.length && <div style={{ marginTop: 6, color: "var(--ink-muted, #69736d)" }}>+{active.issues.length - unique.length} more possible spelling issue{active.issues.length - unique.length === 1 ? "" : "s"}</div>}
+      </div>
+    </>,
+    document.body,
+  );
+}
 
 const MEMBER_TINTS = ["#245C43", "#B5590F", "#5B6660", "#5C4A8C", "#8C2F3A", "#2E5C7A"];
 const UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__";
@@ -11038,6 +11342,7 @@ export default function App() {
           onConfirm={trackMeetingAsTask}
         />
       )}
+      <LocalSpellcheckAssist />
       {toast && <div className={`cb-toast ${toast.isError ? "error" : ""}`}>{toast.msg}</div>}
     </div>
   );
