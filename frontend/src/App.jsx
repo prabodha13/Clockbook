@@ -9460,7 +9460,7 @@ function savePromptedMeetingIds(set) {
 }
 
 
-function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCalendar, onRequestNotifications }) {
+function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, karbonConnected = false, onConnectCalendar, onRequestNotifications }) {
   const [notificationPermission, setNotificationPermission] = useState(() => {
     if (!("Notification" in window)) return "unsupported";
     return Notification.permission;
@@ -9536,6 +9536,18 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
       body: "Use Helper when you help a colleague or receive help. That keeps collaboration time separate from normal client work.",
       target: '[data-tour="helper"]',
       placement: "below",
+    },
+    ...(karbonConnected ? [{
+      title: "Check your Karbon time",
+      body: "Karbon Check lets you compare your ClockBook time with Karbon so you can spot differences before submitting or reviewing your timesheet.",
+      target: '[data-tour-nav="reconcile"]',
+      placement: "right",
+    }] : []),
+    {
+      title: "Learning & Development",
+      body: "Use Learning & Development to record time spent learning and capture what you learned. Your entries build your personal knowledge history in ClockBook.",
+      target: '[data-tour-nav="learning"]',
+      placement: "right",
     },
     {
       title: "Review your insights",
@@ -11364,6 +11376,7 @@ export default function App() {
           onClose={closeGuidedTour}
           onSetNewTaskOpen={setShowNewTask}
           calendarConnected={!!currentUser.google_calendar_connected}
+          karbonConnected={!!integrationStatus.karbon_connected}
           onConnectCalendar={connectGoogleCalendar}
           onRequestNotifications={requestBrowserNotifications}
         />
