@@ -6272,11 +6272,11 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
           <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
           <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
           {showLoginToShutdown && <col style={{ width: "16%" }} />}
-          {showLoginToShutdown && <col style={{ width: "11%" }} />}
-          {showLoginToShutdown && <col style={{ width: "11%" }} />}
-          <col style={{ width: showLoginToShutdown ? "11%" : "18%" }} />
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
+          <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
           <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
-        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs Karbon</th>}<th>ClockBook vs Karbon</th><th>Note</th></tr></thead><tbody>
+        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs Karbon</th>}<th style={{ whiteSpace: "nowrap", paddingRight: 16 }}>ClockBook vs Karbon</th><th style={{ whiteSpace: "nowrap", paddingLeft: 16 }}>Note</th></tr></thead><tbody>
           {(data.rows || []).map((r) => {
             const ok = isMatched(r.difference_minutes);
             return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
@@ -6336,15 +6336,15 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div>
 
         <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
-          <col style={{ width: showLoginToShutdown ? "18%" : "30%" }} />
+          <col style={{ width: showLoginToShutdown ? "16%" : "30%" }} />
           <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
           <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
           <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
           {showLoginToShutdown && <col style={{ width: "16%" }} />}
-          {showLoginToShutdown && <col style={{ width: "11%" }} />}
-          {showLoginToShutdown && <col style={{ width: "11%" }} />}
-          <col style={{ width: showLoginToShutdown ? "10%" : "18%" }} />
-          <col style={{ width: showLoginToShutdown ? "7%" : "10%" }} />
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
+          <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
+          <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
         </colgroup><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs Karbon</th>}<th>ClockBook vs Karbon</th><th></th></tr></thead><tbody>
           {teamData.map((entry) => {
             const memberData = entry.data;
@@ -6376,16 +6376,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 <div style={{ padding: "10px 0 14px" }}>
                   <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, padding: "0 14px" }}>{entry.member.name} · Daily comparison</div>
                   <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
-                    <col style={{ width: showLoginToShutdown ? "18%" : "30%" }} />
+                    <col style={{ width: showLoginToShutdown ? "16%" : "30%" }} />
                     <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
                     <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
                     <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
                     {showLoginToShutdown && <col style={{ width: "16%" }} />}
-                    {showLoginToShutdown && <col style={{ width: "11%" }} />}
-                    {showLoginToShutdown && <col style={{ width: "11%" }} />}
-                    <col style={{ width: showLoginToShutdown ? "10%" : "18%" }} />
-                    <col style={{ width: showLoginToShutdown ? "7%" : "10%" }} />
-                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs Karbon</th>}<th>ClockBook vs Karbon</th><th>Note</th></tr></thead><tbody>
+                    {showLoginToShutdown && <col style={{ width: "10%" }} />}
+                    {showLoginToShutdown && <col style={{ width: "10%" }} />}
+                    <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
+                    <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
+                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs Karbon</th>}<th style={{ whiteSpace: "nowrap", paddingRight: 16 }}>ClockBook vs Karbon</th><th style={{ whiteSpace: "nowrap", paddingLeft: 16 }}>Note</th></tr></thead><tbody>
                     {(memberData.rows || []).map((row) => {
                       const rowOk = isMatched(row.difference_minutes, tolerance);
                       return <tr key={`${entry.member.id}-${row.date}`} style={rowOk ? undefined : styles.reviewRow}>
