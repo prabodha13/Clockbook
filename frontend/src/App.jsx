@@ -2266,7 +2266,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
   );
 }
 
-function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient, recoveringForgottenTime = false }) {
+function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient, recoveringForgottenTime = false, recoveryAllocationOnly = false }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState("");
   const [newClientName, setNewClientName] = useState("");
@@ -2436,7 +2436,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal" data-tour="new-task-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">{recoveringForgottenTime ? "New task for forgotten time" : "New task"}</div>
+          <div className="cb-modal-title">{recoveryAllocationOnly ? "New task for recovered time" : recoveringForgottenTime ? "New task for forgotten time" : "New task"}</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <form onSubmit={handleSubmit}>
@@ -2675,10 +2675,10 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                 type="button"
                 className="cb-btn cb-btn-primary"
                 disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
-                title={taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task for the recovered time" : "Create this task, add the forgotten time, and continue its timer"}
-                onClick={(e) => handleSubmit(e, true)}
+                title={taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task for the recovered time" : recoveryAllocationOnly ? "Create this task and add it to the recovery split" : "Create this task, add the forgotten time, and continue its timer"}
+                onClick={(e) => handleSubmit(e, !recoveryAllocationOnly)}
               >
-                Recover & continue
+                {recoveryAllocationOnly ? "Create task" : "Recover & continue"}
               </button>
             ) : (
               <>
@@ -9553,7 +9553,17 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
   );
 }
 
-function ForgottenTimeRecoveryModal({ gapMs, tasks, currentUser, onClose, onRecoverExisting, onCreateNew }) {
+function ForgottenTimeRecoveryModal({
+  gapMs, tasks, currentUser, clients, templates, members, bankAccounts, roles, taskTypes,
+  onAddClient, onClose, onRecoverSplit, onCreateRecoveryTask,
+}) {
+  const recoveredSeconds = Math.max(1, Math.round(gapMs / 1000));
+  const allocationIdRef = useRef(1);
+  const [createdTasks, setCreatedTasks] = useState([]);
+  const [showTaskCreator, setShowTaskCreator] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
   const eligibleTasks = useMemo(() => {
     const timeZone = currentUser?.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const todayKey = workDateKeyInTimeZone(new Date(), timeZone);
@@ -9561,29 +9571,78 @@ function ForgottenTimeRecoveryModal({ gapMs, tasks, currentUser, onClose, onReco
       if (workDateKeyInTimeZone(task.created_at, timeZone) === todayKey) return true;
       return (task.segments || []).some((seg) => workDateKeyInTimeZone(seg?.start, timeZone) === todayKey);
     };
-    const own = (tasks || []).filter((t) =>
-      t.owner_id === currentUser.id &&
-      (t.status === "paused" || t.status === "todo") &&
-      belongsToToday(t)
-    );
-    return own.sort((a, b) => {
+    const combined = [...(tasks || []), ...createdTasks];
+    const seen = new Set();
+    return combined.filter((t) => {
+      if (!t || seen.has(t.id)) return false;
+      seen.add(t.id);
+      return t.owner_id === currentUser.id && (t.status === "paused" || t.status === "todo") && belongsToToday(t);
+    }).sort((a, b) => {
       const rank = (t) => t.status === "paused" ? 0 : 1;
       return rank(a) - rank(b) || String(a.client_name || "").localeCompare(String(b.client_name || "")) || String(a.name || "").localeCompare(String(b.name || ""));
     });
-  }, [tasks, currentUser.id, currentUser?.timezone_name]);
-  const [mode, setMode] = useState(eligibleTasks.length ? "existing" : "new");
-  const [taskId, setTaskId] = useState(eligibleTasks[0]?.id || "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const selected = eligibleTasks.find((t) => t.id === taskId) || null;
-  const recoveredSeconds = Math.max(1, Math.round(gapMs / 1000));
+  }, [tasks, createdTasks, currentUser.id, currentUser?.timezone_name]);
+
+  const [allocations, setAllocations] = useState(() => [{ id: 1, taskId: "", seconds: 0 }]);
+
+  useEffect(() => {
+    if (!allocations[0]?.taskId && eligibleTasks[0]?.id) {
+      setAllocations((prev) => prev.map((row, index) => index === 0 ? { ...row, taskId: eligibleTasks[0].id } : row));
+    }
+  }, [eligibleTasks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const secondsBeforeLast = allocations.slice(0, -1).reduce((sum, row) => sum + Math.max(0, Number(row.seconds) || 0), 0);
+  const remainingSeconds = Math.max(0, recoveredSeconds - secondsBeforeLast);
+  const allocatedSeconds = secondsBeforeLast + remainingSeconds;
+  const overAllocated = secondsBeforeLast >= recoveredSeconds && allocations.length > 1;
+
+  function addAllocation(taskId = "") {
+    setAllocations((prev) => {
+      const priorBeforeLast = prev.slice(0, -1).reduce((sum, row) => sum + Math.max(0, Number(row.seconds) || 0), 0);
+      const priorRemaining = Math.max(0, recoveredSeconds - priorBeforeLast);
+      const next = prev.map((row, index) => index === prev.length - 1 ? { ...row, seconds: priorRemaining } : row);
+      return [...next, { id: ++allocationIdRef.current, taskId, seconds: 0 }];
+    });
+  }
+
+  function removeAllocation(id) {
+    setAllocations((prev) => prev.length <= 1 ? prev : prev.filter((row) => row.id !== id));
+  }
+
+  function updateAllocation(id, patch) {
+    setAllocations((prev) => prev.map((row) => row.id === id ? { ...row, ...patch } : row));
+  }
+
+  async function createRecoveryTask(payloads) {
+    if (!payloads || payloads.length !== 1) throw new Error("Create one task at a time for recovered time");
+    const created = await onCreateRecoveryTask(payloads[0]);
+    setCreatedTasks((prev) => [created, ...prev]);
+    addAllocation(created.id);
+    setShowTaskCreator(false);
+  }
 
   async function recover() {
-    if (!selected || busy) return;
-    setBusy(true);
+    if (busy) return;
     setError("");
+    const normalized = allocations.map((row, index) => ({
+      task_id: row.taskId,
+      seconds: index === allocations.length - 1 ? remainingSeconds : Math.max(0, Math.round(Number(row.seconds) || 0)),
+    }));
+    if (normalized.some((row) => !row.task_id)) {
+      setError("Select a task for every recovery allocation.");
+      return;
+    }
+    if (new Set(normalized.map((row) => row.task_id)).size !== normalized.length) {
+      setError("Use each task only once in the recovery split.");
+      return;
+    }
+    if (overAllocated || normalized.some((row) => row.seconds < 1) || normalized.reduce((sum, row) => sum + row.seconds, 0) !== recoveredSeconds) {
+      setError("The split must allocate exactly the full forgotten-time amount.");
+      return;
+    }
+    setBusy(true);
     try {
-      await onRecoverExisting(selected, recoveredSeconds);
+      await onRecoverSplit(normalized, recoveredSeconds);
     } catch (err) {
       setError(err.message || "Could not recover the forgotten time");
       setBusy(false);
@@ -9591,70 +9650,95 @@ function ForgottenTimeRecoveryModal({ gapMs, tasks, currentUser, onClose, onReco
   }
 
   return (
-    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
-      <div className="cb-modal">
-        <div className="cb-modal-head">
-          <div className="cb-modal-title">Recover forgotten time</div>
-          <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
-        </div>
-        <div className="cb-modal-body">
-          <div style={{ padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 16 }}>
-            <div style={{ fontWeight: 700 }}>Recover {niceDuration(gapMs)}</div>
-            <div className="cb-hint" style={{ marginTop: 3 }}>This is recorded as a manual adjustment and flagged as <strong>Forgotten time recovered</strong>.</div>
+    <>
+      <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+        <div className="cb-modal" style={{ width: "min(760px, calc(100vw - 28px))" }}>
+          <div className="cb-modal-head">
+            <div className="cb-modal-title">Recover forgotten time</div>
+            <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
           </div>
-
-          <div className="cb-field">
-            <label className="cb-label">Where should this time go?</label>
-            <div className="cb-tabs" style={{ width: "fit-content" }}>
-              <button type="button" className={`cb-tab ${mode === "existing" ? "active" : ""}`} disabled={!eligibleTasks.length} onClick={() => setMode("existing")}>Existing work</button>
-              <button type="button" className={`cb-tab ${mode === "new" ? "active" : ""}`} onClick={() => setMode("new")}>New task</button>
-            </div>
-          </div>
-
-          {mode === "existing" ? (
-            <>
-              <div className="cb-field">
-                <label className="cb-label">In progress / To do</label>
-                <SearchableSelect
-                  options={eligibleTasks}
-                  value={taskId}
-                  onChange={setTaskId}
-                  placeholder="Search your tasks..."
-                  getLabel={(t) => `${t.client_name ? `${t.client_name} - ` : ""}${taskDisplayHeading(t)}`}
-                  getSecondary={(t) => `${t.status === "paused" ? "In progress" : "To do"}${taskPeriodContext(t) ? ` · ${taskPeriodContext(t)}` : ""}`}
-                />
-              </div>
-              {selected && (
-                <div style={{ padding: "11px 12px", border: "1px solid var(--line)", borderRadius: 10 }}>
-                  <div style={{ fontWeight: 700 }}>{taskClientLabel(selected)}{taskClientLabel(selected) ? " · " : ""}{taskDisplayHeading(selected)}</div>
-                  <div className="cb-hint" style={{ marginTop: 4 }}>
-                    {selected.status === "paused" ? "In progress" : "To do"} · {formatHM(elapsedSeconds(selected, Date.now()))} already tracked
-                  </div>
-                  <div className="cb-hint" style={{ marginTop: 4 }}>The recovered time will be added to this task, then its timer will continue from now.</div>
+          <div className="cb-modal-body">
+            <div style={{ padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 700 }}>Recover {niceDuration(gapMs)}</div>
+                <div className="cb-mono" style={{ fontSize: 12.5, color: overAllocated ? "#B42318" : "var(--ink-soft)" }}>
+                  Allocated {niceDuration(allocatedSeconds * 1000)} / {niceDuration(gapMs)}
                 </div>
-              )}
-              {!eligibleTasks.length && <div className="cb-empty">You do not have any In progress or To do tasks from today. Create a new task instead.</div>}
-            </>
-          ) : (
-            <div style={{ padding: "11px 12px", border: "1px solid var(--line)", borderRadius: 10 }}>
-              <div style={{ fontWeight: 700 }}>Create a new task</div>
-              <div className="cb-hint" style={{ marginTop: 4 }}>Choose the client and template as usual. The recovered time will be attached to the new task and clearly flagged.</div>
+              </div>
+              <div className="cb-hint" style={{ marginTop: 3 }}>Every split remains a manual adjustment and is flagged as <strong>Forgotten time recovered</strong>.</div>
             </div>
-          )}
-          {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
-        </div>
-        <div className="cb-modal-foot">
-          <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
-          {mode === "existing" ? (
-            <button type="button" className="cb-btn cb-btn-primary" disabled={busy || !selected} onClick={recover}>
-              {busy ? "Recovering..." : `Recover ${niceDuration(gapMs)} & continue`}
+
+            <div className="cb-hint" style={{ marginBottom: 10 }}>
+              Add the tasks in chronological order. The final row receives the exact remaining time and will continue from now after recovery.
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {allocations.map((row, index) => {
+                const isLast = index === allocations.length - 1;
+                const rowSeconds = isLast ? remainingSeconds : Math.max(0, Number(row.seconds) || 0);
+                const selectedElsewhere = new Set(allocations.filter((r) => r.id !== row.id).map((r) => r.taskId).filter(Boolean));
+                const taskOptions = eligibleTasks.filter((t) => !selectedElsewhere.has(t.id) || t.id === row.taskId);
+                return (
+                  <div key={row.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 145px 34px", gap: 8, alignItems: "end", padding: "10px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)" }}>
+                    <div className="cb-field" style={{ margin: 0 }}>
+                      <label className="cb-label">{index + 1}. Task</label>
+                      <SearchableSelect
+                        options={taskOptions}
+                        value={row.taskId}
+                        onChange={(value) => updateAllocation(row.id, { taskId: value })}
+                        placeholder="Search today's tasks..."
+                        getLabel={(t) => `${t.client_name ? `${t.client_name} - ` : ""}${taskDisplayHeading(t)}`}
+                        getSecondary={(t) => `${t.status === "paused" ? "In progress" : "To do"}${taskPeriodContext(t) ? ` · ${taskPeriodContext(t)}` : ""}`}
+                      />
+                    </div>
+                    <div className="cb-field" style={{ margin: 0 }}>
+                      <label className="cb-label">Duration</label>
+                      {isLast ? (
+                        <div className="cb-input cb-mono" style={{ background: "var(--paper-soft)", display: "flex", alignItems: "center" }}>{formatHM(rowSeconds)}</div>
+                      ) : (
+                        <div style={{ position: "relative" }}>
+                          <input
+                            type="number" min="0" step="0.5" className="cb-input" style={{ paddingRight: 42 }}
+                            value={rowSeconds ? Math.round((rowSeconds / 60) * 10) / 10 : ""}
+                            onChange={(e) => updateAllocation(row.id, { seconds: Math.max(0, Math.round((Number(e.target.value) || 0) * 60)) })}
+                            aria-label={`Minutes for allocation ${index + 1}`}
+                          />
+                          <span className="cb-hint" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)" }}>min</span>
+                        </div>
+                      )}
+                    </div>
+                    <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove allocation" disabled={allocations.length <= 1 || busy} onClick={() => removeAllocation(row.id)}><Trash2 size={14} /></button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button type="button" className="cb-btn cb-btn-sm" disabled={busy || allocations.length >= 20} onClick={() => addAllocation()}><Plus size={13} />Split to another task</button>
+              <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" disabled={busy} onClick={() => setShowTaskCreator(true)}><Plus size={13} />Create new task</button>
+            </div>
+
+            {overAllocated && <div className="cb-error" style={{ marginTop: 12 }}>The earlier allocations already use all available forgotten time. Reduce one of them so the final task has time remaining.</div>}
+            {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
+          </div>
+          <div className="cb-modal-foot">
+            <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            <button type="button" className="cb-btn cb-btn-primary" disabled={busy || overAllocated || remainingSeconds < 1} onClick={recover}>
+              {busy ? "Recovering..." : `Recover ${niceDuration(gapMs)} across ${allocations.length} task${allocations.length === 1 ? "" : "s"}`}
             </button>
-          ) : (
-            <button type="button" className="cb-btn cb-btn-primary" disabled={busy} onClick={onCreateNew}>Continue to new task</button>
-          )}
+          </div>
         </div>
       </div>
-    </div>
+
+      {showTaskCreator && (
+        <NewTaskModal
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes} currentUser={currentUser}
+          recoveringForgottenTime={true} recoveryAllocationOnly={true}
+          onClose={() => setShowTaskCreator(false)} onCreate={createRecoveryTask} onAddClient={onAddClient}
+        />
+      )}
+    </>
   );
 }
 
@@ -11701,16 +11785,34 @@ export default function App() {
           gapMs={forgotToTrackGapMsRef.current}
           tasks={tasks}
           currentUser={effectiveCurrentUser}
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes} onAddClient={addClient}
           onClose={() => { forgotToTrackGapMsRef.current = null; setShowForgottenRecovery(false); }}
-          onCreateNew={() => { setShowForgottenRecovery(false); setShowNewTask(true); }}
-          onRecoverExisting={async (task, recoveredSeconds) => {
-            const updated = await api.recoverTaskTime(task.id, recoveredSeconds);
-            mergeTask(updated);
+          onCreateRecoveryTask={async (payload) => {
+            const created = await api.createTask(payload);
+            setTasks((prev) => [created, ...prev]);
+            return created;
+          }}
+          onRecoverSplit={async (allocations, recoveredSeconds) => {
+            const token = getToken();
+            const response = await fetch("/api/tasks/recover-time/batch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+              body: JSON.stringify({ total_seconds: recoveredSeconds, allocations }),
+            });
+            if (!response.ok) {
+              let message = "Could not recover the forgotten time";
+              try { const body = await response.json(); message = body.detail || message; } catch (_) {}
+              throw new Error(message);
+            }
+            const updatedTasks = await response.json();
+            for (const updated of updatedTasks) mergeTask(updated);
             const recoveredGap = forgotToTrackGapMsRef.current;
             forgotToTrackGapMsRef.current = null;
             setShowForgottenRecovery(false);
-            showToast(`${niceDuration(recoveredGap)} recovered and flagged as forgotten time`);
-            requestStart(updated);
+            showToast(`${niceDuration(recoveredGap)} recovered across ${updatedTasks.length} task${updatedTasks.length === 1 ? "" : "s"} and flagged as forgotten time`);
+            const continueTask = updatedTasks[updatedTasks.length - 1];
+            if (continueTask) requestStart(continueTask);
           }}
         />
       )}
