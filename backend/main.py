@@ -975,10 +975,24 @@ PERMISSION_INSIGHTS_LEAVE_CAPACITY = "insights_leave_capacity"
 PERMISSION_REPORT_HELP = "report_help"
 PERMISSION_REPORT_OVERRIDES = "report_manual_overrides"
 PERMISSION_REPORT_AUDIT = "report_audit"
+PERMISSION_MANAGE_PODS = "manage_pods"
+PERMISSION_ADD_STAFF_MANUALLY = "add_staff_manually"
+PERMISSION_MANAGE_LEARNING_CATEGORIES = "manage_learning_categories"
+PERMISSION_MANAGE_DELEGATION_EXCLUSIONS = "manage_delegation_exclusions"
+PERMISSION_MANAGE_WORKSPACE_BRANDING = "manage_workspace_branding"
+PERMISSION_MANAGE_INTEGRATIONS = "manage_integrations"
+PERMISSION_MANAGE_AUDIT_RECORDING = "manage_audit_recording"
 DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_REPORT_HELP,
     PERMISSION_REPORT_OVERRIDES,
     PERMISSION_REPORT_AUDIT,
+    PERMISSION_MANAGE_PODS,
+    PERMISSION_ADD_STAFF_MANUALLY,
+    PERMISSION_MANAGE_LEARNING_CATEGORIES,
+    PERMISSION_MANAGE_DELEGATION_EXCLUSIONS,
+    PERMISSION_MANAGE_WORKSPACE_BRANDING,
+    PERMISSION_MANAGE_INTEGRATIONS,
+    PERMISSION_MANAGE_AUDIT_RECORDING,
 }
 ALL_DELEGATABLE_PERMISSIONS = DELEGATABLE_ADMIN_PERMISSIONS | {PERMISSION_INSIGHTS_LEAVE_CAPACITY}
 
@@ -1299,8 +1313,7 @@ def get_workspace_branding(current_member: models.Member = Depends(get_current_m
 
 @app.put("/api/workspace/branding")
 def update_workspace_branding(payload: schemas.WorkspaceBrandingUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage workspace branding")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_WORKSPACE_BRANDING, "You do not have permission to manage workspace branding")
     logo = _validate_workspace_logo_data_url(payload.logo_data_url or "")
     _set_setting_value(db, "workspace_logo_data_url", logo)
     db.commit()
@@ -2553,8 +2566,7 @@ def list_members(current_member: models.Member = Depends(get_current_member), db
 
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
 def create_member(payload: schemas.MemberCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can add staff manually")
+    _require_delegated_admin_permission(current_member, PERMISSION_ADD_STAFF_MANUALLY, "You do not have permission to add staff manually")
     name = payload.name.strip()
     email = payload.email.strip().lower()
     if not name:
@@ -2686,7 +2698,7 @@ def update_member_additional_permissions(member_id: str, payload: schemas.Member
     if member.role != "admin":
         invalid = requested & DELEGATABLE_ADMIN_PERMISSIONS
         if invalid:
-            raise HTTPException(400, "Report permissions can only be granted to Admins")
+            raise HTTPException(400, "Elevated permissions can only be granted to Admins")
     member.additional_permissions = sorted(requested)
     # Keep the established field synchronized so existing Insights logic and older clients
     # continue to behave exactly as before while the permission appears in one unified UI.
@@ -3146,28 +3158,31 @@ def create_inactivity_event(payload: schemas.InactivityEventCreate, current_memb
 
 @app.get("/api/inactivity-events/status")
 def inactivity_audit_status(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_AUDIT, "You do not have access to the Audit report")
+    if current_member.role != "super_admin" and not (
+        current_member.role == "admin" and (
+            _has_permission(current_member, PERMISSION_REPORT_AUDIT)
+            or _has_permission(current_member, PERMISSION_MANAGE_AUDIT_RECORDING)
+        )
+    ):
+        raise HTTPException(403, "You do not have access to Audit status")
     return {"enabled": inactivity_audit_enabled(db)}
 
 
 @app.put("/api/inactivity-events/status")
 def update_inactivity_audit_status(payload: schemas.InactivityAuditSettingUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can change this setting")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_AUDIT_RECORDING, "You do not have permission to change audit recording")
     return {"enabled": set_inactivity_audit_enabled(db, payload.enabled)}
 
 
 @app.get("/api/insights/delegation-exclusions")
 def get_delegation_suggestion_exclusions(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can manage delegation suggestion exclusions")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_DELEGATION_EXCLUSIONS, "You do not have permission to manage delegation suggestion exclusions")
     return {"exclusions": _delegation_exclusions(db), "defaults": list(DEFAULT_DELEGATION_EXCLUSIONS)}
 
 
 @app.put("/api/insights/delegation-exclusions")
 def update_delegation_suggestion_exclusions(payload: schemas.DelegationSuggestionExclusionsUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can manage delegation suggestion exclusions")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_DELEGATION_EXCLUSIONS, "You do not have permission to manage delegation suggestion exclusions")
     return {"exclusions": _set_delegation_exclusions(db, payload.exclusions), "defaults": list(DEFAULT_DELEGATION_EXCLUSIONS)}
 
 
@@ -4221,8 +4236,7 @@ def list_pods(current_member: models.Member = Depends(get_current_member), db: S
 
 @app.post("/api/pods", response_model=schemas.PodOut, status_code=201)
 def create_pod(payload: schemas.PodCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can create pods")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_PODS, "You do not have permission to create pods")
     name = payload.name.strip()
     if not name:
         raise HTTPException(400, "Enter a pod name")
@@ -4237,8 +4251,7 @@ def create_pod(payload: schemas.PodCreate, current_member: models.Member = Depen
 
 @app.delete("/api/pods/{pod_id}", status_code=204)
 def delete_pod(pod_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can delete pods")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_PODS, "You do not have permission to delete pods")
     pod = db.get(models.Pod, pod_id)
     if pod:
         db.query(models.Member).filter(models.Member.pod_id == pod_id).update({"pod_id": None})
@@ -4249,8 +4262,7 @@ def delete_pod(pod_id: str, current_member: models.Member = Depends(get_current_
 
 @app.patch("/api/members/{member_id}/pod", response_model=schemas.MemberOut)
 def update_member_pod(member_id: str, payload: schemas.MemberPodUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can change pod assignments")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_PODS, "You do not have permission to change pod assignments")
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
@@ -4325,8 +4337,7 @@ def delete_task_type(task_type_id: str, current_member: models.Member = Depends(
 def list_learning_categories(include_archived: bool = False, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     query = db.query(models.LearningCategory)
     if include_archived:
-        if current_member.role != "super_admin":
-            raise HTTPException(403, "Only Super Admins can manage archived L&D categories")
+        _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_LEARNING_CATEGORIES, "You do not have permission to manage archived L&D categories")
     else:
         query = query.filter(models.LearningCategory.is_active.is_(True))
     return query.order_by(func.lower(models.LearningCategory.name)).all()
@@ -4334,8 +4345,7 @@ def list_learning_categories(include_archived: bool = False, current_member: mod
 
 @app.post("/api/learning/categories", response_model=schemas.LearningCategoryOut, status_code=201)
 def create_learning_category(payload: schemas.LearningCategoryCreate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only Super Admins can manage L&D categories")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_LEARNING_CATEGORIES, "You do not have permission to manage L&D categories")
     name = payload.name.strip()
     if db.query(models.LearningCategory).filter(func.lower(models.LearningCategory.name) == name.lower()).first():
         raise HTTPException(400, "That L&D category already exists")
@@ -4348,8 +4358,7 @@ def create_learning_category(payload: schemas.LearningCategoryCreate, current_me
 
 @app.patch("/api/learning/categories/{category_id}", response_model=schemas.LearningCategoryOut)
 def update_learning_category(category_id: str, payload: schemas.LearningCategoryUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only Super Admins can manage L&D categories")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_LEARNING_CATEGORIES, "You do not have permission to manage L&D categories")
     category = db.get(models.LearningCategory, category_id)
     if not category:
         raise HTTPException(404, "L&D category not found")
@@ -4374,8 +4383,7 @@ def update_learning_category(category_id: str, payload: schemas.LearningCategory
 
 @app.delete("/api/learning/categories/{category_id}", status_code=204)
 def delete_learning_category(category_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only Super Admins can manage L&D categories")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_LEARNING_CATEGORIES, "You do not have permission to manage L&D categories")
     category = db.get(models.LearningCategory, category_id)
     if not category:
         return None
@@ -6012,8 +6020,7 @@ def get_integration_status(current_member: models.Member = Depends(get_current_m
 
 @app.get("/api/integrations/karbon")
 def get_karbon_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     mode = _setting_value(db, "karbon_config_mode").strip().lower()
     token_enc = _setting_value(db, "karbon_application_id_encrypted")
     access_enc = _setting_value(db, "karbon_access_key_encrypted")
@@ -6034,8 +6041,7 @@ def get_karbon_integration(current_member: models.Member = Depends(get_current_m
 
 @app.put("/api/integrations/karbon")
 def save_karbon_integration(payload: schemas.KarbonIntegrationSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     application_id = payload.application_id.strip()
     access_key = payload.access_key.strip()
     connected_before = _karbon_connected_for_workspace(db)
@@ -6054,16 +6060,14 @@ def save_karbon_integration(payload: schemas.KarbonIntegrationSave, current_memb
 
 @app.post("/api/integrations/karbon/test")
 def test_karbon_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     _karbon_get_all("Users", {"$top": 1}, db=db)
     return {"ok": True}
 
 
 @app.delete("/api/integrations/karbon")
 def disconnect_karbon_integration(expected_version: int | None = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     connected_before = _karbon_connected_for_workspace(db)
     revision = _require_integration_revision(db, "karbon", expected_version, connected_before)
     _set_setting_value(db, "karbon_application_id_encrypted", "")
@@ -6078,8 +6082,7 @@ def disconnect_karbon_integration(expected_version: int | None = None, current_m
 
 @app.get("/api/integrations/calamari")
 def get_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     tenant = _setting_value(db, "calamari_tenant").strip()
     key_enc = _setting_value(db, "calamari_api_key_encrypted")
     mode = _setting_value(db, "calamari_config_mode").strip().lower()
@@ -6102,8 +6105,7 @@ def _test_calamari_credentials(tenant: str, api_key: str):
 
 @app.put("/api/integrations/calamari")
 def save_calamari_integration(payload: schemas.CalamariIntegrationSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     tenant = _normalise_calamari_tenant(payload.tenant)
     api_key = payload.api_key.strip()
     connected_before = _calamari_connected_for_workspace(db)
@@ -6121,8 +6123,7 @@ def save_calamari_integration(payload: schemas.CalamariIntegrationSave, current_
 
 @app.post("/api/integrations/calamari/test")
 def test_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     creds = _calamari_credentials(db)
     if not creds:
         raise HTTPException(503, "Calamari is not connected")
@@ -6145,8 +6146,7 @@ def test_calamari_integration(current_member: models.Member = Depends(get_curren
 
 @app.delete("/api/integrations/calamari")
 def disconnect_calamari_integration(expected_version: int | None = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can manage integrations")
+    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
     connected_before = _calamari_connected_for_workspace(db)
     revision = _require_integration_revision(db, "calamari", expected_version, connected_before)
     _set_setting_value(db, "calamari_api_key_encrypted", "")
