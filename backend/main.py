@@ -1247,6 +1247,19 @@ def logout(authorization: str = Header(None), db: Session = Depends(get_db)):
         token = authorization[len("Bearer "):]
         session = db.get(models.Session, token)
         if session:
+            # Logout is an intentional end to the user's active ClockBook session. Pause any
+            # running timer at one server-authoritative timestamp before revoking the login
+            # session, so tracked time cannot silently continue after the user has logged out.
+            db.info["tenant_id"] = session.tenant_id
+            _lock_timer_owner(db, session.member_id)
+            logout_at = datetime.utcnow().isoformat() + "Z"
+            running_tasks = db.query(models.TaskInstance).filter(
+                models.TaskInstance.owner_id == session.member_id,
+                models.TaskInstance.status == "running",
+            ).with_for_update().all()
+            for task in running_tasks:
+                task.segments = close_open_segment(task.segments, logout_at)
+                task.status = "paused"
             db.delete(session)
             db.commit()
     return None
