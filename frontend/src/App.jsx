@@ -7084,29 +7084,23 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
     });
   }, [rows]);
 
-  // Present export rows in clear work-date blocks so users can tell which day they are
-  // pushing to Karbon without repeatedly reading the Date cell on every line.
-  const dayBlocks = useMemo(() => {
-    const byDate = new Map();
+  const exportDateBlockIndexes = useMemo(() => {
+    const indexes = new Map();
+    let nextIndex = 0;
     for (const group of groups) {
-      const dateKey = group.workDateKey || "unknown";
-      if (!byDate.has(dateKey)) byDate.set(dateKey, []);
-      byDate.get(dateKey).push(group);
+      const key = group.workDateKey || "unknown";
+      if (!indexes.has(key)) indexes.set(key, nextIndex++);
     }
-    return Array.from(byDate.entries()).map(([dateKey, blockGroups]) => {
-      if (dateKey === "unknown") {
-        return { dateKey, weekday: "DATE NOT AVAILABLE", dateLabel: "Check these entries", groups: blockGroups };
-      }
-      const [year, month, day] = dateKey.split("-").map(Number);
-      const date = new Date(year, month - 1, day, 12, 0, 0);
-      return {
-        dateKey,
-        weekday: date.toLocaleDateString(undefined, { weekday: "long" }).toUpperCase(),
-        dateLabel: date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }).toUpperCase(),
-        groups: blockGroups,
-      };
-    });
+    return indexes;
   }, [groups]);
+
+  function exportDayLabel(dateKey) {
+    if (!dateKey || dateKey === "unknown") return "—";
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const d = new Date(year, month - 1, day, 12, 0, 0);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase();
+  }
 
   function toggleGroup(key) {
     setExpandedGroups((prev) => {
@@ -7256,39 +7250,27 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
             {rows.length === 0 && (
               <tr><td colSpan={isAdmin ? 16 : 15}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
-            {dayBlocks.map((block, blockIndex) => {
-              const blockBackground = blockIndex % 2 === 0 ? "var(--paper)" : "rgba(29, 74, 56, 0.025)";
-              return (
-                <Fragment key={block.dateKey}>
-                  <tr className="cb-export-date-divider">
-                    <td
-                      colSpan={isAdmin ? 16 : 15}
-                      style={{
-                        position: "sticky",
-                        top: 0,
-                        zIndex: 3,
-                        padding: "9px 14px",
-                        background: "var(--paper)",
-                        borderTop: blockIndex === 0 ? "none" : "1px solid var(--line)",
-                        borderBottom: "1px solid var(--line)",
-                        boxShadow: "0 1px 0 rgba(0,0,0,0.02)",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "baseline", gap: 9, letterSpacing: "0.02em" }}>
-                        <span style={{ fontSize: 12, fontWeight: 800, color: "var(--green)" }}>{block.weekday}</span>
-                        <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{block.dateLabel}</span>
-                        <span style={{ marginLeft: "auto", fontSize: 11.5, fontWeight: 600, color: "var(--ink-faint)" }}>
-                          {block.groups.reduce((sum, group) => sum + group.count, 0)} entr{block.groups.reduce((sum, group) => sum + group.count, 0) === 1 ? "y" : "ies"}
-                        </span>
-                      </div>
-                    </td>
-                  </tr>
-                  {block.groups.map((g) => {
+            {groups.map((g, groupIndex) => {
+              const dateKey = g.workDateKey || "unknown";
+              const dateBlockIndex = exportDateBlockIndexes.get(dateKey) ?? 0;
+              const previousDateKey = groupIndex > 0 ? (groups[groupIndex - 1].workDateKey || "unknown") : null;
+              const firstOfDate = groupIndex === 0 || previousDateKey !== dateKey;
+              const dayLabel = exportDayLabel(dateKey);
+              const blockBackground = dateBlockIndex % 2 === 0 ? "var(--paper)" : "rgba(29, 74, 56, 0.025)";
+              const topLevelRowStyle = {
+                background: blockBackground,
+                ...(firstOfDate ? { boxShadow: "inset 0 2px 0 var(--line-strong, var(--line))" } : {}),
+              };
               if (g.count === 1) {
                 const r = g.rows[0];
                 return (
-                  <tr key={r.id} style={{ background: blockBackground }}>
-                    <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
+                  <tr key={r.id} style={topLevelRowStyle}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                        <span style={{ minWidth: 34, padding: "2px 5px", borderRadius: 5, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontSize: 10.5, fontWeight: 800, textAlign: "center", letterSpacing: "0.04em" }}>{dayLabel}</span>
+                        <span>{formatDate(r.work_started_at || r.submitted_at)}</span>
+                      </div>
+                    </td>
                     <td>{r.client}</td>
                     <td><ExportTaskCell row={r} /></td>
                     <td>{r.role || "none"}</td>
@@ -7322,8 +7304,13 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
               const expanded = expandedGroups.has(g.key);
               return (
                 <Fragment key={g.key}>
-                  <tr className="cb-export-group-row" style={{ cursor: "pointer", background: blockBackground }} onClick={() => toggleGroup(g.key)}>
-                    <td>{g.dateLabel}</td>
+                  <tr className="cb-export-group-row" style={{ cursor: "pointer", ...topLevelRowStyle }} onClick={() => toggleGroup(g.key)}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                        <span style={{ minWidth: 34, padding: "2px 5px", borderRadius: 5, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontSize: 10.5, fontWeight: 800, textAlign: "center", letterSpacing: "0.04em" }}>{dayLabel}</span>
+                        <span>{g.dateLabel}</span>
+                      </div>
+                    </td>
                     <td>{g.client}</td>
                     <td style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <ChevronDown size={14} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
@@ -7354,7 +7341,12 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                   </tr>
                   {expanded && g.rows.map((r) => (
                     <tr key={r.id} className="cb-export-group-child" style={{ background: blockBackground }}>
-                      <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                          <span style={{ minWidth: 34, padding: "2px 5px", borderRadius: 5, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontSize: 10.5, fontWeight: 800, textAlign: "center", letterSpacing: "0.04em" }}>{dayLabel}</span>
+                          <span>{formatDate(r.work_started_at || r.submitted_at)}</span>
+                        </div>
+                      </td>
                       <td></td>
                       <td><ExportTaskCell row={r} child /></td>
                       <td>{r.role || "none"}</td>
@@ -7384,9 +7376,6 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       )}
                     </tr>
                   ))}
-                </Fragment>
-              );
-                  })}
                 </Fragment>
               );
             })}
