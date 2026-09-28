@@ -5890,7 +5890,7 @@ function KarbonReconciliationNoteModal({ row, memberName, onClose, onSave }) {
   );
 }
 
-function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false, showLoginToShutdown = false }) {
+function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false, showLoginToShutdown = false, pods = [] }) {
   const DEFAULT_TOLERANCE_MINUTES = 10;
   const localDate = (d) => {
     const y = d.getFullYear();
@@ -5909,6 +5909,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   // Team View to specific people without changing the underlying reconciliation logic.
   // Admin/Staff demo modes ignore this filter entirely and continue to use their normal scope.
   const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState(null);
+  const [selectedTeamPodId, setSelectedTeamPodId] = useState("");
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   const teamPickerRef = useRef(null);
   const [expandedMembers, setExpandedMembers] = useState(() => new Set());
@@ -5937,11 +5938,20 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   }, [staffOptions, isAdmin, forceSelfOnly, currentUser?.id, currentUser?.role, currentUser?.pod_id]);
 
   const canSelectTeamMembers = currentUser?.role === "super_admin" && isAdmin && !forceSelfOnly;
+  const sortedTeamPods = useMemo(() => [...(pods || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [pods]);
+  const podScopedTeamOptions = useMemo(() => {
+    const scoped = canSelectTeamMembers && selectedTeamPodId
+      ? teamOptions.filter((member) => member.pod_id === selectedTeamPodId)
+      : teamOptions;
+    const byId = new Map();
+    scoped.forEach((member) => byId.set(member.id, member));
+    return Array.from(byId.values());
+  }, [teamOptions, canSelectTeamMembers, selectedTeamPodId]);
   const selectedTeamOptions = useMemo(() => {
-    if (!canSelectTeamMembers || selectedTeamMemberIds === null) return teamOptions;
-    return teamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
-  }, [teamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
-  const teamSelectionKey = useMemo(() => selectedTeamOptions.map((member) => member.id).join(","), [selectedTeamOptions]);
+    if (!canSelectTeamMembers || selectedTeamMemberIds === null) return podScopedTeamOptions;
+    return podScopedTeamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
+  }, [podScopedTeamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
+  const teamSelectionKey = useMemo(() => `${selectedTeamPodId}|${selectedTeamOptions.map((member) => member.id).join(",")}`, [selectedTeamPodId, selectedTeamOptions]);
 
   useEffect(() => {
     if (!teamPickerOpen) return;
@@ -5962,6 +5972,15 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   useEffect(() => {
     if (!canSelectTeamMembers || viewMode !== "team") setTeamPickerOpen(false);
   }, [canSelectTeamMembers, viewMode]);
+
+  useEffect(() => {
+    if (!selectedTeamPodId) return;
+    if (!sortedTeamPods.some((pod) => pod.id === selectedTeamPodId)) {
+      setSelectedTeamPodId("");
+      setSelectedTeamMemberIds(null);
+      setTeamData(null);
+    }
+  }, [selectedTeamPodId, sortedTeamPods]);
 
   useEffect(() => {
     if ((!isAdmin || forceSelfOnly) && currentUser?.id) {
@@ -6144,6 +6163,23 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     <div style={styles.controlPanel}>
       <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
         {viewMode === "individual" && isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "team" && canSelectTeamMembers && sortedTeamPods.length > 0 && <div style={{ minWidth: 190 }}>
+          <div className="cb-label">Pod</div>
+          <select
+            className="cb-select"
+            value={selectedTeamPodId}
+            onChange={(e) => {
+              setSelectedTeamPodId(e.target.value);
+              setSelectedTeamMemberIds(null);
+              setTeamData(null);
+              setExpandedMembers(new Set());
+            }}
+            style={{ width: "100%", minHeight: 38 }}
+          >
+            <option value="">All pods</option>
+            {sortedTeamPods.map((pod) => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
+          </select>
+        </div>}
         {viewMode === "team" && <div style={{ minWidth: canSelectTeamMembers ? 280 : 220 }}>
           <div className="cb-label">Team</div>
           {canSelectTeamMembers ? (
@@ -6156,7 +6192,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 onClick={() => setTeamPickerOpen((open) => !open)}
                 style={{ width: "100%", display: "flex", alignItems: "center", minHeight: 38, cursor: "pointer", userSelect: "none", textAlign: "left" }}
               >
-                <span>{selectedTeamOptions.length} of {teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"} selected</span>
+                <span>{selectedTeamOptions.length} of {podScopedTeamOptions.length} team member{podScopedTeamOptions.length === 1 ? "" : "s"} selected</span>
                 <ChevronDown size={14} style={{ marginLeft: "auto", transform: teamPickerOpen ? "rotate(180deg)" : "none", transition: "transform 120ms ease" }} />
               </button>
               {teamPickerOpen && <div role="listbox" aria-multiselectable="true" style={{ position: "absolute", zIndex: 80, top: "calc(100% + 5px)", left: 0, minWidth: 300, maxHeight: 320, overflowY: "auto", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)", padding: 8 }}>
@@ -6164,12 +6200,12 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                   <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setSelectedTeamMemberIds(null); setTeamData(null); }}>Select all</button>
                   <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => { setSelectedTeamMemberIds(new Set()); setTeamData(null); }}>Clear</button>
                 </div>
-                {teamOptions.map((member) => {
+                {podScopedTeamOptions.map((member) => {
                   const checked = selectedTeamMemberIds === null || selectedTeamMemberIds.has(member.id);
                   return <label key={member.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 6px", cursor: "pointer", borderRadius: 6 }}>
                     <input type="checkbox" className="cb-checkbox" checked={checked} onChange={() => {
                       setSelectedTeamMemberIds((previous) => {
-                        const next = previous === null ? new Set(teamOptions.map((item) => item.id)) : new Set(previous);
+                        const next = previous === null ? new Set(podScopedTeamOptions.map((item) => item.id)) : new Set(previous);
                         if (next.has(member.id)) next.delete(member.id); else next.add(member.id);
                         return next;
                       });
