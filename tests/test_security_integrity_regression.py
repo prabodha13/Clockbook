@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
@@ -7,6 +8,10 @@ import database
 import main
 import models
 import schemas
+
+
+def _scope(prefix):
+    return f"{prefix}_{uuid4().hex[:10]}"
 
 
 def _tenant(session, tenant_id, slug):
@@ -89,17 +94,19 @@ def _submitted_task(session, owner, client, name, *, seconds=600, submitted_pod_
 def test_export_never_crosses_tenant_boundary():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_export_a", "phase1-export-a")
-        admin_a = _member(s, "phase1_export_a", "phase1-export-a@example.com", "super_admin")
+        tenant_a = _scope("phase1_export_a")
+        tenant_b = _scope("phase1_export_b")
+        _tenant(s, tenant_a, tenant_a)
+        admin_a = _member(s, tenant_a, "phase1-export-a@example.com", "super_admin")
         client_a = _client(s, "Tenant A Client", "P1EA")
         task_a = _submitted_task(s, admin_a, client_a, "Tenant A Task")
 
-        _tenant(s, "phase1_export_b", "phase1-export-b")
-        admin_b = _member(s, "phase1_export_b", "phase1-export-b@example.com", "super_admin")
+        _tenant(s, tenant_b, tenant_b)
+        admin_b = _member(s, tenant_b, "phase1-export-b@example.com", "super_admin")
         client_b = _client(s, "Tenant B Client", "P1EB")
         task_b = _submitted_task(s, admin_b, client_b, "Tenant B Task")
 
-        s.info["tenant_id"] = "phase1_export_a"
+        s.info["tenant_id"] = tenant_a
         admin_a = s.query(models.Member).filter(models.Member.email == "phase1-export-a@example.com").first()
         rows = main.get_export(pushed="all", current_member=admin_a, db=s)
         ids = {row["id"] for row in rows}
@@ -112,16 +119,17 @@ def test_export_never_crosses_tenant_boundary():
 def test_export_permissions_member_own_only_and_admin_pod_only():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_export_scope", "phase1-export-scope")
+        tenant_id = _scope("phase1_export_scope")
+        _tenant(s, tenant_id, tenant_id)
         pod_one = models.Pod(name="Phase 1 Pod One")
         pod_two = models.Pod(name="Phase 1 Pod Two")
         s.add_all([pod_one, pod_two])
         s.commit()
 
-        admin = _member(s, "phase1_export_scope", "phase1-pod-admin@example.com", "admin", pod_one.id)
-        own_member = _member(s, "phase1_export_scope", "phase1-own@example.com", "member", pod_one.id)
-        other_member = _member(s, "phase1_export_scope", "phase1-other@example.com", "member", pod_two.id)
-        super_admin = _member(s, "phase1_export_scope", "phase1-super@example.com", "super_admin", pod_one.id)
+        admin = _member(s, tenant_id, "phase1-pod-admin@example.com", "admin", pod_one.id)
+        own_member = _member(s, tenant_id, "phase1-own@example.com", "member", pod_one.id)
+        other_member = _member(s, tenant_id, "phase1-other@example.com", "member", pod_two.id)
+        super_admin = _member(s, tenant_id, "phase1-super@example.com", "super_admin", pod_one.id)
         client = _client(s, "Scoped Client", "P1SC")
 
         own_task = _submitted_task(s, own_member, client, "Own", submitted_pod_id=pod_one.id)
@@ -143,9 +151,10 @@ def test_export_permissions_member_own_only_and_admin_pod_only():
 def test_forgotten_time_recovery_cannot_cross_owner_or_overlap_existing_time():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_recovery", "phase1-recovery")
-        a = _member(s, "phase1_recovery", "phase1-recovery-a@example.com")
-        b = _member(s, "phase1_recovery", "phase1-recovery-b@example.com")
+        tenant_id = _scope("phase1_recovery")
+        _tenant(s, tenant_id, tenant_id)
+        a = _member(s, tenant_id, "phase1-recovery-a@example.com")
+        b = _member(s, tenant_id, "phase1-recovery-b@example.com")
         client = _client(s, "Recovery Scope", "P1RC")
 
         task_b = models.TaskInstance(
@@ -187,8 +196,9 @@ def test_forgotten_time_recovery_cannot_cross_owner_or_overlap_existing_time():
 def test_manual_adjustment_stays_explicit_in_export_reporting():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_adjustment", "phase1-adjustment")
-        member = _member(s, "phase1_adjustment", "phase1-adjustment@example.com", "super_admin")
+        tenant_id = _scope("phase1_adjustment")
+        _tenant(s, tenant_id, tenant_id)
+        member = _member(s, tenant_id, "phase1-adjustment@example.com", "super_admin")
         client = _client(s, "Adjustment Client", "P1AD")
         task = _submitted_task(s, member, client, "Adjusted task", seconds=600, adjusted_seconds=900)
 
@@ -205,12 +215,13 @@ def test_manual_adjustment_stays_explicit_in_export_reporting():
 def test_role_downgrade_revokes_existing_sessions_and_admin_cannot_grant_super_admin():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_roles", "phase1-roles")
-        super_admin = _member(s, "phase1_roles", "phase1-role-super@example.com", "super_admin")
-        admin = _member(s, "phase1_roles", "phase1-role-admin@example.com", "admin")
-        target = _member(s, "phase1_roles", "phase1-role-target@example.com", "admin")
+        tenant_id = _scope("phase1_roles")
+        _tenant(s, tenant_id, tenant_id)
+        super_admin = _member(s, tenant_id, "phase1-role-super@example.com", "super_admin")
+        admin = _member(s, tenant_id, "phase1-role-admin@example.com", "admin")
+        target = _member(s, tenant_id, "phase1-role-target@example.com", "admin")
 
-        s.add(models.Session(token="phase1-target-session", member_id=target.id, user_id=target.user_id))
+        s.add(models.Session(token=_scope("phase1-target-session"), member_id=target.id, user_id=target.user_id))
         s.commit()
         target_version = target.version
         updated = main.update_member_role(
@@ -238,8 +249,9 @@ def test_role_downgrade_revokes_existing_sessions_and_admin_cannot_grant_super_a
 def test_client_endpoint_rejects_stale_expected_version():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_stale", "phase1-stale")
-        admin = _member(s, "phase1_stale", "phase1-stale-admin@example.com", "super_admin")
+        tenant_id = _scope("phase1_stale")
+        _tenant(s, tenant_id, tenant_id)
+        admin = _member(s, tenant_id, "phase1-stale-admin@example.com", "super_admin")
         client = _client(s, "Before", "P1ST")
         stale_version = client.version
 
@@ -266,8 +278,9 @@ def test_client_endpoint_rejects_stale_expected_version():
 def test_backend_rejects_direct_privileged_calls_from_ordinary_member():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_api_auth", "phase1-api-auth")
-        staff = _member(s, "phase1_api_auth", "phase1-api-staff@example.com", "member")
+        tenant_id = _scope("phase1_api_auth")
+        _tenant(s, tenant_id, tenant_id)
+        staff = _member(s, tenant_id, "phase1-api-staff@example.com", "member")
         client = _client(s, "Protected Client", "P1PA")
 
         with pytest.raises(HTTPException) as client_edit:
@@ -289,8 +302,9 @@ def test_backend_rejects_direct_privileged_calls_from_ordinary_member():
 def test_forgotten_time_recovery_remains_separate_from_automatic_tracked_time_in_export():
     s = database.SessionLocal()
     try:
-        _tenant(s, "phase1_recovery_export", "phase1-recovery-export")
-        member = _member(s, "phase1_recovery_export", "phase1-recovery-export@example.com", "super_admin")
+        tenant_id = _scope("phase1_recovery_export")
+        _tenant(s, tenant_id, tenant_id)
+        member = _member(s, tenant_id, "phase1-recovery-export@example.com", "super_admin")
         client = _client(s, "Recovery Export", "P1RE")
         task = models.TaskInstance(
             client_id=client.id,
@@ -317,5 +331,53 @@ def test_forgotten_time_recovery_remains_separate_from_automatic_tracked_time_in
         assert row["forgotten_time_recovered_seconds"] == pytest.approx(300, abs=1)
         assert row["tracked_seconds"] == pytest.approx(0, abs=1)
         assert row["seconds"] == pytest.approx(300, abs=1)
+    finally:
+        s.close()
+
+
+
+def test_forgotten_time_recovery_only_accepts_tasks_from_current_work_date():
+    s = database.SessionLocal()
+    try:
+        tenant_id = _scope("phase1_recovery_date")
+        _tenant(s, tenant_id, tenant_id)
+        member = _member(s, tenant_id, "phase1-recovery-date@example.com")
+        client = _client(s, "Recovery Date", "P1RD")
+
+        old_task = models.TaskInstance(
+            client_id=client.id,
+            client_name=client.name,
+            name="Old task",
+            owner_id=member.id,
+            status="todo",
+            segments=[],
+            created_at=datetime.utcnow() - timedelta(days=2),
+            role="",
+            task_type="",
+        )
+        today_task = models.TaskInstance(
+            client_id=client.id,
+            client_name=client.name,
+            name="Today's task",
+            owner_id=member.id,
+            status="todo",
+            segments=[],
+            created_at=datetime.utcnow(),
+            role="",
+            task_type="",
+        )
+        s.add_all([old_task, today_task])
+        s.commit()
+
+        with pytest.raises(HTTPException) as old_date:
+            main.recover_task_time(old_task.id, schemas.TaskRecoverTime(seconds=300), current_member=member, db=s)
+        assert old_date.value.status_code == 400
+        assert "current work date" in old_date.value.detail
+
+        recovered = main.recover_task_time(today_task.id, schemas.TaskRecoverTime(seconds=300), current_member=member, db=s)
+        assert recovered.status == "paused"
+        recovery_segments = [seg for seg in (recovered.segments or []) if seg.get("source") == "forgotten_time_recovery"]
+        assert len(recovery_segments) == 1
+        assert recovery_segments[0]["recovered_seconds"] == pytest.approx(300, abs=1)
     finally:
         s.close()
