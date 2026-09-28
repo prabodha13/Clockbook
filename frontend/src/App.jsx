@@ -7009,6 +7009,9 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   const effectiveStaffFilter = forceSelfOnly && currentUser?.id ? String(currentUser.id) : staffFilter;
   const [loadError, setLoadError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
+  const exportTableRef = useRef(null);
+  const exportHeaderRef = useRef(null);
+  const [floatingExportHeader, setFloatingExportHeader] = useState({ visible: false, left: 0, width: 0, top: 0, columns: [] });
 
   // Export lists can become large, so keep the client/staff pickers searchable and
   // deterministic. The pseudo "all" option stays at the top; real names are A-Z.
@@ -7093,6 +7096,44 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
     }
     return indexes;
   }, [groups]);
+
+  // The normal page is the scroll container, while some shared table styles create
+  // intermediate overflow contexts. A fixed duplicate header is therefore more reliable
+  // than CSS sticky for Export: it follows the real table bounds and uses the measured
+  // column widths so labels always remain aligned with the rows.
+  useLayoutEffect(() => {
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const table = exportTableRef.current;
+      const header = exportHeaderRef.current;
+      if (!table || !header) return;
+      const tableRect = table.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const topbar = document.querySelector(".cb-topbar");
+      const topbarRect = topbar?.getBoundingClientRect?.();
+      const top = Math.max(0, topbarRect && topbarRect.bottom > 0 ? topbarRect.bottom : 0);
+      const visible = headerRect.top < top && tableRect.bottom > top + headerRect.height;
+      const columns = Array.from(header.querySelectorAll("th")).map((cell) => cell.getBoundingClientRect().width);
+      setFloatingExportHeader((prev) => {
+        const next = { visible, left: tableRect.left, width: tableRect.width, top, columns };
+        const sameColumns = prev.columns.length === columns.length && prev.columns.every((v, i) => Math.abs(v - columns[i]) < 0.5);
+        if (prev.visible === next.visible && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 && Math.abs(prev.top - next.top) < 0.5 && sameColumns) return prev;
+        return next;
+      });
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure);
+    };
+    measure();
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [rows, groups, isAdmin]);
 
   function exportDayLabel(dateKey) {
     if (!dateKey || dateKey === "unknown") return "—";
@@ -7242,17 +7283,34 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           overflow-x: clip !important;
           overflow-y: visible !important;
         }
-        .cb-export-sticky-head thead th {
-          position: sticky;
-          top: 0;
-          z-index: 20;
-          background: var(--paper);
-          box-shadow: inset 0 -1px 0 var(--line, var(--border)), 0 2px 6px rgba(24, 38, 30, 0.06);
-        }
       `}</style>
+      {floatingExportHeader.visible && createPortal(
+        <div aria-hidden="true" style={{
+          position: "fixed",
+          left: floatingExportHeader.left,
+          top: floatingExportHeader.top,
+          width: floatingExportHeader.width,
+          zIndex: 250,
+          pointerEvents: "none",
+          overflow: "hidden",
+          background: "var(--paper)",
+          boxShadow: "0 3px 8px rgba(24, 38, 30, 0.10)",
+          borderBottom: "1px solid var(--line)",
+        }}>
+          <table className="cb-table" style={{ width: "100%", tableLayout: "fixed", margin: 0 }}>
+            <colgroup>{floatingExportHeader.columns.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+            <thead><tr>
+              <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
+              <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
+              <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
+            </tr></thead>
+          </table>
+        </div>,
+        document.body
+      )}
       <div className="cb-table-wrap cb-export-table-wrap" style={{ overflowX: "clip", overflowY: "visible", maxWidth: "100%" }}>
-        <table className="cb-table cb-export-sticky-head" style={{ width: "100%" }}>
-          <thead>
+        <table ref={exportTableRef} className="cb-table" style={{ width: "100%" }}>
+          <thead ref={exportHeaderRef}>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
               <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
