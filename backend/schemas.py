@@ -598,6 +598,10 @@ class InactivityAuditSettingUpdate(BaseModel):
     enabled: bool
 
 
+class DelegationSuggestionExclusionsUpdate(BaseModel):
+    exclusions: List[str] = Field(default_factory=list, max_length=100)
+
+
 class AuditEventOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

@@ -3079,6 +3079,20 @@ def update_inactivity_audit_status(payload: schemas.InactivityAuditSettingUpdate
     return {"enabled": set_inactivity_audit_enabled(db, payload.enabled)}
 
 
+@app.get("/api/insights/delegation-exclusions")
+def get_delegation_suggestion_exclusions(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can manage delegation suggestion exclusions")
+    return {"exclusions": _delegation_exclusions(db), "defaults": list(DEFAULT_DELEGATION_EXCLUSIONS)}
+
+
+@app.put("/api/insights/delegation-exclusions")
+def update_delegation_suggestion_exclusions(payload: schemas.DelegationSuggestionExclusionsUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only a super admin can manage delegation suggestion exclusions")
+    return {"exclusions": _set_delegation_exclusions(db, payload.exclusions), "defaults": list(DEFAULT_DELEGATION_EXCLUSIONS)}
+
+
 @app.get("/api/inactivity-events", response_model=list[schemas.InactivityEventDetail])
 def get_inactivity_events(date_from: str = None, date_to: str = None, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
@@ -3623,11 +3637,24 @@ def get_insights(
                 (task.task_type or "").strip().lower(),
             ])
 
+        delegation_exclusions = {value.casefold() for value in _delegation_exclusions(db)}
+        support_is_excluded = bool({"support given", "support received"} & delegation_exclusions)
+
         def eligible_for_delegation(task):
-            # Delegation insight is intended for repeatable staff work. Requiring a template
-            # excludes ad hoc/internal items, while the meeting/support checks exclude those
-            # categories even if someone later creates a template for them.
-            return bool((task.source_template_name or "").strip()) and not _insights_is_support(task) and not _insights_is_meeting(task)
+            # Delegation insight is intended for repeatable staff work. Meetings remain
+            # inherently non-delegation suggestions; all other category/task exclusions are
+            # tenant-configurable by Super Admin in Settings.
+            if not bool((task.source_template_name or "").strip()) or _insights_is_meeting(task):
+                return False
+            if support_is_excluded and _insights_is_support(task):
+                return False
+            task_labels = {
+                (task.task_type or "").strip().casefold(),
+                (task.name or "").strip().casefold(),
+                (task.source_template_name or "").strip().casefold(),
+            }
+            task_labels.discard("")
+            return not bool(task_labels & delegation_exclusions)
 
         evidence = {}
         for task in staff_tasks:
@@ -5689,6 +5716,55 @@ def _set_setting_value(db: Session, key: str, value: str):
         db.add(models.TenantSetting(key=key, value=value))
     else:
         setting.value = value
+
+
+DEFAULT_DELEGATION_EXCLUSIONS = [
+    "Admin",
+    "Support given",
+    "Support received",
+    BUILTIN_LEARNING_TASK_TYPE,
+]
+
+
+def _delegation_exclusions(db: Session):
+    raw = _setting_value(db, "delegation_suggestion_exclusions").strip()
+    if not raw:
+        return list(DEFAULT_DELEGATION_EXCLUSIONS)
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return list(DEFAULT_DELEGATION_EXCLUSIONS)
+    if not isinstance(values, list):
+        return list(DEFAULT_DELEGATION_EXCLUSIONS)
+    cleaned = []
+    seen = set()
+    for value in values:
+        label = str(value or "").strip()
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(label[:120])
+    return cleaned
+
+
+def _set_delegation_exclusions(db: Session, values):
+    cleaned = []
+    seen = set()
+    for value in values or []:
+        label = str(value or "").strip()
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(label[:120])
+    _set_setting_value(db, "delegation_suggestion_exclusions", json.dumps(cleaned))
+    db.commit()
+    return cleaned
 
 
 def _integration_revision(db: Session, integration: str) -> int:
