@@ -144,6 +144,8 @@ export const api = {
     if (capacityPodId) q.set("capacity_pod_id", capacityPodId);
     return request(`/insights${q.toString() ? `?${q.toString()}` : ""}`);
   },
+  getDelegationSuggestionExclusions: () => request("/insights/delegation-exclusions"),
+  setDelegationSuggestionExclusions: (exclusions) => request("/insights/delegation-exclusions", { method: "PUT", body: JSON.stringify({ exclusions }) }),
   getLearningCategories: (includeArchived = false) => request(`/learning/categories${includeArchived ? "?include_archived=true" : ""}`),
   createLearningCategory: (name) => request("/learning/categories", { method: "POST", body: JSON.stringify({ name }) }),
   updateLearningCategory: (id, changes, expectedVersion) => request(`/learning/categories/${id}`, { method: "PATCH", body: JSON.stringify({ ...changes, expected_version: expectedVersion }) }),

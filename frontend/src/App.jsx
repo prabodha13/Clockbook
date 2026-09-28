@@ -3495,6 +3495,11 @@ function SettingsView({
   const [testingCalamari, setTestingCalamari] = useState(false);
   const [calamariMessage, setCalamariMessage] = useState("");
   const [permissionSearch, setPermissionSearch] = useState("");
+  const [delegationExclusions, setDelegationExclusions] = useState([]);
+  const [delegationDefaults, setDelegationDefaults] = useState([]);
+  const [delegationExclusionsLoaded, setDelegationExclusionsLoaded] = useState(false);
+  const [savingDelegationExclusions, setSavingDelegationExclusions] = useState(false);
+  const [delegationMessage, setDelegationMessage] = useState("");
   const [platformSettingsReady, setPlatformSettingsReady] = useState(false);
 
   useEffect(() => {
@@ -3520,6 +3525,28 @@ function SettingsView({
       .catch((err) => { if (alive) setCalamariMessage(err.message); });
     return () => { alive = false; };
   }, [realIsSuperAdmin]);
+
+  useEffect(() => {
+    if (!realIsSuperAdmin) {
+      setDelegationExclusionsLoaded(false);
+      return;
+    }
+    let alive = true;
+    setDelegationExclusionsLoaded(false);
+    api.getDelegationSuggestionExclusions()
+      .then((result) => {
+        if (!alive) return;
+        setDelegationExclusions(Array.isArray(result?.exclusions) ? result.exclusions : []);
+        setDelegationDefaults(Array.isArray(result?.defaults) ? result.defaults : []);
+        setDelegationExclusionsLoaded(true);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setDelegationMessage(err.message || "Could not load delegation exclusions");
+        setDelegationExclusionsLoaded(true);
+      });
+    return () => { alive = false; };
+  }, [realIsSuperAdmin, activeWorkspaceId]);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -3647,6 +3674,22 @@ function SettingsView({
       setError(err.message);
     } finally {
       setSavingInactivityAudit(false);
+    }
+  }
+
+  async function saveDelegationExclusions() {
+    if (!realIsSuperAdmin || savingDelegationExclusions) return;
+    setSavingDelegationExclusions(true);
+    setDelegationMessage("");
+    try {
+      const result = await api.setDelegationSuggestionExclusions(delegationExclusions);
+      setDelegationExclusions(Array.isArray(result?.exclusions) ? result.exclusions : []);
+      setDelegationDefaults(Array.isArray(result?.defaults) ? result.defaults : delegationDefaults);
+      setDelegationMessage("Delegation exclusions saved.");
+    } catch (err) {
+      setDelegationMessage(err.message || "Could not save delegation exclusions");
+    } finally {
+      setSavingDelegationExclusions(false);
     }
   }
 
@@ -3929,6 +3972,65 @@ function SettingsView({
           </div>
         );
       })()}
+
+      {realIsSuperAdmin && viewMode === "super_admin" && (
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
+            <div>
+              <div className="cb-tmpl-field">Insights</div>
+              <div className="cb-tmpl-name">Delegation suggestion exclusions</div>
+            </div>
+          </div>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 10, maxWidth: 760 }}>
+              Choose work that Insights must never suggest for delegation. This only filters the delegation suggestions; it does not change tracked time, billable status, capacity, or reporting.
+            </div>
+            {!delegationExclusionsLoaded ? (
+              <SettingsLoadingBlock rows={3} minHeight={90} />
+            ) : (() => {
+              const fixedOptions = ["Admin", "Support given", "Support received", BUILTIN_LEARNING_TASK_TYPE];
+              const options = [...fixedOptions, ...taskTypes.map((t) => (t.name || "").trim()).filter(Boolean)]
+                .filter((label, index, rows) => rows.findIndex((item) => item.toLowerCase() === label.toLowerCase()) === index);
+              const selectedKeys = new Set(delegationExclusions.map((value) => String(value || "").toLowerCase()));
+              const toggle = (label) => {
+                const key = label.toLowerCase();
+                setDelegationMessage("");
+                setDelegationExclusions((prev) => {
+                  const exists = prev.some((value) => String(value || "").toLowerCase() === key);
+                  return exists ? prev.filter((value) => String(value || "").toLowerCase() !== key) : [...prev, label];
+                });
+              };
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8, maxWidth: 900 }}>
+                    {options.map((label) => (
+                      <label key={label.toLowerCase()} style={{ display: "flex", alignItems: "center", gap: 9, border: "1px solid var(--border)", borderRadius: 8, padding: "9px 10px", background: "var(--surface)", cursor: "pointer", minWidth: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(label.toLowerCase())}
+                          onChange={() => toggle(label)}
+                          style={{ width: 16, height: 16, flexShrink: 0 }}
+                        />
+                        <span style={{ fontSize: 13.5, minWidth: 0 }}>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                    <button type="button" className="cb-btn cb-btn-sm cb-btn-primary" onClick={saveDelegationExclusions} disabled={savingDelegationExclusions}>
+                      {savingDelegationExclusions ? "Saving..." : "Save exclusions"}
+                    </button>
+                    <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setDelegationExclusions(delegationDefaults); setDelegationMessage(""); }} disabled={savingDelegationExclusions}>
+                      Restore defaults
+                    </button>
+                    {delegationMessage && <span className="cb-hint">{delegationMessage}</span>}
+                  </div>
+                  <div className="cb-hint" style={{ marginTop: 8 }}>Meetings remain excluded automatically because they are not treated as repeatable delegation work.</div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {effectiveIsAdmin && (
       <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
