@@ -3566,18 +3566,38 @@ def get_insights(
         for label, seconds in sorted(top_client_map.items(), key=lambda item: item[1], reverse=True)[:6]
     ]
 
-    # Tracked-time trend. Use weekly buckets for shorter ranges and monthly buckets for longer views.
+    # Tracked-time trend. Short ranges need day-by-day detail; medium ranges use
+    # calendar weeks and long ranges use months. Pre-seed every bucket so days/weeks
+    # with no submitted time remain visible instead of disappearing from the trend.
+    trend_days = actual_days if has_actual_days else 0
+    trend_granularity = "daily" if trend_days <= 14 else ("weekly" if trend_days <= 120 else "monthly")
     trend_map = {}
-    use_months = days > 120
+
+    if has_actual_days:
+        cursor = start_date
+        while cursor <= actual_end_date:
+            if trend_granularity == "daily":
+                bucket = cursor
+            elif trend_granularity == "weekly":
+                bucket = cursor - timedelta(days=cursor.weekday())
+            else:
+                bucket = cursor.replace(day=1)
+            key = bucket.isoformat()
+            trend_map.setdefault(key, {"seconds": 0.0, "billable_seconds": 0.0})
+            cursor += timedelta(days=1)
+
     for task in current_tasks:
         dt = _insights_task_work_date(task)
         if not dt:
             continue
         d = dt.date()
-        if use_months:
-            key = d.replace(day=1).isoformat()
+        if trend_granularity == "daily":
+            bucket = d
+        elif trend_granularity == "weekly":
+            bucket = d - timedelta(days=d.weekday())
         else:
-            key = (d - timedelta(days=d.weekday())).isoformat()
+            bucket = d.replace(day=1)
+        key = bucket.isoformat()
         row = trend_map.setdefault(key, {"seconds": 0.0, "billable_seconds": 0.0})
         seconds = _insights_task_seconds(task)
         row["seconds"] += seconds
