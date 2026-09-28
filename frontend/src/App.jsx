@@ -7065,7 +7065,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
       const label = (values) => (values.length === 1 ? (values[0] || "none") : "Multiple");
       return {
         key,
-        workDateKey: workDate,
+        workDateKey: localWorkDateKey(groupRows[0].work_started_at || groupRows[0].submitted_at),
         client: groupRows[0].client,
         role: groupRows[0].role,
         task_type: groupRows[0].task_type,
