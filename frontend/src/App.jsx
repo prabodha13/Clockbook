@@ -154,66 +154,170 @@ function spellOverlayParts(text, issues) {
 
 function LocalSpellcheckAssist() {
   const [active, setActive] = useState(null);
+  const [selectedIssue, setSelectedIssue] = useState(null);
   const [ignoredWords, setIgnoredWords] = useState(() => new Set());
   const [revision, setRevision] = useState(0);
+
+  const snapshotElement = useCallback((target) => {
+    if (!isSpellcheckElement(target) || !document.body.contains(target)) return null;
+    const text = target.value || "";
+    const issues = spellTokens(text, ignoredWords);
+    const rect = target.getBoundingClientRect();
+    const style = window.getComputedStyle(target);
+    return {
+      element: target,
+      text,
+      issues,
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom },
+      scrollTop: target.scrollTop || 0,
+      scrollLeft: target.scrollLeft || 0,
+      style: {
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        lineHeight: style.lineHeight === "normal" ? `${Math.round(parseFloat(style.fontSize || "16") * 1.2)}px` : style.lineHeight,
+        letterSpacing: style.letterSpacing,
+        textAlign: style.textAlign,
+        paddingTop: style.paddingTop,
+        paddingRight: style.paddingRight,
+        paddingBottom: style.paddingBottom,
+        paddingLeft: style.paddingLeft,
+        whiteSpace: target instanceof HTMLTextAreaElement ? "pre-wrap" : "pre",
+      },
+    };
+  }, [ignoredWords]);
+
+  const issueAtSelection = useCallback((snapshot, target) => {
+    if (!snapshot?.issues?.length) return null;
+    const start = Number.isFinite(target.selectionStart) ? target.selectionStart : 0;
+    const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+    return snapshot.issues.find((issue) => (
+      (end > start && issue.start < end && issue.end > start)
+      || (start >= issue.start && start <= issue.end)
+    )) || null;
+  }, []);
+
+  const openIssue = useCallback((target, event) => {
+    const snapshot = snapshotElement(target);
+    if (!snapshot) {
+      setSelectedIssue(null);
+      return;
+    }
+    setActive(snapshot);
+    const issue = issueAtSelection(snapshot, target);
+    if (!issue) {
+      setSelectedIssue(null);
+      return;
+    }
+    setSelectedIssue({
+      ...issue,
+      suggestions: spellSuggestions(issue.raw),
+      anchor: { x: event.clientX, y: event.clientY },
+      element: target,
+    });
+  }, [issueAtSelection, snapshotElement]);
 
   useEffect(() => {
     let frame = 0;
     const refresh = (target = document.activeElement) => {
       if (!isSpellcheckElement(target)) {
         setActive(null);
+        setSelectedIssue(null);
         return;
       }
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
-        const text = target.value || "";
-        const issues = spellTokens(text, ignoredWords);
-        const rect = target.getBoundingClientRect();
-        const style = window.getComputedStyle(target);
-        setActive({
-          element: target,
-          text,
-          issues,
-          rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom },
-          scrollTop: target.scrollTop || 0,
-          scrollLeft: target.scrollLeft || 0,
-          style: {
-            fontFamily: style.fontFamily,
-            fontSize: style.fontSize,
-            fontWeight: style.fontWeight,
-            fontStyle: style.fontStyle,
-            lineHeight: style.lineHeight === "normal" ? `${Math.round(parseFloat(style.fontSize || "16") * 1.2)}px` : style.lineHeight,
-            letterSpacing: style.letterSpacing,
-            textAlign: style.textAlign,
-            paddingTop: style.paddingTop,
-            paddingRight: style.paddingRight,
-            paddingBottom: style.paddingBottom,
-            paddingLeft: style.paddingLeft,
-            whiteSpace: target instanceof HTMLTextAreaElement ? "pre-wrap" : "pre",
-          },
-        });
+        const snapshot = snapshotElement(target);
+        setActive(snapshot);
+        if (!snapshot) setSelectedIssue(null);
       });
     };
-    const onFocus = (event) => refresh(event.target);
-    const onInput = (event) => { if (isSpellcheckElement(event.target)) refresh(event.target); };
-    const onScroll = (event) => { if (event.target === document || event.target === window || isSpellcheckElement(document.activeElement)) refresh(document.activeElement); };
-    const onResize = () => refresh(document.activeElement);
+    const onFocus = (event) => {
+      setSelectedIssue(null);
+      refresh(event.target);
+    };
+    const onInput = (event) => {
+      if (!isSpellcheckElement(event.target)) return;
+      setSelectedIssue(null);
+      refresh(event.target);
+    };
+    const onScroll = (event) => {
+      if (event.target === document || event.target === window || isSpellcheckElement(document.activeElement)) {
+        setSelectedIssue(null);
+        refresh(document.activeElement);
+      }
+    };
+    const onResize = () => {
+      setSelectedIssue(null);
+      refresh(document.activeElement);
+    };
+    const onDoubleClick = (event) => {
+      if (isSpellcheckElement(event.target)) openIssue(event.target, event);
+    };
+    const onPointerUp = (event) => {
+      if ((event.pointerType === "touch" || event.pointerType === "pen") && isSpellcheckElement(event.target)) {
+        openIssue(event.target, event);
+      }
+    };
+    const onPointerDown = (event) => {
+      if (event.target.closest?.('[data-clockbook-spell-popover="true"]')) return;
+      if (selectedIssue && event.target !== selectedIssue.element) setSelectedIssue(null);
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) setSelectedIssue(null);
+    };
+    const onWindowBlur = () => setSelectedIssue(null);
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setSelectedIssue(null);
+    };
+
     document.addEventListener("focusin", onFocus, true);
     document.addEventListener("input", onInput, true);
     document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("dblclick", onDoubleClick, true);
+    document.addEventListener("pointerup", onPointerUp, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("keydown", onKeyDown, true);
     window.addEventListener("resize", onResize);
+    window.addEventListener("blur", onWindowBlur);
     return () => {
       cancelAnimationFrame(frame);
       document.removeEventListener("focusin", onFocus, true);
       document.removeEventListener("input", onInput, true);
       document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("dblclick", onDoubleClick, true);
+      document.removeEventListener("pointerup", onPointerUp, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("blur", onWindowBlur);
     };
-  }, [ignoredWords, revision]);
+  }, [openIssue, revision, selectedIssue, snapshotElement]);
+
+  useEffect(() => {
+    const el = active?.element;
+    if (!el) return undefined;
+    const observer = new MutationObserver(() => {
+      const rect = el.getBoundingClientRect();
+      const hidden = !document.body.contains(el) || rect.width === 0 || rect.height === 0 || el.getClientRects().length === 0;
+      if (hidden) {
+        setActive(null);
+        setSelectedIssue(null);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    return () => observer.disconnect();
+  }, [active?.element]);
 
   const replaceIssue = useCallback((issue, replacement) => {
-    const el = active?.element;
-    if (!el || !document.body.contains(el)) return;
+    const el = issue?.element || active?.element;
+    if (!el || !document.body.contains(el)) {
+      setSelectedIssue(null);
+      return;
+    }
     const current = el.value || "";
     const next = current.slice(0, issue.start) + replacement + current.slice(issue.end);
     const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -223,24 +327,20 @@ function LocalSpellcheckAssist() {
     el.focus();
     const caret = issue.start + replacement.length;
     try { el.setSelectionRange(caret, caret); } catch (_) {}
+    setSelectedIssue(null);
     setRevision((n) => n + 1);
   }, [active]);
 
   if (!active || !active.issues.length) return null;
 
-  const unique = [];
-  const seen = new Set();
-  for (const issue of active.issues) {
-    if (!seen.has(issue.normalized)) {
-      seen.add(issue.normalized);
-      unique.push({ ...issue, suggestions: spellSuggestions(issue.raw) });
-      if (unique.length >= 4) break;
-    }
-  }
   const overlayParts = spellOverlayParts(active.text, active.issues);
-  const panelTop = Math.min(window.innerHeight - 16, active.rect.bottom + 6);
-  const panelWidth = Math.min(Math.max(active.rect.width, 280), 460);
-  const panelLeft = Math.max(8, Math.min(active.rect.left, window.innerWidth - panelWidth - 8));
+  const panelWidth = 340;
+  const anchorX = selectedIssue?.anchor?.x ?? active.rect.left;
+  const anchorY = selectedIssue?.anchor?.y ?? active.rect.bottom;
+  const panelLeft = Math.max(8, Math.min(anchorX - 24, window.innerWidth - panelWidth - 8));
+  const panelTop = anchorY > window.innerHeight - 150
+    ? Math.max(8, anchorY - 112)
+    : Math.min(window.innerHeight - 120, anchorY + 14);
 
   return createPortal(
     <>
@@ -265,49 +365,58 @@ function LocalSpellcheckAssist() {
           ))}
         </div>
       </div>
-      <div
-        role="status"
-        aria-live="polite"
-        style={{
-          position: "fixed", zIndex: 9999, top: panelTop, left: panelLeft, width: panelWidth,
-          background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", border: "1px solid var(--line, #d8ded9)",
-          borderRadius: 9, boxShadow: "0 8px 24px rgba(0,0,0,.14)", padding: "9px 10px", fontSize: 12,
-        }}
-      >
-        <div style={{ fontWeight: 700, marginBottom: 6 }}>Spelling suggestion</div>
-        {unique.map((issue) => (
-          <div key={`${issue.normalized}-${issue.start}`} style={{ display: "flex", alignItems: "center", gap: 7, flexWrap: "wrap", marginTop: 5 }}>
-            <span style={{ textDecorationLine: "underline", textDecorationStyle: "wavy", textDecorationColor: "#c62828", textUnderlineOffset: 2 }}>{issue.raw}</span>
-            <span style={{ color: "var(--ink-muted, #69736d)" }}>→</span>
-            {issue.suggestions.length ? issue.suggestions.map((suggestion) => (
+      {selectedIssue && (
+        <div
+          data-clockbook-spell-popover="true"
+          role="dialog"
+          aria-label="Spelling suggestions"
+          style={{
+            position: "fixed", zIndex: 9999, top: panelTop, left: panelLeft, width: panelWidth,
+            background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", border: "1px solid var(--line, #d8ded9)",
+            borderRadius: 10, boxShadow: "0 10px 28px rgba(0,0,0,.15)", padding: "11px 12px", fontSize: 13,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Spelling suggestions</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {selectedIssue.suggestions.length ? selectedIssue.suggestions.map((suggestion) => (
               <button
                 key={suggestion}
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => replaceIssue(issue, suggestion)}
-                style={{ border: "1px solid var(--line, #d8ded9)", borderRadius: 6, background: "var(--paper, #fff)", color: "inherit", padding: "3px 7px", cursor: "pointer", font: "inherit" }}
+                onClick={() => replaceIssue(selectedIssue, suggestion)}
+                style={{
+                  border: "1px solid var(--line, #d8ded9)", borderRadius: 7,
+                  background: "var(--paper, #fff)", color: "inherit", padding: "6px 10px",
+                  cursor: "pointer", font: "inherit", fontWeight: 600,
+                }}
               >
                 {suggestion}
               </button>
-            )) : <span style={{ color: "var(--ink-muted, #69736d)" }}>No close suggestion</span>}
+            )) : (
+              <span style={{ color: "var(--ink-muted, #69736d)" }}>No close suggestion found.</span>
+            )}
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
                 setIgnoredWords((prev) => {
                   const next = new Set(prev);
-                  next.add(issue.normalized);
+                  next.add(selectedIssue.normalized);
                   return next;
                 });
+                setSelectedIssue(null);
               }}
-              style={{ border: 0, background: "transparent", color: "var(--ink-muted, #69736d)", padding: "3px 4px", cursor: "pointer", font: "inherit", textDecoration: "underline" }}
+              style={{
+                marginLeft: "auto", border: "1px solid transparent", borderRadius: 7,
+                background: "transparent", color: "var(--ink-muted, #69736d)",
+                padding: "6px 8px", cursor: "pointer", font: "inherit",
+              }}
             >
               Ignore
             </button>
           </div>
-        ))}
-        {active.issues.length > unique.length && <div style={{ marginTop: 6, color: "var(--ink-muted, #69736d)" }}>+{active.issues.length - unique.length} more possible spelling issue{active.issues.length - unique.length === 1 ? "" : "s"}</div>}
-      </div>
+        </div>
+      )}
     </>,
     document.body,
   );
