@@ -536,12 +536,12 @@ function InvitationAcceptScreen({ token, onAccepted }) {
             <form onSubmit={submit}>
               <div className="cb-field" style={{ textAlign: "left" }}>
                 <label className="cb-label">Email</label>
-                <input className="cb-input" value={invite.email} disabled />
+                <input spellCheck={true} lang="en" className="cb-input" value={invite.email} disabled />
               </div>
               {!invite.existing_user && (
                 <div className="cb-field" style={{ textAlign: "left" }}>
                   <label className="cb-label">Your name</label>
-                  <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+                  <input spellCheck={true} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
                 </div>
               )}
               <div className="cb-field" style={{ textAlign: "left" }}>
@@ -612,7 +612,7 @@ function ClaimScreen({ unclaimed, onClaim }) {
           ) : (
             <div className="cb-field" style={{ textAlign: "left" }}>
               <label className="cb-label">Your name</label>
-              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required />
+              <input spellCheck={true} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required />
             </div>
           )}
           <div className="cb-field" style={{ textAlign: "left" }}>
@@ -1519,7 +1519,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       <div data-tour="task-search" style={{ margin: "2px 0 18px", maxWidth: 460 }}>
         <div style={{ position: "relative" }}>
           <Search size={16} aria-hidden="true" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-          <input
+          <input spellCheck={true} lang="en"
             className="cb-input"
             type="search"
             aria-label="Search client or task"
@@ -1775,7 +1775,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
 
   return (
     <div ref={containerRef} className="cb-searchable-wrap">
-      <input
+      <input spellCheck={true} lang="en"
         className="cb-input"
         placeholder={placeholder}
         value={open ? query : (selected ? getLabel(selected) : "")}
@@ -1992,8 +1992,8 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                 />
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 160px", gap: 8 }}>
-                  <input className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
-                  <input className="cb-input" placeholder="Client code" value={newClientCode} onChange={(e) => setNewClientCode(e.target.value)} required />
+                  <input spellCheck={true} lang="en" className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                  <input spellCheck={true} lang="en" className="cb-input" placeholder="Client code" value={newClientCode} onChange={(e) => setNewClientCode(e.target.value)} required />
                 </div>
               )}
             </div>
@@ -2021,7 +2021,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                         <div className="cb-hint" style={{ padding: 10 }}>This template has no tasks yet.</div>
                       )}
                       {selectedTemplate.tasks.length > 5 && (
-                        <input
+                        <input spellCheck={true} lang="en"
                           className="cb-input" placeholder="Search tasks in this template..."
                           value={taskSearchQuery} onChange={(e) => setTaskSearchQuery(e.target.value)}
                           style={{ margin: 8, width: "calc(100% - 16px)" }}
@@ -2158,7 +2158,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                   )}
                 </>
               ) : (
-                <input className="cb-input" placeholder={taskNamePlaceholder(null, taskType)} value={customName} onChange={(e) => setCustomName(e.target.value)} />
+                <input spellCheck={true} lang="en" className="cb-input" placeholder={taskNamePlaceholder(null, taskType)} value={customName} onChange={(e) => setCustomName(e.target.value)} />
               )}
             </div>
 
@@ -2288,7 +2288,7 @@ function LearningReferenceEditor({ label, items, onChange }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {items.map((item, index) => (
           <div key={index} style={{ display: "grid", gridTemplateColumns: "minmax(0, .8fr) minmax(0, 1.45fr) 34px", gap: 7, alignItems: "center", minWidth: 0 }}>
-            <input className="cb-input" style={{ minWidth: 0 }} placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
+            <input spellCheck={true} lang="en" className="cb-input" style={{ minWidth: 0 }} placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
             <input className="cb-input" style={{ minWidth: 0 }} type="url" placeholder="https://..." value={item.url} onChange={(e) => update(index, { url: e.target.value })} />
             <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove reference" aria-label={`Remove ${label} reference ${index + 1}`} onClick={() => remove(index)}><Trash2 size={13} /></button>
           </div>
@@ -2491,12 +2491,12 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
                 </div>
                 <div className="cb-field" style={{ marginBottom: 10 }}>
                   <label className="cb-label">Topic *</label>
-                  <input className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
+                  <input spellCheck={true} lang="en" className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
                 </div>
               </div>
               <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
-                <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
+                <textarea spellCheck={true} lang="en" className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
                 <div style={{ marginTop: 5, fontSize: 12, color: learningNoteTooShort && whatILearned.trim() ? "var(--danger)" : "var(--ink-faint)" }}>
                   Minimum {MIN_LEARNING_NOTE_WORDS} words{whatILearned.trim() ? ` · ${learningNoteWordCount} entered` : ""}
                 </div>
@@ -2509,7 +2509,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
           )}
           <div className="cb-field">
             <label className="cb-label"><StickyNote size={12} style={{ verticalAlign: -1, marginRight: 4 }} />Note (optional)</label>
-            <textarea className="cb-textarea" rows={2} placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
+            <textarea spellCheck={true} lang="en" className="cb-textarea" rows={2} placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
         <div className="cb-modal-foot">
@@ -2594,7 +2594,7 @@ function InviteMemberModal({ onClose, onInvite, currentUser }) {
             <div className="cb-modal-body">
               <div className="cb-field">
                 <label className="cb-label">Name</label>
-                <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
+                <input spellCheck={true} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
               </div>
               <div className="cb-field">
                 <label className="cb-label">Email</label>
@@ -2626,7 +2626,7 @@ function InviteMemberModal({ onClose, onInvite, currentUser }) {
               </div>
               <div className="cb-field">
                 <label className="cb-label">Invitation link</label>
-                <input className="cb-input" value={inviteUrl(created.token)} readOnly onFocus={(e) => e.target.select()} />
+                <input spellCheck={true} lang="en" className="cb-input" value={inviteUrl(created.token)} readOnly onFocus={(e) => e.target.select()} />
               </div>
               <div className="cb-hint">You can also copy this link manually. ClockBook stores only a hash of the invitation token, so this exact link is shown only now unless you resend the invitation later.</div>
             </div>
@@ -2677,7 +2677,7 @@ function ManualAddMemberModal({ onClose, onAdd }) {
           <div className="cb-modal-body">
             <div className="cb-field">
               <label className="cb-label">Name</label>
-              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+              <input spellCheck={true} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
             </div>
             <div className="cb-field">
               <label className="cb-label">Email</label>
@@ -2819,7 +2819,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   return (
     <div className="cb-tmpl-task-block">
       <div className="cb-tmpl-task-row">
-        <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} />
+        <input spellCheck={true} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} />
         <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="">No role</option>
           {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
@@ -2946,8 +2946,8 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     <div className="cb-tmpl-card">
       {isEditingHeader ? (
         <div className="cb-tmpl-head" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
-          <input className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
+          <input spellCheck={true} lang="en" className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
+          <input spellCheck={true} lang="en" className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
           <select className="cb-select" style={{ width: 210 }} value={editedCategory} onChange={(e) => setEditedCategory(e.target.value)}>
             <option value="">No main category (use task type)</option>
             {TEMPLATE_CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -3014,7 +3014,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
           {isAdmin && addingTask && (
             <form className="cb-tmpl-task-block" onSubmit={addTask}>
               <div className="cb-tmpl-task-row">
-                <input className="cb-input" placeholder={taskNamePlaceholder(template, tType)} value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
+                <input spellCheck={true} lang="en" className="cb-input" placeholder={taskNamePlaceholder(template, tType)} value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
                 <select className="cb-select" value={tRole} onChange={(e) => setTRole(e.target.value)}>
                   <option value="">No role</option>
                   {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
@@ -3278,11 +3278,11 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
             <form onSubmit={createWorkspace} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.2fr) minmax(180px,1fr) auto", gap: 10, alignItems: "end", maxWidth: 820 }}>
               <div>
                 <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace name</label>
-                <input className="cb-input" value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. Test Company Ltd" />
+                <input spellCheck={true} lang="en" className="cb-input" value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. Test Company Ltd" />
               </div>
               <div>
                 <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Slug <span className="cb-hint">(optional)</span></label>
-                <input className="cb-input" value={newWorkspaceSlug} onChange={(e) => setNewWorkspaceSlug(e.target.value)} placeholder="test-company" />
+                <input spellCheck={true} lang="en" className="cb-input" value={newWorkspaceSlug} onChange={(e) => setNewWorkspaceSlug(e.target.value)} placeholder="test-company" />
               </div>
               <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={creatingWorkspace || !newWorkspaceName.trim()}>
                 {creatingWorkspace ? "Creating..." : "Create workspace"}
@@ -3407,7 +3407,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
       {mode === "library" && <>
         <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 14, marginBottom: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1.5fr) minmax(190px,.8fr)", gap: 10, alignItems: "end" }}>
-            <div><div className="cb-label">Keyword search</div><div style={{ position: "relative" }}><Search size={15} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-faint)" }} /><input className="cb-input" style={{ paddingLeft: 34 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Search topic or what was learned..." /></div></div>
+            <div><div className="cb-label">Keyword search</div><div style={{ position: "relative" }}><Search size={15} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-faint)" }} /><input spellCheck={true} lang="en" className="cb-input" style={{ paddingLeft: 34 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Search topic or what was learned..." /></div></div>
             <div><div className="cb-label">Major Category</div><select className="cb-select" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
           </div>
           <div style={{ marginTop: 12 }}>
@@ -3440,7 +3440,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
             <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
             <div><div className="cb-label">Person</div><SearchableSelect options={managerMembers} value={personId} onChange={setPersonId} placeholder="All people" getLabel={(m) => m.name} /></div>
             <div><div className="cb-label">Category</div><select className="cb-select" value={reportCategory} onChange={(e) => setReportCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
-            <div><div className="cb-label">Keyword</div><input className="cb-input" value={reportKeyword} onChange={(e) => setReportKeyword(e.target.value)} placeholder="Topic or learning..." /></div>
+            <div><div className="cb-label">Keyword</div><input spellCheck={true} lang="en" className="cb-input" value={reportKeyword} onChange={(e) => setReportKeyword(e.target.value)} placeholder="Topic or learning..." /></div>
           </div>
         </div>
         {reportError ? <div className="cb-empty">{reportError}</div> : reportBusy ? <TableSkeleton rows={5} /> : <>
@@ -3885,7 +3885,7 @@ function SettingsView({
 
                 <div style={{ position: "relative", maxWidth: 460, marginBottom: 10 }}>
                   <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-                  <input
+                  <input spellCheck={true} lang="en"
                     className="cb-input"
                     value={permissionSearch}
                     onChange={(e) => setPermissionSearch(e.target.value)}
@@ -4051,7 +4051,7 @@ function SettingsView({
             ))}
             {roles.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No roles added yet.</div>}
             <form onSubmit={submitRole} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input className="cb-input" placeholder="e.g. Manager" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
+              <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. Manager" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
           </div>
@@ -4085,7 +4085,7 @@ function SettingsView({
             })}
             {taskTypes.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No task types added yet.</div>}
             <form onSubmit={submitTaskType} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 8, marginTop: 8, alignItems: "center" }}>
-              <input className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
+              <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
               <button
                 type="button"
                 className="cb-btn cb-btn-sm"
@@ -4108,7 +4108,7 @@ function SettingsView({
             ))}
             {trackedMetrics.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>Nothing added yet.</div>}
             <form onSubmit={submitMetric} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input className="cb-input" placeholder="e.g. Unreconciled transactions" value={newMetric} onChange={(e) => setNewMetric(e.target.value)} />
+              <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. Unreconciled transactions" value={newMetric} onChange={(e) => setNewMetric(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
           </div>
@@ -4130,7 +4130,7 @@ function SettingsView({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: "0 16px" }}>
               {managedLearningCategories.map((c) => <div key={c.id} className="cb-client-account-row" style={{ opacity: c.is_active ? 1 : 0.65, gap: 8 }}>
                 {editingLearningCategoryId === c.id ? <>
-                  <input className="cb-input" value={editingLearningCategoryName} onChange={(e) => setEditingLearningCategoryName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveLearningCategory(c); } if (e.key === "Escape") { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); } }} autoFocus />
+                  <input spellCheck={true} lang="en" className="cb-input" value={editingLearningCategoryName} onChange={(e) => setEditingLearningCategoryName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveLearningCategory(c); } if (e.key === "Escape") { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); } }} autoFocus />
                   <button type="button" className="cb-btn cb-btn-sm cb-btn-primary" onClick={() => saveLearningCategory(c)}>Save</button>
                   <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); }}>Cancel</button>
                 </> : <>
@@ -4142,7 +4142,7 @@ function SettingsView({
             </div>
             {managedLearningCategories.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No learning categories configured yet.</div>}
             <form onSubmit={submitLearningCategory} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 430 }}>
-              <input className="cb-input" placeholder="e.g. Advisory" value={newLearningCategory} onChange={(e) => setNewLearningCategory(e.target.value)} />
+              <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. Advisory" value={newLearningCategory} onChange={(e) => setNewLearningCategory(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm"><Plus size={13} />Add category</button>
             </form>
           </div>
@@ -4173,7 +4173,7 @@ function SettingsView({
             {pods.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No pods created yet.</div>}
             {isSuperAdmin && (
               <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 6, maxWidth: 360 }}>
-                <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
+                <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
                 <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
               </form>
             )}
@@ -4269,7 +4269,7 @@ function SettingsView({
               <form onSubmit={saveCalamariIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(280px,1.4fr) auto", gap: 10, alignItems: "end", maxWidth: 900 }}>
                 <div>
                   <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace</label>
-                  <input className="cb-input" placeholder="e.g. your-workspace" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
+                  <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. your-workspace" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
                 </div>
                 <div>
                   <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>API key</label>
@@ -4432,11 +4432,11 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
           <div className="cb-field-row">
             <div className="cb-field">
               <label className="cb-label">Field</label>
-              <input className="cb-input" placeholder="e.g. Corporation Tax Return" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
+              <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. Corporation Tax Return" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
             </div>
             <div className="cb-field">
               <label className="cb-label">Template name</label>
-              <input className="cb-input" placeholder="e.g. CT1" value={name} onChange={(e) => setName(e.target.value)} />
+              <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. CT1" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           </div>
           <div className="cb-field" style={{ marginTop: 10 }}>
@@ -4573,12 +4573,12 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
       {isEditingName ? (
         <div className="cb-row" style={{ background: "var(--paper)" }}>
           <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <input
+            <input spellCheck={true} lang="en"
               className="cb-input" style={{ maxWidth: 320 }} value={editedName}
               onChange={(e) => setEditedName(e.target.value)} autoFocus placeholder="Client name"
               onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
             />
-            <input
+            <input spellCheck={true} lang="en"
               className="cb-input" style={{ maxWidth: 140 }} value={editedCode}
               onChange={(e) => setEditedCode(e.target.value)} placeholder="Client code"
               onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
@@ -4624,7 +4624,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
             </div>
           ))}
           <form onSubmit={submitAccount} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <input className="cb-input" placeholder="e.g. ANZ Business Checking" value={name} onChange={(e) => setName(e.target.value)} />
+            <input spellCheck={true} lang="en" className="cb-input" placeholder="e.g. ANZ Business Checking" value={name} onChange={(e) => setName(e.target.value)} />
             <button type="submit" className="cb-btn cb-btn-sm" disabled={busy} style={{ flexShrink: 0 }}><Plus size={13} />Add account</button>
           </form>
           {isAdmin && (
@@ -4875,14 +4875,14 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onImport, onUpd
         {isAdmin && <button type="button" className="cb-btn" onClick={() => setShowImport(true)}><FileSpreadsheet size={14} />Import CSV</button>}
       </div>
       <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 10, maxWidth: 560 }}>
-        <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input className="cb-input" style={{ maxWidth: 160 }} placeholder="Client code" value={code} onChange={(e) => setCode(e.target.value)} required />
+        <input spellCheck={true} lang="en" className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input spellCheck={true} lang="en" className="cb-input" style={{ maxWidth: 160 }} placeholder="Client code" value={code} onChange={(e) => setCode(e.target.value)} required />
         <button type="submit" className="cb-btn cb-btn-primary" style={{ flexShrink: 0 }}><Plus size={15} />Add</button>
       </form>
       {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
       <div style={{ position: "relative", maxWidth: 420, marginBottom: 12 }}>
         <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-        <input
+        <input spellCheck={true} lang="en"
           className="cb-input"
           style={{ paddingLeft: 34 }}
           placeholder="Search clients by name or code..."
@@ -5052,7 +5052,7 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
         <div className="cb-modal-body">
           <div className="cb-field">
             <label className="cb-label">Event name</label>
-            <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} autoFocus placeholder="Add title" />
+            <input spellCheck={true} lang="en" className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} autoFocus placeholder="Add title" />
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer" }}>
             <input type="checkbox" checked={allDay} onChange={(e) => toggleAllDay(e.target.checked)} />
@@ -5084,7 +5084,7 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
             </div>
             <div className="cb-field">
               <label className="cb-label">External guests</label>
-              <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
+              <input spellCheck={true} lang="en" className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
             </div>
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
               <input type="checkbox" checked={createMeet} onChange={(e) => setCreateMeet(e.target.checked)} />
@@ -5967,7 +5967,7 @@ function KarbonReconciliationNoteModal({ row, memberName, onClose, onSave }) {
           <div className="cb-hint" style={{ marginBottom: 12 }}>{memberName} · {formatDate(`${row.date}T12:00:00`)}</div>
           <div className="cb-field">
             <label className="cb-label">Reason for difference</label>
-            <textarea
+            <textarea spellCheck={true} lang="en"
               className="cb-input"
               rows={5}
               autoFocus
@@ -7008,7 +7008,7 @@ function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, 
           {!member.slack_connected ? (
             <div className="cb-field">
               <label className="cb-label">Your Slack email</label>
-              <input className="cb-input" value={slackEmail} onChange={(e) => setSlackEmail(e.target.value)} placeholder="you@company.com" />
+              <input spellCheck={true} lang="en" className="cb-input" value={slackEmail} onChange={(e) => setSlackEmail(e.target.value)} placeholder="you@company.com" />
               <div className="cb-hint" style={{ marginTop: 6 }}>The email your Slack account uses, so Clockbook can find and message you there.</div>
             </div>
           ) : (
@@ -8316,7 +8316,7 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
             <>
               <div className="cb-field">
                 <label className="cb-label">Meeting name</label>
-                <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Year-end query discussion" autoFocus />
+                <input spellCheck={true} lang="en" className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Year-end query discussion" autoFocus />
               </div>
               <div className="cb-field">
                 <label className="cb-label">Client (optional)</label>
@@ -8340,7 +8340,7 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
               </div>
               <div className="cb-field">
                 <label className="cb-label">External guests (optional)</label>
-                <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
+                <input spellCheck={true} lang="en" className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
                 <div className="cb-hint">Separate multiple email addresses with commas.</div>
               </div>
               <div className="cb-field">
@@ -8409,7 +8409,7 @@ function LearningDevelopmentTaskModal({ roles, onClose, onCreate }) {
           </div>
           <div className="cb-field">
             <label className="cb-label">Task name</label>
-            <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            <input spellCheck={true} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
           <div className="cb-field">
             <label className="cb-label">Role</label>
@@ -8531,7 +8531,7 @@ function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfir
           </div>
           <div className="cb-field">
             <label className="cb-label">What was it about?</label>
-            <textarea className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Brief context..." />
+            <textarea spellCheck={true} lang="en" className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Brief context..." />
             <div className="cb-hint">Required. This becomes the meeting/support context in Clockbook.</div>
           </div>
           {error && <div className="cb-error">{error}</div>}
@@ -8604,7 +8604,7 @@ function ManualHelpModal({ members, currentUser, onClose, onConfirm }) {
           </div>
           <div className="cb-field" style={{ marginTop: 14 }}>
             <label className="cb-label">What was the help about?</label>
-            <textarea className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Briefly describe the help given or received" required />
+            <textarea spellCheck={true} lang="en" className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Briefly describe the help given or received" required />
           </div>
           {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
         </div>
@@ -8665,7 +8665,7 @@ function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onC
           </div>
           <div className="cb-field" style={{ marginTop: 12 }}>
             <label className="cb-label">What was the help about?</label>
-            <textarea
+            <textarea spellCheck={true} lang="en"
               className="cb-input"
               rows={3}
               value={context}
