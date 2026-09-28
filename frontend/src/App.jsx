@@ -3930,6 +3930,7 @@ function SettingsView({
   members = [], currentUser = null, onChangeInsightsPermission, onChangeAdditionalPermissions,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
+  onTestForgottenRecovery = null,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -4793,9 +4794,16 @@ function SettingsView({
             <div className="cb-hint" style={{ marginBottom: 8 }}>
               Finds any task whose tracked time is stuck growing because of a leftover unclosed period from before a recent fix. Fixing one only ever shortens its time to what was actually tracked, never lengthens it.
             </div>
-            <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
-              {scanning ? "Scanning..." : "Scan for issues"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
+                {scanning ? "Scanning..." : "Scan for issues"}
+              </button>
+              {realIsSuperAdmin && viewMode === "super_admin" && onTestForgottenRecovery && (
+                <button type="button" className="cb-btn cb-btn-sm" onClick={onTestForgottenRecovery}>
+                  Test forgotten time recovery
+                </button>
+              )}
+            </div>
             {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
             {scanResults && scanResults.length === 0 && Object.keys(repairResults).length === 0 && (
               <div className="cb-hint" style={{ marginTop: 10 }}>No issues found.</div>
@@ -9555,7 +9563,7 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
 
 function ForgottenTimeRecoveryModal({
   gapMs, tasks, currentUser, clients, templates, members, bankAccounts, roles, taskTypes,
-  onAddClient, onClose, onRecoverSplit, onCreateRecoveryTask,
+  onAddClient, onClose, onRecoverSplit, onCreateRecoveryTask, previewOnly = false,
 }) {
   const recoveredSeconds = Math.max(1, Math.round(gapMs / 1000));
   const allocationIdRef = useRef(1);
@@ -9654,10 +9662,15 @@ function ForgottenTimeRecoveryModal({
       <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
         <div className="cb-modal" style={{ width: "min(760px, calc(100vw - 28px))" }}>
           <div className="cb-modal-head">
-            <div className="cb-modal-title">Recover forgotten time</div>
+            <div className="cb-modal-title">{previewOnly ? "Test forgotten time recovery" : "Recover forgotten time"}</div>
             <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
           </div>
           <div className="cb-modal-body">
+            {previewOnly && (
+              <div style={{ padding: "9px 11px", border: "1px solid #D7B46A", borderRadius: 9, background: "#FFF9EA", marginBottom: 12, fontSize: 13 }}>
+                <strong>Preview mode.</strong> Nothing in this window will save time, create tasks, or change ClockBook data.
+              </div>
+            )}
             <div style={{ padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 14 }}>
               <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
                 <div style={{ fontWeight: 700 }}>Recover {niceDuration(gapMs)}</div>
@@ -9669,7 +9682,7 @@ function ForgottenTimeRecoveryModal({
             </div>
 
             <div className="cb-hint" style={{ marginBottom: 10 }}>
-              Add the tasks in chronological order. The final row receives the exact remaining time and will continue from now after recovery.
+              {previewOnly ? "Add tasks in chronological order to test the split. The final row receives the exact remaining time. Preview mode will not start or change any timer." : "Add the tasks in chronological order. The final row receives the exact remaining time and will continue from now after recovery."}
             </div>
 
             <div style={{ display: "grid", gap: 8 }}>
@@ -9724,7 +9737,7 @@ function ForgottenTimeRecoveryModal({
           <div className="cb-modal-foot">
             <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
             <button type="button" className="cb-btn cb-btn-primary" disabled={busy || overAllocated || remainingSeconds < 1} onClick={recover}>
-              {busy ? "Recovering..." : `Recover ${niceDuration(gapMs)} across ${allocations.length} task${allocations.length === 1 ? "" : "s"}`}
+              {busy ? (previewOnly ? "Checking..." : "Recovering...") : previewOnly ? `Test ${niceDuration(gapMs)} split across ${allocations.length} task${allocations.length === 1 ? "" : "s"}` : `Recover ${niceDuration(gapMs)} across ${allocations.length} task${allocations.length === 1 ? "" : "s"}`}
             </button>
           </div>
         </div>
@@ -10173,6 +10186,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showForgottenRecovery, setShowForgottenRecovery] = useState(false);
+  const [showForgottenRecoveryPreview, setShowForgottenRecoveryPreview] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
   const [showQuickMeeting, setShowQuickMeeting] = useState(false);
   const [showManualHelp, setShowManualHelp] = useState(false);
@@ -11736,6 +11750,7 @@ export default function App() {
                 onBrandingUpdated={loadWorkspaces}
                 integrationStatus={integrationStatus}
                 onIntegrationChanged={loadIntegrationStatus}
+                onTestForgottenRecovery={() => setShowForgottenRecoveryPreview(true)}
               />
             )}
           </div>
@@ -11778,6 +11793,32 @@ export default function App() {
         <ManualHelpModal
           members={members} currentUser={effectiveCurrentUser}
           onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
+        />
+      )}
+      {showForgottenRecoveryPreview && realIsSuperAdmin && superAdminViewMode === "super_admin" && (
+        <ForgottenTimeRecoveryModal
+          gapMs={30 * 60 * 1000}
+          tasks={tasks}
+          currentUser={effectiveCurrentUser}
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes}
+          previewOnly={true}
+          onClose={() => setShowForgottenRecoveryPreview(false)}
+          onAddClient={async (name, code) => ({ id: `preview-client-${Date.now()}`, name, code })}
+          onCreateRecoveryTask={async (payload) => ({
+            id: `preview-task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            ...payload,
+            owner_id: effectiveCurrentUser.id,
+            status: "todo",
+            segments: [],
+            note: "",
+            created_at: new Date().toISOString(),
+            submitted_at: null,
+          })}
+          onRecoverSplit={async (allocations) => {
+            setShowForgottenRecoveryPreview(false);
+            showToast(`Preview complete: ${allocations.length} allocation${allocations.length === 1 ? "" : "s"}. No time was recorded.`);
+          }}
         />
       )}
       {showForgottenRecovery && forgotToTrackGapMsRef.current != null && (
