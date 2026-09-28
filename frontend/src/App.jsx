@@ -490,27 +490,20 @@ function elapsedSeconds(task, nowMs) {
   return total;
 }
 
-// Only count the portion of each segment that falls inside today in the viewer's
-// local timezone. This prevents an old paused/running task, or a task submitted
-// today with earlier segments, from inflating the Dashboard's "Tracked today" total.
-function elapsedSecondsToday(task, nowMs) {
-  const nowDate = new Date(nowMs);
-  const todayStartMs = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate(),
-    0, 0, 0, 0
-  ).getTime();
-
+// Dashboard "Tracked today" is based on the actual work date of each timer segment,
+// never the date the task happened to be submitted. This keeps an older entry that is
+// completed/submitted today out of today's tracked-time totals. Use the tracked person's
+// timezone so team rows are also evaluated against that person's real work date.
+function elapsedSecondsToday(task, nowMs, member) {
+  const timeZone = member?.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const todayKey = workDateKeyInTimeZone(new Date(nowMs), timeZone);
   let total = 0;
   for (const seg of task.segments || []) {
+    if (!seg?.start || workDateKeyInTimeZone(seg.start, timeZone) !== todayKey) continue;
     const rawStart = new Date(seg.start).getTime();
     const rawEnd = seg.end ? new Date(seg.end).getTime() : nowMs;
     if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
-
-    const start = Math.max(rawStart, todayStartMs);
-    const end = Math.min(rawEnd, nowMs);
-    total += Math.max(0, end - start) / 1000;
+    total += Math.max(0, Math.min(rawEnd, nowMs) - rawStart) / 1000;
   }
   return total;
 }
@@ -1750,7 +1743,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   // "Everyone" keeps the existing behavior of showing the signed-in person's own summary.
   const statsMember = viewedMember || currentUser;
   const statsTasks = tasks.filter((t) => t.owner_id === statsMember.id);
-  const todaySeconds = statsTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
+  const todaySeconds = statsTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now, statsMember), 0);
   const myRunningCount = statsTasks.filter((t) => t.status === "running" || t.status === "paused").length;
   const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
@@ -1764,7 +1757,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const teamRows = teamMembers
         .map((member) => {
           const memberTasks = tasks.filter((t) => t.owner_id === member.id);
-          const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
+          const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now, member), 0);
           const inProgressCount = memberTasks.filter((t) => t.status === "running" || t.status === "paused").length;
           const submittedTodayCount = memberTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
           const runningTask = memberTasks.find((t) => t.status === "running");
@@ -4301,6 +4294,10 @@ function SettingsView({
 
       {realIsSuperAdmin && viewMode === "super_admin" && (() => {
         const eligibleMembers = members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
+        const normalizedSearch = permissionSearch.trim().toLowerCase();
+        const visibleMembers = normalizedSearch
+          ? eligibleMembers.filter((m) => `${m.name} ${roleLabel(m.role)}`.toLowerCase().includes(normalizedSearch))
+          : eligibleMembers;
         const selected = eligibleMembers.find((m) => m.id === permissionMemberId) || null;
         const selectedPermissions = new Set(selected?.additional_permissions || []);
         if (selected?.can_view_leave_capacity_insights) selectedPermissions.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
@@ -4312,12 +4309,17 @@ function SettingsView({
         };
         const checkbox = (permission, label, description, adminOnly = false) => {
           const disabled = adminOnly && selected?.role !== "admin";
-          return <label key={permission} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderTop: "1px solid var(--border)", opacity: disabled ? 0.5 : 1 }}>
+          return <label key={permission} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 0", borderTop: "1px solid var(--border)", opacity: disabled ? 0.5 : 1, cursor: disabled ? "default" : "pointer" }}>
             <input type="checkbox" checked={selectedPermissions.has(permission)} disabled={!selected || disabled} onChange={(e) => togglePermission(permission, e.target.checked)} style={{ marginTop: 3 }} />
             <span><span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>{label}</span><span className="cb-hint">{description}</span></span>
           </label>;
         };
-        return (
+        const permissionCount = (member) => {
+          const values = new Set(member?.additional_permissions || []);
+          if (member?.can_view_leave_capacity_insights) values.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
+          return values.size;
+        };
+        return <>
           <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
             <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
               <div><div className="cb-tmpl-field">Permissions</div><div className="cb-tmpl-name">Additional access</div></div>
@@ -4326,27 +4328,60 @@ function SettingsView({
               <div className="cb-hint" style={{ marginBottom: 10 }}>
                 Grant selected access without changing someone's role. Only Super Admins can change these permissions. Admin report access always stays within that Admin's normal pod/team scope.
               </div>
-              <div style={{ maxWidth: 460, marginBottom: 12 }}>
-                <SearchableSelect
-                  options={eligibleMembers}
-                  value={permissionMemberId}
-                  onChange={setPermissionMemberId}
-                  placeholder="Select staff or admin..."
-                  getLabel={(m) => `${m.name} · ${roleLabel(m.role)}`}
+              <div style={{ maxWidth: 420, marginBottom: 10 }}>
+                <input
+                  spellCheck={true}
+                  lang="en"
+                  className="cb-input"
+                  value={permissionSearch}
+                  onChange={(e) => setPermissionSearch(e.target.value)}
+                  placeholder="Search staff or admin..."
                 />
               </div>
-              {!selected ? <div className="cb-empty" style={{ padding: "16px 0" }}>Select a person to manage their additional access.</div> : <>
-                <div style={{ fontSize: 13.5, fontWeight: 750, margin: "4px 0 6px" }}>Insights</div>
-                {checkbox(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY, integrationStatus.calamari_connected ? "Leave & capacity insights" : "Capacity insights", integrationStatus.calamari_connected ? "View Leave Trends and Capacity & Utilisation in Insights." : "View Capacity & Utilisation in Insights. Leave Trends will appear when Calamari is connected.")}
-                <div style={{ fontSize: 13.5, fontWeight: 750, margin: "16px 0 6px" }}>Reports</div>
-                {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Report access can only be granted to Admins.</div>}
-                {checkbox(ACCESS_PERMISSION.REPORT_HELP, "Help activity", "View the Help activity report for the Admin's permitted team scope.", true)}
-                {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
-                {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
-              </>}
+              <div style={{ border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden", maxWidth: 760 }}>
+                {visibleMembers.length === 0 ? <div className="cb-empty" style={{ padding: 18 }}>No matching staff or admins.</div> : visibleMembers.map((member, index) => {
+                  const count = permissionCount(member);
+                  return <div key={member.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 12px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
+                      <div className="cb-hint">{roleLabel(member.role)} · {count ? `${count} additional permission${count === 1 ? "" : "s"}` : "No additional access"}</div>
+                    </div>
+                    <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionMemberId(member.id)}>Edit permissions</button>
+                  </div>;
+                })}
+              </div>
             </div>
           </div>
-        );
+
+          {selected && (
+            <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setPermissionMemberId(""); }}>
+              <div className="cb-modal" style={{ maxWidth: 620 }}>
+                <div className="cb-modal-head">
+                  <div>
+                    <div className="cb-modal-title">Edit permissions</div>
+                    <div className="cb-hint" style={{ marginTop: 2 }}>{selected.name} · {roleLabel(selected.role)}</div>
+                  </div>
+                  <button type="button" className="cb-icon-btn" onClick={() => setPermissionMemberId("")}><X size={16} /></button>
+                </div>
+                <div className="cb-modal-body">
+                  <div className="cb-hint" style={{ marginBottom: 12 }}>
+                    These permissions add specific access without changing the person's main role. Report access for Admins remains restricted to their normal pod/team scope.
+                  </div>
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "4px 0 6px" }}>Insights</div>
+                  {checkbox(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY, integrationStatus.calamari_connected ? "Leave & capacity insights" : "Capacity insights", integrationStatus.calamari_connected ? "View Leave Trends and Capacity & Utilisation in Insights." : "View Capacity & Utilisation in Insights. Leave Trends will appear when Calamari is connected.")}
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Reports</div>
+                  {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Report access can only be granted to Admins.</div>}
+                  {checkbox(ACCESS_PERMISSION.REPORT_HELP, "Help activity", "View the Help activity report for the Admin's permitted team scope.", true)}
+                  {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
+                  {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
+                </div>
+                <div className="cb-modal-foot">
+                  <button type="button" className="cb-btn" onClick={() => setPermissionMemberId("")}>Done</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </>;
       })()}
 
       {realIsSuperAdmin && viewMode === "super_admin" && (
