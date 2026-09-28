@@ -7099,6 +7099,13 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
 
   const allStaffExportView = isAdmin && !forceSelfOnly && staffFilter === "all";
 
+  // Keep Export within the viewport and guarantee the action columns remain visible.
+  // The floating header and body use this exact same percentage layout.
+  const exportColumnWidths = useMemo(() => (isAdmin
+    ? [8, 8, 10.5, 7, 8, 4.5, 5.5, 5, 7, 6, 5.5, 7, 7.5, 4.5, 3, 3]
+    : [8, 8, 10.5, 7, 8, 4.5, 5.5, 5, 7, 6, 5.5, 7, 7.5, 4.5, 6]
+  ), [isAdmin]);
+
   const exportDateBlockIndexes = useMemo(() => {
     const indexes = new Map();
     let nextIndex = 0;
@@ -7294,6 +7301,24 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
         .cb-export-table-wrap {
           overflow-x: clip !important;
           overflow-y: visible !important;
+          width: 100%;
+          max-width: 100%;
+        }
+        .cb-export-table-wrap .cb-table {
+          width: 100% !important;
+          table-layout: fixed !important;
+        }
+        .cb-export-table-wrap .cb-table th,
+        .cb-export-table-wrap .cb-table td {
+          min-width: 0 !important;
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }
+        .cb-export-table-wrap .cb-table th:nth-last-child(-n+3),
+        .cb-export-table-wrap .cb-table td:nth-last-child(-n+3) {
+          text-align: center;
+          white-space: nowrap;
+          overflow-wrap: normal;
         }
       `}</style>
       {floatingExportHeader.visible && createPortal(
@@ -7310,7 +7335,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           borderBottom: "1px solid var(--line)",
         }}>
           <table className="cb-table" style={{ width: "100%", tableLayout: "fixed", margin: 0, background: "#ffffff" }}>
-            <colgroup>{floatingExportHeader.columns.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
+            <colgroup>{exportColumnWidths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
             <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff", height: 38 }}>
               <th style={{ background: "#ffffff" }}>Date</th><th style={{ background: "#ffffff" }}>Client</th><th style={{ background: "#ffffff" }}>Task</th><th style={{ background: "#ffffff" }}>Role</th><th style={{ background: "#ffffff" }}>Task type</th><th style={{ background: "#ffffff" }}>Period</th>
               <th className="num" style={{ background: "#ffffff" }}>Duration</th><th className="num" style={{ background: "#ffffff" }}>Tracked</th><th style={{ background: "#ffffff" }}>Bank Account</th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
@@ -7321,7 +7346,8 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
         document.body
       )}
       <div className="cb-table-wrap cb-export-table-wrap" style={{ overflowX: "clip", overflowY: "visible", maxWidth: "100%" }}>
-        <table ref={exportTableRef} className="cb-table" style={{ width: "100%" }}>
+        <table ref={exportTableRef} className="cb-table" style={{ width: "100%", tableLayout: "fixed" }}>
+          <colgroup>{exportColumnWidths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
           <thead ref={exportHeaderRef}>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
@@ -7369,15 +7395,15 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                     </td>
                     <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                    <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
-                    <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
-                    <td>
+                    <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "normal", lineHeight: 1.15, textAlign: "center" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
+                    <td style={{ textAlign: "center" }}><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
+                    <td style={{ textAlign: "center" }}>
                       <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
                         {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
                       </button>
                     </td>
                     {isAdmin && (
-                      <td>
+                      <td style={{ textAlign: "center" }}>
                         <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(r)}>
                           <Trash2 size={14} />
                         </button>
@@ -7413,11 +7439,11 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     <td>{g.metricLabel}</td>
                     <td></td>
                     <td>{g.noteCount > 0 ? `${g.noteCount} note${g.noteCount > 1 ? "s" : ""}` : "none"}</td>
-                    <td>{allStaffExportView && g.trackedByLabel && g.trackedByLabel !== "none" ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{g.trackedByLabel}</span> : g.trackedByLabel}</td>
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td>{allStaffExportView && g.trackedByLabel && g.trackedByLabel !== "none" ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "normal", lineHeight: 1.15, textAlign: "center" }}>{g.trackedByLabel}</span> : g.trackedByLabel}</td>
+                    <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" className="cb-checkbox" checked={g.allPushed} onChange={() => handleToggleGroupPushed(g)} />
                     </td>
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                       <button className="cb-icon-btn" title="Copy summary for Karbon" onClick={() => copyGroup(g)}>
                         {copiedId === g.key ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
                       </button>
@@ -7445,8 +7471,8 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                         {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                       </td>
                       <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                      <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
-                      <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
+                      <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "normal", lineHeight: 1.15, textAlign: "center" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
+                      <td style={{ textAlign: "center" }}><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
                       <td>
                         <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
                           {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
