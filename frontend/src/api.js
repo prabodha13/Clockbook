@@ -48,6 +48,7 @@ export const api = {
   updateMemberPod: (memberId, podId, expectedVersion) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId, expected_version: expectedVersion }) }),
   updateMemberTimezone: (memberId, timezoneName, expectedVersion) => request(`/members/${memberId}/timezone`, { method: "PATCH", body: JSON.stringify({ timezone_name: timezoneName, expected_version: expectedVersion }) }),
   updateMemberInsightsPermission: (memberId, enabled, expectedVersion) => request(`/members/${memberId}/insights-permission`, { method: "PATCH", body: JSON.stringify({ enabled, expected_version: expectedVersion }) }),
+  updateMemberAdditionalPermissions: (memberId, permissions, expectedVersion) => request(`/members/${memberId}/additional-permissions`, { method: "PATCH", body: JSON.stringify({ permissions, expected_version: expectedVersion }) }),
   disconnectGoogleCalendar: () => request("/auth/google/disconnect", { method: "POST" }),
   connectSlack: (memberId, slackEmail) => request(`/members/${memberId}/slack`, { method: "PATCH", body: JSON.stringify({ slack_email: slackEmail }) }),
   disconnectSlack: (memberId) => request(`/members/${memberId}/slack/disconnect`, { method: "POST" }),

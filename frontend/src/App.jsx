@@ -1046,7 +1046,32 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = false, karbonConnected = false }) {
+const ACCESS_PERMISSION = {
+  INSIGHTS_LEAVE_CAPACITY: "insights_leave_capacity",
+  REPORT_HELP: "report_help",
+  REPORT_OVERRIDES: "report_manual_overrides",
+  REPORT_AUDIT: "report_audit",
+};
+
+function hasAdditionalPermission(member, permission) {
+  if (!member) return false;
+  if (member.role === "super_admin") return true;
+  if (permission === ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY && member.can_view_leave_capacity_insights) return true;
+  return Array.isArray(member.additional_permissions) && member.additional_permissions.includes(permission);
+}
+
+function reportModesForMember(member) {
+  if (!member) return [];
+  if (member.role === "super_admin") return ["help", "overrides", "inactivity"];
+  if (member.role !== "admin") return [];
+  const modes = [];
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_HELP)) modes.push("help");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_OVERRIDES)) modes.push("overrides");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_AUDIT)) modes.push("inactivity");
+  return modes;
+}
+
+function Sidebar({ view, setView, isAdmin, isSuperAdmin, canViewReports = false, alwaysShowSettings = false, karbonConnected = false }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
@@ -1057,7 +1082,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     ...(karbonConnected ? [{ id: "reconcile", label: "Karbon Check", icon: CheckCircle2 }] : []),
     { id: "learning", label: "Learning & Development", icon: GraduationCap },
     { id: "staff", label: "Staff", icon: Users },
-    ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
+    ...(canViewReports ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
     ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
@@ -3875,7 +3900,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 function SettingsView({
   roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onUpdateLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
-  members = [], onChangeInsightsPermission,
+  members = [], onChangeInsightsPermission, onChangeAdditionalPermissions,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
 }) {
@@ -3908,6 +3933,7 @@ function SettingsView({
   const [testingCalamari, setTestingCalamari] = useState(false);
   const [calamariMessage, setCalamariMessage] = useState("");
   const [permissionSearch, setPermissionSearch] = useState("");
+  const [permissionMemberId, setPermissionMemberId] = useState("");
   const [delegationExclusions, setDelegationExclusions] = useState([]);
   const [delegationDefaults, setDelegationDefaults] = useState([]);
   const [delegationExclusionsLoaded, setDelegationExclusionsLoaded] = useState(false);
@@ -4274,114 +4300,51 @@ function SettingsView({
       )}
 
       {realIsSuperAdmin && viewMode === "super_admin" && (() => {
-        const enabledMembers = members.filter((m) => m.role !== "super_admin" && !!m.can_view_leave_capacity_insights);
-        const search = permissionSearch.trim().toLowerCase();
-        const searchResults = search
-          ? members.filter((m) => m.role !== "super_admin" && !m.can_view_leave_capacity_insights && m.name.toLowerCase().includes(search))
-          : [];
+        const eligibleMembers = members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
+        const selected = eligibleMembers.find((m) => m.id === permissionMemberId) || null;
+        const selectedPermissions = new Set(selected?.additional_permissions || []);
+        if (selected?.can_view_leave_capacity_insights) selectedPermissions.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
+        const togglePermission = async (permission, enabled) => {
+          if (!selected || !onChangeAdditionalPermissions) return;
+          const next = new Set(selectedPermissions);
+          if (enabled) next.add(permission); else next.delete(permission);
+          await onChangeAdditionalPermissions(selected.id, Array.from(next));
+        };
+        const checkbox = (permission, label, description, adminOnly = false) => {
+          const disabled = adminOnly && selected?.role !== "admin";
+          return <label key={permission} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderTop: "1px solid var(--border)", opacity: disabled ? 0.5 : 1 }}>
+            <input type="checkbox" checked={selectedPermissions.has(permission)} disabled={!selected || disabled} onChange={(e) => togglePermission(permission, e.target.checked)} style={{ marginTop: 3 }} />
+            <span><span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>{label}</span><span className="cb-hint">{description}</span></span>
+          </label>;
+        };
         return (
           <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
             <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
-              <div>
-                <div className="cb-tmpl-field">Permissions</div>
-                <div className="cb-tmpl-name">{integrationStatus.calamari_connected ? <>Leave &amp; capacity insights</> : <>Capacity insights</>}</div>
-              </div>
-              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, color: "var(--ink-soft)" }}>
-                <span style={{ fontSize: 12.5 }}>{enabledMembers.length} {enabledMembers.length === 1 ? "person" : "people"} enabled</span>
-              </div>
+              <div><div className="cb-tmpl-field">Permissions</div><div className="cb-tmpl-name">Additional access</div></div>
             </div>
-
-            <div style={{ padding: "0 16px 12px" }}>
-                <div className="cb-hint" style={{ marginBottom: 9 }}>
-                  {integrationStatus.calamari_connected ? "Choose who can view Leave Trends and Capacity & Utilisation in Insights." : "Choose who can view Capacity & Utilisation in Insights. Leave reporting stays hidden until this workspace connects Calamari."} Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
-                </div>
-
-                <div style={{ position: "relative", maxWidth: 460, marginBottom: 10 }}>
-                  <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-                  <input spellCheck={true} lang="en"
-                    className="cb-input"
-                    value={permissionSearch}
-                    onChange={(e) => setPermissionSearch(e.target.value)}
-                    placeholder="Search staff to add..."
-                    aria-label="Search staff to add leave and capacity insights access"
-                    style={{ width: "100%", paddingLeft: 34, paddingRight: permissionSearch ? 34 : 10 }}
-                  />
-                  {permissionSearch && (
-                    <button
-                      type="button"
-                      className="cb-icon-btn"
-                      onClick={() => setPermissionSearch("")}
-                      aria-label="Clear staff search"
-                      style={{ position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent" }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-
-                {search && (
-                  <div style={{ maxWidth: 620, marginBottom: 12, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                    {searchResults.length ? searchResults.map((m, index) => (
-                      <div
-                        key={m.id}
-                        style={{
-                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                          padding: "7px 10px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
-                          <div className="cb-hint">{roleLabel(m.role)}</div>
-                        </div>
-                        <button
-                          type="button"
-                          className="cb-btn cb-btn-sm"
-                          onClick={() => {
-                            onChangeInsightsPermission && onChangeInsightsPermission(m.id, true);
-                            setPermissionSearch("");
-                          }}
-                        >
-                          <Plus size={13} /> Add access
-                        </button>
-                      </div>
-                    )) : (
-                      <div className="cb-hint" style={{ padding: "10px 11px" }}>No matching staff without access.</div>
-                    )}
-                  </div>
-                )}
-
-                <div style={{ maxWidth: 620 }}>
-                  <div className="cb-label" style={{ marginBottom: 7 }}>Has access</div>
-                  {enabledMembers.length ? (
-                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                      {enabledMembers.map((m, index) => (
-                        <div
-                          key={m.id}
-                          style={{
-                            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                            padding: "7px 10px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
-                          }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
-                            <div className="cb-hint">{roleLabel(m.role)}</div>
-                          </div>
-                          <button
-                            type="button"
-                            className="cb-btn cb-btn-sm cb-btn-danger"
-                            onClick={() => onChangeInsightsPermission && onChangeInsightsPermission(m.id, false)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="cb-hint">No additional staff have access.</div>
-                  )}
-                  <div className="cb-hint" style={{ marginTop: 9 }}>Super Admins always have access and do not need to be added.</div>
-                </div>
+            <div style={SETTINGS_BODY_STYLE}>
+              <div className="cb-hint" style={{ marginBottom: 10 }}>
+                Grant selected access without changing someone's role. Only Super Admins can change these permissions. Admin report access always stays within that Admin's normal pod/team scope.
               </div>
+              <div style={{ maxWidth: 460, marginBottom: 12 }}>
+                <SearchableSelect
+                  options={eligibleMembers}
+                  value={permissionMemberId}
+                  onChange={setPermissionMemberId}
+                  placeholder="Select staff or admin..."
+                  getLabel={(m) => `${m.name} · ${roleLabel(m.role)}`}
+                />
+              </div>
+              {!selected ? <div className="cb-empty" style={{ padding: "16px 0" }}>Select a person to manage their additional access.</div> : <>
+                <div style={{ fontSize: 13.5, fontWeight: 750, margin: "4px 0 6px" }}>Insights</div>
+                {checkbox(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY, integrationStatus.calamari_connected ? "Leave & capacity insights" : "Capacity insights", integrationStatus.calamari_connected ? "View Leave Trends and Capacity & Utilisation in Insights." : "View Capacity & Utilisation in Insights. Leave Trends will appear when Calamari is connected.")}
+                <div style={{ fontSize: 13.5, fontWeight: 750, margin: "16px 0 6px" }}>Reports</div>
+                {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Report access can only be granted to Admins.</div>}
+                {checkbox(ACCESS_PERMISSION.REPORT_HELP, "Help activity", "View the Help activity report for the Admin's permitted team scope.", true)}
+                {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
+                {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
+              </>}
+            </div>
           </div>
         );
       })()}
@@ -7708,6 +7671,15 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                   {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               )}
+              {currentUser.role === "admin" && (
+                <div
+                  className="cb-select"
+                  title="Pod assignments are managed by a Super Admin"
+                  style={{ width: 150, padding: "7px 10px", fontSize: 12.5, color: "var(--ink-soft)", background: "var(--paper-soft)", cursor: "default" }}
+                >
+                  {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
+                </div>
+              )}
               <StaffRowMenu
                 items={[
                   ...(m.id === currentUser.id ? [
@@ -8494,7 +8466,7 @@ function InactivityAuditView({ members }) {
     <div>
       <div style={{ marginBottom: 4 }}>
         <div className="cb-page-title cb-serif">Audit</div>
-        <div className="cb-page-sub">Super-admin review of daily start activity plus Clockbook-detected lock, sleep, and offline gaps. Times use each person’s configured time zone.</div>
+        <div className="cb-page-sub">Daily start activity plus Clockbook-detected lock, sleep, and offline gaps for people within your permitted scope. Times use each person’s configured time zone.</div>
 
         <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap", minHeight: 64 }}>
           <div style={{ flex: "0 0 150px" }}>
@@ -8567,22 +8539,22 @@ function InactivityAuditView({ members }) {
   );
 }
 
-function SuperAdminReportsView({ members }) {
-  const [mode, setMode] = useState("help");
+function SuperAdminReportsView({ members, allowedModes = ["help", "overrides", "inactivity"] }) {
+  const available = [
+    { value: "help", label: "Help activity" },
+    { value: "overrides", label: "Manual overrides" },
+    { value: "inactivity", label: "Audit" },
+  ].filter((item) => allowedModes.includes(item.value));
+  const [mode, setMode] = useState(available[0]?.value || "");
+  useEffect(() => {
+    if (!available.some((item) => item.value === mode)) setMode(available[0]?.value || "");
+  }, [allowedModes.join("|"), mode]);
+  if (!available.length) return null;
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <StableSaaSTabs
-          value={mode}
-          onChange={setMode}
-          ariaLabel="Reports view"
-          options={[
-            { value: "help", label: "Help activity" },
-            { value: "overrides", label: "Manual overrides" },
-            { value: "inactivity", label: "Audit" },
-          ]}
-        />
-      </div>
+      {available.length > 1 && <div style={{ marginBottom: 16 }}>
+        <StableSaaSTabs value={mode} onChange={setMode} ariaLabel="Reports view" options={available} />
+      </div>}
       {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : <InactivityAuditView members={members} />}
     </div>
   );
@@ -10095,6 +10067,11 @@ export default function App() {
   const effectiveCurrentUser = currentUser ? { ...currentUser, role: effectiveRole } : null;
   const isAdmin = effectiveCurrentUser ? isAdminRole(effectiveCurrentUser.role) : false;
   const effectiveIsSuperAdmin = effectiveCurrentUser?.role === "super_admin";
+  const allowedReportModes = reportModesForMember(effectiveCurrentUser);
+  const canViewReports = allowedReportModes.length > 0;
+  const reportMembers = effectiveCurrentUser?.role === "admin" && effectiveCurrentUser?.pod_id
+    ? members.filter((m) => m.role !== "super_admin" && m.pod_id === effectiveCurrentUser.pod_id)
+    : members;
 
   function changeSuperAdminViewMode(mode) {
     if (!realIsSuperAdmin || !["member", "admin", "super_admin"].includes(mode)) return;
@@ -10745,6 +10722,17 @@ export default function App() {
     }
   }
 
+  async function changeMemberAdditionalPermissions(memberId, permissions) {
+    try {
+      const current = members.find((m) => m.id === memberId);
+      const updated = await api.updateMemberAdditionalPermissions(memberId, permissions, current?.version || 1);
+      setMembers((prev) => prev.map((m) => m.id === memberId ? updated : m));
+      if (currentUser?.id === memberId) setCurrentUser(updated);
+    } catch (err) {
+      alert(err.message || "Could not update permissions");
+    }
+  }
+
   async function addPod(name) {
     try {
       const pod = await api.createPod(name.trim());
@@ -11189,7 +11177,7 @@ export default function App() {
   return (
     <div className="cb-root" spellCheck={true}>
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} karbonConnected={integrationStatus.karbon_connected} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} canViewReports={canViewReports} alwaysShowSettings={realIsSuperAdmin} karbonConnected={integrationStatus.karbon_connected} />
         <div className="cb-main">
           <TopBar
             currentUser={effectiveCurrentUser}
@@ -11275,7 +11263,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && effectiveIsSuperAdmin && <SuperAdminReportsView members={members} />}
+            {view === "reports" && canViewReports && <SuperAdminReportsView members={reportMembers} allowedModes={allowedReportModes} />}
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
@@ -11283,7 +11271,7 @@ export default function App() {
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
                 onAddLearningCategory={addLearningCategory} onUpdateLearningCategory={updateLearningCategory}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
-                members={members} onChangeInsightsPermission={changeMemberInsightsPermission}
+                members={members} onChangeInsightsPermission={changeMemberInsightsPermission} onChangeAdditionalPermissions={changeMemberAdditionalPermissions}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
                 effectiveIsAdmin={isAdmin}
                 workspaces={workspaces}
