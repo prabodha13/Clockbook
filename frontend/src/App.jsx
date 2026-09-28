@@ -1051,6 +1051,7 @@ const ACCESS_PERMISSION = {
   MANAGE_WORKSPACE_BRANDING: "manage_workspace_branding",
   MANAGE_INTEGRATIONS: "manage_integrations",
   MANAGE_AUDIT_RECORDING: "manage_audit_recording",
+  MANAGE_SUPER_ADMINS: "manage_super_admins",
 };
 
 function hasAdditionalPermission(member, permission) {
@@ -1707,7 +1708,9 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const isSuperAdmin = currentUser.role === "super_admin";
-  const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
+  const canSeeSuperAdmins = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+  const canUseTeamView = isAdmin || currentUser.role === "admin" || currentUser.role === "super_admin";
+  const pickableMembers = members.filter((m) => m.id !== currentUser.id && (canSeeSuperAdmins || m.role !== "super_admin"));
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
 
   const visibleTasks = (() => {
@@ -1755,10 +1758,10 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
 
-  const teamMembers = isAdmin
+  const teamMembers = canUseTeamView
     ? (isSuperAdmin
         ? members
-        : members.filter((member) => member.pod_id && member.pod_id === currentUser.pod_id))
+        : members.filter((member) => (canSeeSuperAdmins || member.role !== "super_admin") && (member.role === "super_admin" || !currentUser.pod_id || member.pod_id === currentUser.pod_id)))
     : [];
 
   const teamRows = teamMembers
@@ -1850,7 +1853,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {isAdmin && (
+          {canUseTeamView && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)" }}>
               <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
@@ -1879,7 +1882,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         </div>
       </div>
 
-      {isAdmin && viewFilter === "team" && (
+      {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
           <table className="cb-table">
             <thead>
@@ -3790,7 +3793,8 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 
   const managerMembers = useMemo(() => {
     if (currentUser.role === "super_admin") return members;
-    return members.filter((m) => m.role !== "super_admin" && (!currentUser.pod_id || m.pod_id === currentUser.pod_id));
+    const canSeeSuperAdmins = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+    return members.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !currentUser.pod_id || m.pod_id === currentUser.pod_id));
   }, [members, currentUser]);
 
   const loadReport = useCallback(async () => {
@@ -4391,6 +4395,7 @@ function SettingsView({
                   {checkbox(ACCESS_PERMISSION.ADD_STAFF_MANUALLY, "Add staff manually", "Create a new staff login directly from the Staff page.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_LEARNING_CATEGORIES, "Manage L&D categories", "Create, rename, archive and restore Learning & Development categories.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_DELEGATION_EXCLUSIONS, "Manage delegation exclusions", "Choose work types that Insights must never suggest for delegation.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_SUPER_ADMINS, "Manage Super Admins", "Make Super Admin accounts visible like staff within this Admin's existing Dashboard, Insights, Karbon Check, L&D and granted Reports access. This does not allow role, security, permission or credential changes to Super Admins.", true)}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Workspace</div>
                   {checkbox(ACCESS_PERMISSION.MANAGE_WORKSPACE_BRANDING, "Manage workspace branding", "Change the workspace logo and branding settings.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_INTEGRATIONS, "Manage integrations", "Connect, replace, test or disconnect Karbon and Calamari credentials.", true)}
@@ -5855,7 +5860,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const selectableMembers = useMemo(() => {
     if (!isAdmin || forceSelfOnly) return [];
     if (isSuperAdmin) return [...members].sort((a, b) => a.name.localeCompare(b.name));
-    const visible = members.filter((m) => m.role !== "super_admin" && (!currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+    const canSeeSuperAdmins = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+    const visible = members.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !currentUser?.pod_id || m.pod_id === currentUser.pod_id));
     const byId = new Map([[currentUser.id, currentUser], ...visible.map((m) => [m.id, m])]);
     return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [members, isAdmin, forceSelfOnly, isSuperAdmin, currentUser?.pod_id]);
@@ -6462,7 +6468,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const autoCompareTimerRef = useRef(null);
   const autoComparePendingRef = useRef(false);
   const lastTeamComparisonRangeRef = useRef("");
-  const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
+  const canUseTeamView = !forceSelfOnly && (isAdmin || currentUser?.role === "admin" || currentUser?.role === "super_admin");
+  const effectiveMemberId = (!canUseTeamView || forceSelfOnly) ? currentUser?.id : memberId;
   const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
 
   // Team View intentionally mirrors the existing admin visibility model rather than creating
@@ -6471,16 +6478,17 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   // set when no pod is assigned). The backend reconciliation endpoint still enforces the same
   // scope on every member request.
   const teamOptions = useMemo(() => {
-    if (!isAdmin || forceSelfOnly) return [];
+    if (!canUseTeamView) return [];
     if (currentUser?.role === "super_admin") return staffOptions;
-    const visible = staffOptions.filter((m) => m.role !== "super_admin" && (!currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+    const canSeeSuperAdmins = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+    const visible = staffOptions.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !currentUser?.pod_id || m.pod_id === currentUser.pod_id));
     const byId = new Map();
     if (currentUser?.id) byId.set(currentUser.id, currentUser);
     visible.forEach((m) => byId.set(m.id, m));
     return Array.from(byId.values()).sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
-  }, [staffOptions, isAdmin, forceSelfOnly, currentUser?.id, currentUser?.role, currentUser?.pod_id]);
+  }, [staffOptions, canUseTeamView, currentUser?.id, currentUser?.role, currentUser?.pod_id, currentUser?.additional_permissions]);
 
-  const canSelectTeamMembers = currentUser?.role === "super_admin" && isAdmin && !forceSelfOnly;
+  const canSelectTeamMembers = currentUser?.role === "super_admin" && canUseTeamView;
   const sortedTeamPods = useMemo(() => [...(pods || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [pods]);
   const podScopedTeamOptions = useMemo(() => {
     const scoped = canSelectTeamMembers && selectedTeamPodId
@@ -6548,7 +6556,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     autoComparePendingRef.current = false;
     if (!range) return;
     if (viewMode === "team") {
-      if (!isAdmin || forceSelfOnly || selectedTeamOptions.length === 0) return;
+      if (!canUseTeamView || selectedTeamOptions.length === 0) return;
       lastTeamComparisonRangeRef.current = `${range.from}|${range.to}`;
       setTeamComparisonHasRun(true);
       setBusy(true); setError(""); setTeamData(null); setTeamProgress("");
@@ -6588,7 +6596,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   // selection changes deliberately require another explicit Run comparison so users
   // can finish setting the comparison scope before any Karbon requests are sent.
   useEffect(() => {
-    if (!teamComparisonHasRun || viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+    if (!teamComparisonHasRun || viewMode !== "team" || !canUseTeamView || !range || selectedTeamOptions.length === 0) {
       autoComparePendingRef.current = false;
       if (autoCompareTimerRef.current) {
         clearTimeout(autoCompareTimerRef.current);
@@ -6621,7 +6629,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   // Karbon requests.
   useEffect(() => {
     if (busy || !autoComparePendingRef.current) return;
-    if (!teamComparisonHasRun || viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+    if (!teamComparisonHasRun || viewMode !== "team" || !canUseTeamView || !range || selectedTeamOptions.length === 0) {
       autoComparePendingRef.current = false;
       return;
     }
@@ -6709,14 +6717,14 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
       </div>
     </div>
 
-    {isAdmin && !forceSelfOnly && <div className="cb-tabs" style={{ width: "fit-content", marginBottom: 16 }}>
+    {canUseTeamView && <div className="cb-tabs" style={{ width: "fit-content", marginBottom: 16 }}>
       <button type="button" className={`cb-tab ${viewMode === "individual" ? "active" : ""}`} onClick={() => { setViewMode("individual"); setError(""); }}>Individual view</button>
       <button type="button" className={`cb-tab ${viewMode === "team" ? "active" : ""}`} onClick={() => { setViewMode("team"); setError(""); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; setTeamData(null); }}>Team view</button>
     </div>}
 
     <div style={styles.controlPanel}>
       <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-        {viewMode === "individual" && isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "individual" && canUseTeamView && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
         {viewMode === "team" && canSelectTeamMembers && sortedTeamPods.length > 0 && <div style={{ minWidth: 190 }}>
           <div className="cb-label">Pod</div>
           <select
@@ -10132,8 +10140,9 @@ export default function App() {
   const effectiveIsSuperAdmin = effectiveCurrentUser?.role === "super_admin";
   const allowedReportModes = reportModesForMember(effectiveCurrentUser);
   const canViewReports = allowedReportModes.length > 0;
-  const reportMembers = effectiveCurrentUser?.role === "admin" && effectiveCurrentUser?.pod_id
-    ? members.filter((m) => m.role !== "super_admin" && m.pod_id === effectiveCurrentUser.pod_id)
+  const canSeeSuperAdmins = hasAdditionalPermission(effectiveCurrentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+  const reportMembers = effectiveCurrentUser?.role === "admin"
+    ? members.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !effectiveCurrentUser?.pod_id || m.pod_id === effectiveCurrentUser.pod_id))
     : members;
 
   function changeSuperAdminViewMode(mode) {
