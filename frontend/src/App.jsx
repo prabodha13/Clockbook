@@ -135,6 +135,25 @@ function localWorkDateKey(iso) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function workDateKeyInTimeZone(value, timeZone) {
+  if (!value) return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(d);
+    const get = (type) => parts.find((part) => part.type === type)?.value || "";
+    const year = get("year");
+    const month = get("month");
+    const day = get("day");
+    return year && month && day ? `${year}-${month}-${day}` : "";
+  } catch {
+    return localWorkDateKey(d.toISOString());
+  }
+}
+
 function isToday(iso) {
   if (!iso) return false;
   const d = new Date(iso);
@@ -8627,12 +8646,22 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
 
 function ForgottenTimeRecoveryModal({ gapMs, tasks, currentUser, onClose, onRecoverExisting, onCreateNew }) {
   const eligibleTasks = useMemo(() => {
-    const own = (tasks || []).filter((t) => t.owner_id === currentUser.id && (t.status === "paused" || t.status === "todo"));
+    const timeZone = currentUser?.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const todayKey = workDateKeyInTimeZone(new Date(), timeZone);
+    const belongsToToday = (task) => {
+      if (workDateKeyInTimeZone(task.created_at, timeZone) === todayKey) return true;
+      return (task.segments || []).some((seg) => workDateKeyInTimeZone(seg?.start, timeZone) === todayKey);
+    };
+    const own = (tasks || []).filter((t) =>
+      t.owner_id === currentUser.id &&
+      (t.status === "paused" || t.status === "todo") &&
+      belongsToToday(t)
+    );
     return own.sort((a, b) => {
       const rank = (t) => t.status === "paused" ? 0 : 1;
       return rank(a) - rank(b) || String(a.client_name || "").localeCompare(String(b.client_name || "")) || String(a.name || "").localeCompare(String(b.name || ""));
     });
-  }, [tasks, currentUser.id]);
+  }, [tasks, currentUser.id, currentUser?.timezone_name]);
   const [mode, setMode] = useState(eligibleTasks.length ? "existing" : "new");
   const [taskId, setTaskId] = useState(eligibleTasks[0]?.id || "");
   const [busy, setBusy] = useState(false);
@@ -8695,7 +8724,7 @@ function ForgottenTimeRecoveryModal({ gapMs, tasks, currentUser, onClose, onReco
                   <div className="cb-hint" style={{ marginTop: 4 }}>The recovered time will be added to this task, then its timer will continue from now.</div>
                 </div>
               )}
-              {!eligibleTasks.length && <div className="cb-empty">You do not have any In progress or To do tasks. Create a new task instead.</div>}
+              {!eligibleTasks.length && <div className="cb-empty">You do not have any In progress or To do tasks from today. Create a new task instead.</div>}
             </>
           ) : (
             <div style={{ padding: "11px 12px", border: "1px solid var(--line)", borderRadius: 10 }}>
