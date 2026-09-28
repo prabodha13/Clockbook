@@ -982,6 +982,7 @@ PERMISSION_MANAGE_DELEGATION_EXCLUSIONS = "manage_delegation_exclusions"
 PERMISSION_MANAGE_WORKSPACE_BRANDING = "manage_workspace_branding"
 PERMISSION_MANAGE_INTEGRATIONS = "manage_integrations"
 PERMISSION_MANAGE_AUDIT_RECORDING = "manage_audit_recording"
+PERMISSION_MANAGE_SUPER_ADMINS = "manage_super_admins"
 DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_REPORT_HELP,
     PERMISSION_REPORT_OVERRIDES,
@@ -993,6 +994,7 @@ DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_MANAGE_WORKSPACE_BRANDING,
     PERMISSION_MANAGE_INTEGRATIONS,
     PERMISSION_MANAGE_AUDIT_RECORDING,
+    PERMISSION_MANAGE_SUPER_ADMINS,
 }
 ALL_DELEGATABLE_PERMISSIONS = DELEGATABLE_ADMIN_PERMISSIONS | {PERMISSION_INSIGHTS_LEAVE_CAPACITY}
 
@@ -2644,8 +2646,7 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
     if not member:
         raise HTTPException(404, "Member not found")
     _require_expected_version(member, payload.expected_version)
-    allowed_ids = _insights_allowed_member_ids(current_member, db)
-    if member_id not in allowed_ids:
+    if not _member_in_admin_scope(current_member, member):
         raise HTTPException(403, "You cannot change capacity for that person")
     value = float(payload.weekly_capacity_hours)
     if value < 0 or value > 168:
@@ -2726,8 +2727,7 @@ def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate
     if not member:
         raise HTTPException(404, "Member not found")
     _require_expected_version(member, payload.expected_version)
-    allowed_ids = _insights_allowed_member_ids(current_member, db)
-    if member_id not in allowed_ids:
+    if not _member_in_admin_scope(current_member, member):
         raise HTTPException(403, "You cannot change the time zone for that person")
     value = (payload.timezone_name or "").strip()
     try:
@@ -3295,12 +3295,18 @@ def _insights_allowed_member_ids(current_member: models.Member, db: Session):
         return {current_member.id}
     if current_member.role == "super_admin":
         return {m.id for m in db.query(models.Member.id).all()}
-    # Match the existing admin visibility model used by Dashboard / Export:
-    # regular admins never see super-admin data, and pod admins stay inside their pod.
+    # Match the existing admin visibility model used by Dashboard / Export. By default,
+    # regular admins do not see Super Admin data. A Super Admin can explicitly delegate
+    # Manage Super Admins, which adds Super Admin accounts to the admin's normal read scope
+    # without allowing role/security changes to those accounts. Pod scope still applies to
+    # ordinary members; Super Admins are included explicitly because they are commonly podless.
     query = db.query(models.Member.id).filter(models.Member.role != "super_admin")
     if current_member.pod_id:
         query = query.filter(models.Member.pod_id == current_member.pod_id)
-    return {m.id for m in query.all()}
+    allowed = {m.id for m in query.all()}
+    if _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS):
+        allowed.update(m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all())
+    return allowed
 
 
 def _insights_task_work_date(task: models.TaskInstance):
@@ -3829,10 +3835,10 @@ def get_insights(
             if not selected_capacity_pod:
                 raise HTTPException(404, "Pod not found")
             team_query = team_query.filter(models.Member.pod_id == capacity_pod_id)
-        if current_member.role != "super_admin":
-            # Regular admins can see members and admins in their permitted scope,
-            # but never super admins. _insights_allowed_member_ids already applies
-            # the pod restriction when the admin belongs to a pod.
+        if current_member.role != "super_admin" and not _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS):
+            # Regular admins only see Super Admins here when that visibility has been
+            # explicitly delegated. _insights_allowed_member_ids already applies the
+            # ordinary pod restriction and adds Super Admins only for that permission.
             team_query = team_query.filter(models.Member.role != "super_admin")
         team_members = team_query.order_by(models.Member.name).all()
         if team_members:
@@ -4681,11 +4687,14 @@ def list_tasks(current_member: models.Member = Depends(get_current_member), db: 
     if current_member.role == "super_admin":
         pass  # sees everything, including other super admins, regardless of any pod
     elif current_member.role == "admin":
+        can_see_super_admins = _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS)
         super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
-        if super_admin_ids:
+        if super_admin_ids and not can_see_super_admins:
             query = query.filter(~models.TaskInstance.owner_id.in_(super_admin_ids))
         if current_member.pod_id:
             pod_member_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
+            if can_see_super_admins:
+                pod_member_ids = list(dict.fromkeys(pod_member_ids + super_admin_ids))
             query = query.filter(models.TaskInstance.owner_id.in_(pod_member_ids))
     else:
         query = query.filter(models.TaskInstance.owner_id == current_member.id)
@@ -6739,9 +6748,14 @@ def get_export(client_id: str = "all", pushed: str = "pending", date_from: str =
     if current_member.role == "member":
         submitted_by = current_member.id
     elif current_member.role == "admin":
-        exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+        can_see_super_admins = _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS)
+        super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+        if not can_see_super_admins:
+            exclude_owner_ids = super_admin_ids
         if current_member.pod_id:
             include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
+            if can_see_super_admins:
+                include_owner_ids = list(dict.fromkeys(include_owner_ids + super_admin_ids))
             submitted_pod_id = current_member.pod_id
     return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
 
@@ -6763,9 +6777,14 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     if current_member.role == "member":
         submitted_by = current_member.id
     elif current_member.role == "admin":
-        exclude_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+        can_see_super_admins = _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS)
+        super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
+        if not can_see_super_admins:
+            exclude_owner_ids = super_admin_ids
         if current_member.pod_id:
             include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
+            if can_see_super_admins:
+                include_owner_ids = list(dict.fromkeys(include_owner_ids + super_admin_ids))
             submitted_pod_id = current_member.pod_id
     rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
     buffer = StringIO()
