@@ -7642,7 +7642,9 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
               <div>
                 <div className="cb-row-task">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
                 <div className="cb-row-meta">
-                  {roleLabel(m.role)}
+                  {m.id === currentUser.id
+                    ? (currentUser.role === "member" ? "Staff" : roleLabel(currentUser.role))
+                    : roleLabel(m.role)}
                   {!m.email && " \u00b7 No login set up yet"}
                   {m.google_calendar_connected && " \u00b7 Calendar connected"}
                   {m.pod_id && ` \u00b7 ${(pods.find((p) => p.id === m.pod_id) || {}).name || "Unknown pod"}`}
