@@ -7870,6 +7870,7 @@ function HelpReportView() {
   const [customTo, setCustomTo] = useState("");
   const [expandedPair, setExpandedPair] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [personFilter, setPersonFilter] = useState("all");
 
   function loadReports(showRefreshing = false) {
     if (showRefreshing) setIsRefreshing(true);
@@ -7931,7 +7932,7 @@ function HelpReportView() {
     return { start, end };
   }, [periodMode, customFrom, customTo]);
 
-  const filteredDetails = useMemo(() => {
+  const periodDetails = useMemo(() => {
     if (!details) return [];
     if (!activeRange.start || !activeRange.end) return details;
     return details.filter((d) => {
@@ -7939,6 +7940,13 @@ function HelpReportView() {
       return Number.isFinite(t) && t >= activeRange.start.getTime() && t <= activeRange.end.getTime();
     });
   }, [details, activeRange]);
+
+  const helpPeople = useMemo(() => Array.from(new Set((periodDetails || []).map((d) => d.member_name).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [periodDetails]);
+
+  const filteredDetails = useMemo(() => {
+    if (personFilter === "all") return periodDetails;
+    return periodDetails.filter((d) => d.member_name === personFilter);
+  }, [periodDetails, personFilter]);
 
   const summaryRows = useMemo(() => {
     const byPerson = {};
@@ -7953,8 +7961,32 @@ function HelpReportView() {
         row.received_count += 1;
       }
     }
-    return Object.values(byPerson).sort((a, b) => b[sortBy] - a[sortBy]);
+    return Object.values(byPerson).map((row) => {
+      const totalCount = row.helped_count + row.received_count;
+      const totalSeconds = row.helped_seconds + row.received_seconds;
+      return {
+        ...row,
+        net_support_seconds: row.helped_seconds - row.received_seconds,
+        average_entry_seconds: totalCount ? totalSeconds / totalCount : 0,
+      };
+    }).sort((a, b) => b[sortBy] - a[sortBy]);
   }, [filteredDetails, sortBy]);
+
+  const helpSummary = useMemo(() => {
+    const helpedSeconds = summaryRows.reduce((sum, row) => sum + Number(row.helped_seconds || 0), 0);
+    const receivedSeconds = summaryRows.reduce((sum, row) => sum + Number(row.received_seconds || 0), 0);
+    const entryCount = summaryRows.reduce((sum, row) => sum + Number(row.helped_count || 0) + Number(row.received_count || 0), 0);
+    const topHelper = [...summaryRows].sort((a, b) => b.helped_seconds - a.helped_seconds)[0] || null;
+    const mostSupported = [...summaryRows].sort((a, b) => b.received_seconds - a.received_seconds)[0] || null;
+    return {
+      helpedSeconds,
+      receivedSeconds,
+      netSeconds: helpedSeconds - receivedSeconds,
+      averageEntrySeconds: entryCount ? (helpedSeconds + receivedSeconds) / entryCount : 0,
+      topHelper,
+      mostSupported,
+    };
+  }, [summaryRows]);
 
   const reconciliationRows = useMemo(() => {
     const pairs = {};
@@ -7991,6 +8023,63 @@ function HelpReportView() {
     });
   }, [filteredDetails]);
 
+  const reconciliationSummary = useMemo(() => {
+    const counts = { Matched: 0, Review: 0, "Missing receiver entry": 0, "Missing helper entry": 0 };
+    for (const row of reconciliationRows) counts[row.status] = (counts[row.status] || 0) + 1;
+    return counts;
+  }, [reconciliationRows]);
+
+  const helpTrendRows = useMemo(() => {
+    if (!activeRange.start || !activeRange.end) return [];
+    const dayCount = Math.max(1, Math.floor((activeRange.end.getTime() - activeRange.start.getTime()) / 86400000) + 1);
+    const mode = dayCount <= 31 ? "daily" : dayCount <= 120 ? "weekly" : "monthly";
+    const buckets = new Map();
+
+    const keyFor = (date) => {
+      const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      if (mode === "monthly") return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+      if (mode === "weekly") return localDateKeyFromDate(startOfLocalWeek(d));
+      return localDateKeyFromDate(d);
+    };
+
+    const cursor = new Date(activeRange.start.getFullYear(), activeRange.start.getMonth(), activeRange.start.getDate());
+    const last = new Date(activeRange.end.getFullYear(), activeRange.end.getMonth(), activeRange.end.getDate());
+    while (cursor <= last) {
+      const key = keyFor(cursor);
+      if (!buckets.has(key)) buckets.set(key, { period_start: key, helped_seconds: 0, received_seconds: 0 });
+      if (mode === "monthly") cursor.setMonth(cursor.getMonth() + 1, 1);
+      else if (mode === "weekly") cursor.setDate(cursor.getDate() + 7);
+      else cursor.setDate(cursor.getDate() + 1);
+    }
+
+    for (const d of filteredDetails) {
+      const dt = new Date(d.created_at);
+      if (!Number.isFinite(dt.getTime())) continue;
+      const key = keyFor(dt);
+      if (!buckets.has(key)) buckets.set(key, { period_start: key, helped_seconds: 0, received_seconds: 0 });
+      const row = buckets.get(key);
+      if (d.direction === "helped") row.helped_seconds += Number(d.seconds || 0);
+      else row.received_seconds += Number(d.seconds || 0);
+    }
+    return Array.from(buckets.values()).sort((a, b) => a.period_start.localeCompare(b.period_start));
+  }, [filteredDetails, activeRange]);
+
+  function HelpTrendChart({ rows = [], compact = false }) {
+    if (!rows.length) return <div className="cb-empty">No help activity in this period.</div>;
+    const width = 760, height = compact ? 150 : 220, padL = 46, padR = 18, padT = 18, padB = compact ? 28 : 36;
+    const maxValue = Math.max(1, ...rows.flatMap((r) => [Number(r.helped_seconds || 0), Number(r.received_seconds || 0)]));
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    const points = (key) => rows.map((r, i) => `${x(i)},${y(r[key])}`).join(" ");
+    const maxLabels = compact ? 6 : 10;
+    const labelEvery = Math.max(1, Math.ceil(rows.length / maxLabels));
+    return <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: compact ? 155 : 220, display: "block" }} role="img" aria-label="Recorded help activity trend">
+      {[0, .25, .5, .75, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="2" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
+      <polyline fill="none" stroke="#245C43" strokeWidth="2.5" points={points("helped_seconds")}/><polyline fill="none" stroke="#2467D7" strokeWidth="2.5" points={points("received_seconds")}/>{rows.map((r, i) => <g key={r.period_start}><circle cx={x(i)} cy={y(r.helped_seconds)} r="3" fill="#245C43"/><circle cx={x(i)} cy={y(r.received_seconds)} r="3" fill="#2467D7"/>{(i % labelEvery === 0 || i === rows.length - 1) && <text x={x(i)} y={height-9} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>}</g>)}
+    </svg>;
+  }
+
   const expandedDailyRows = useMemo(() => {
     if (!expandedPair) return [];
     const pair = reconciliationRows.find((r) => r.key === expandedPair);
@@ -8017,7 +8106,7 @@ function HelpReportView() {
     }).sort((a, b) => b.date.localeCompare(a.date));
   }, [expandedPair, reconciliationRows]);
 
-  useEffect(() => { setExpandedPair(null); }, [periodMode, customFrom, customTo]);
+  useEffect(() => { setExpandedPair(null); }, [periodMode, customFrom, customTo, personFilter]);
 
   function statusBadge(status) {
     const matched = status === "Matched";
@@ -8053,6 +8142,8 @@ function HelpReportView() {
           <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 145 }} /></div>
         </div>}
 
+        <div style={{ width: 210, flex: "0 0 auto" }}><div className="cb-label">Person</div><select className="cb-select" value={personFilter} onChange={(e) => setPersonFilter(e.target.value)} style={{ width: "100%" }}><option value="all">All people</option>{helpPeople.map((name) => <option key={name} value={name}>{name}</option>)}</select></div>
+
         <button className="cb-btn cb-btn-sm" onClick={() => loadReports(true)} disabled={isRefreshing} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />{isRefreshing ? "Refreshing…" : "Refresh"}</button>
       </div>
 
@@ -8063,22 +8154,39 @@ function HelpReportView() {
       )}
 
       {!detailsError && details !== null && filteredDetails.length > 0 && <>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
+          {[
+            ["Time spent helping", formatHM(helpSummary.helpedSeconds), helpSummary.topHelper ? `Top helper: ${helpSummary.topHelper.member_name}` : "Recorded help given"],
+            ["Time received help", formatHM(helpSummary.receivedSeconds), helpSummary.mostSupported ? `Most supported: ${helpSummary.mostSupported.member_name}` : "Recorded help received"],
+            ["Net recorded support", helpSummary.netSeconds === 0 ? "0m" : `${helpSummary.netSeconds > 0 ? "+" : "−"}${formatHM(Math.abs(helpSummary.netSeconds))}`, "Helping minus help received"],
+            ["Average help entry", formatHM(helpSummary.averageEntrySeconds), "Average duration of a recorded help entry"],
+          ].map(([label, value, detail]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "13px 15px", minWidth: 0 }}><div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700, marginTop: 3 }}>{value}</div><div className="cb-hint" style={{ marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</div></div>)}
+        </div>
+
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16, marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 4 }}><div className="cb-group-title">Help trend</div><div style={{ display: "flex", gap: 14, fontSize: 10.5, color: "var(--ink-soft)" }}><span><span style={{ display: "inline-block", width: 14, borderTop: "2px solid #245C43", marginRight: 5, verticalAlign: "middle" }}/>Helping</span><span><span style={{ display: "inline-block", width: 14, borderTop: "2px solid #2467D7", marginRight: 5, verticalAlign: "middle" }}/>Receiving help</span></div></div>
+          <div className="cb-hint" style={{ marginBottom: 6 }}>Trend is based on recorded help entries in the selected period{personFilter !== "all" ? ` for ${personFilter}` : ""}.</div>
+          <HelpTrendChart rows={helpTrendRows} />
+        </div>
+
         <div className="cb-group-head" style={{ justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Help activity</div><div className="cb-group-count">{summaryRows.length}</div></div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
-            <colgroup><col style={{ width: "31%" }} /><col style={{ width: "22%" }} /><col style={{ width: "22%" }} /><col style={{ width: "12.5%" }} /><col style={{ width: "12.5%" }} /></colgroup>
+            <colgroup><col style={{ width: "24%" }} /><col style={{ width: "17%" }} /><col style={{ width: "17%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /><col style={{ width: "8%" }} /><col style={{ width: "8%" }} /></colgroup>
             <thead><tr>
               <th>Person</th>
               <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("helped_seconds")}>Time spent helping{sortBy === "helped_seconds" ? " ↓" : ""}</th>
               <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("received_seconds")}>Time received help{sortBy === "received_seconds" ? " ↓" : ""}</th>
-              <th className="num">Times helped</th><th className="num">Times received</th>
+              <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("net_support_seconds")} title="Recorded time helping minus recorded time receiving help">Net recorded support{sortBy === "net_support_seconds" ? " ↓" : ""}</th>
+              <th className="num">Avg help entry</th><th className="num">Times helped</th><th className="num">Times received</th>
             </tr></thead>
-            <tbody>{summaryRows.map((r) => <tr key={r.member_name}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.helped_seconds)}</td><td className="num cb-mono">{formatHM(r.received_seconds)}</td><td className="num cb-mono">{r.helped_count}</td><td className="num cb-mono">{r.received_count}</td></tr>)}</tbody>
+            <tbody>{summaryRows.map((r) => <tr key={r.member_name}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.helped_seconds)}</td><td className="num cb-mono">{formatHM(r.received_seconds)}</td><td className="num cb-mono">{r.net_support_seconds === 0 ? "0m" : `${r.net_support_seconds > 0 ? "+" : "−"}${formatHM(Math.abs(r.net_support_seconds))}`}</td><td className="num cb-mono">{formatHM(r.average_entry_seconds)}</td><td className="num cb-mono">{r.helped_count}</td><td className="num cb-mono">{r.received_count}</td></tr>)}</tbody>
           </table>
         </div>
 
         <div className="cb-group-head" style={{ marginTop: 30, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Help reconciliation</div><div className="cb-group-count">{reconciliationRows.length}</div></div>
         <div className="cb-hint" style={{ marginBottom: 10 }}>Compares what the receiver logged against what the helper logged for the same pairing. Matching is based on total duration, so one 60-minute entry can reconcile with two 30-minute entries.</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}><span className="cb-hint" style={{ border: "1px solid #b7e4c7", background: "#effaf3", color: "#176b3a", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Matched {reconciliationSummary.Matched || 0}</span><span className="cb-hint" style={{ border: "1px solid #f4d58d", background: "#fff8e8", color: "#986000", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Review {reconciliationSummary.Review || 0}</span><span className="cb-hint" style={{ border: "1px solid #f3c7c7", background: "#fff3f3", color: "#a33a3a", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Missing receiver {reconciliationSummary["Missing receiver entry"] || 0}</span><span className="cb-hint" style={{ border: "1px solid #f3c7c7", background: "#fff3f3", color: "#a33a3a", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Missing helper {reconciliationSummary["Missing helper entry"] || 0}</span></div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
             <colgroup><col style={{ width: "20%" }} /><col style={{ width: "20%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "10%" }} /><col style={{ width: "14%" }} /></colgroup>
@@ -8093,6 +8201,7 @@ function HelpReportView() {
               </tr>
               {expandedPair === r.key && <tr><td colSpan={6} style={{ padding: 0, background: "var(--paper)" }}><div style={{ padding: "12px 16px 16px 32px" }}>
                 <div className="cb-hint" style={{ marginBottom: 8 }}>Daily comparison for {r.receiver} and {r.helper}</div>
+                {expandedDailyRows.length > 1 && <div style={{ marginBottom: 10, border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px", background: "#fff" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}><strong style={{ fontSize: 11.5 }}>Pair trend</strong><span className="cb-hint">Helper reported vs receiver reported</span></div><HelpTrendChart compact rows={[...expandedDailyRows].reverse().map((day) => ({ period_start: day.date, helped_seconds: day.helperSeconds, received_seconds: day.receiverSeconds }))} /></div>}
                 <table className="cb-table" style={{ background: "transparent" }}><thead><tr><th>Date</th><th className="num">Receiver reported</th><th className="num">Helper reported</th><th className="num">Difference</th><th>Status</th></tr></thead>
                   <tbody>{expandedDailyRows.map((day) => <tr key={day.date}><td>{formatDate(`${day.date}T12:00:00`)}</td><td className="num cb-mono">{formatHM(day.receiverSeconds)} · {day.receiverCount}x</td><td className="num cb-mono">{formatHM(day.helperSeconds)} · {day.helperCount}x</td><td className="num cb-mono">{day.delta === 0 ? "0m" : `${day.delta > 0 ? "+" : "−"}${formatHM(Math.abs(day.delta))}`}</td><td>{statusBadge(day.status)}</td></tr>)}</tbody>
                 </table>
