@@ -7065,6 +7065,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
       const label = (values) => (values.length === 1 ? (values[0] || "none") : "Multiple");
       return {
         key,
+        workDateKey: workDate,
         client: groupRows[0].client,
         role: groupRows[0].role,
         task_type: groupRows[0].task_type,
@@ -7082,6 +7083,30 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
       };
     });
   }, [rows]);
+
+  // Present export rows in clear work-date blocks so users can tell which day they are
+  // pushing to Karbon without repeatedly reading the Date cell on every line.
+  const dayBlocks = useMemo(() => {
+    const byDate = new Map();
+    for (const group of groups) {
+      const dateKey = group.workDateKey || "unknown";
+      if (!byDate.has(dateKey)) byDate.set(dateKey, []);
+      byDate.get(dateKey).push(group);
+    }
+    return Array.from(byDate.entries()).map(([dateKey, blockGroups]) => {
+      if (dateKey === "unknown") {
+        return { dateKey, weekday: "DATE NOT AVAILABLE", dateLabel: "Check these entries", groups: blockGroups };
+      }
+      const [year, month, day] = dateKey.split("-").map(Number);
+      const date = new Date(year, month - 1, day, 12, 0, 0);
+      return {
+        dateKey,
+        weekday: date.toLocaleDateString(undefined, { weekday: "long" }).toUpperCase(),
+        dateLabel: date.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }).toUpperCase(),
+        groups: blockGroups,
+      };
+    });
+  }, [groups]);
 
   function toggleGroup(key) {
     setExpandedGroups((prev) => {
@@ -7231,11 +7256,38 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
             {rows.length === 0 && (
               <tr><td colSpan={isAdmin ? 16 : 15}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
-            {groups.map((g) => {
+            {dayBlocks.map((block, blockIndex) => {
+              const blockBackground = blockIndex % 2 === 0 ? "var(--paper)" : "rgba(29, 74, 56, 0.025)";
+              return (
+                <Fragment key={block.dateKey}>
+                  <tr className="cb-export-date-divider">
+                    <td
+                      colSpan={isAdmin ? 16 : 15}
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        zIndex: 3,
+                        padding: "9px 14px",
+                        background: "var(--paper)",
+                        borderTop: blockIndex === 0 ? "none" : "1px solid var(--line)",
+                        borderBottom: "1px solid var(--line)",
+                        boxShadow: "0 1px 0 rgba(0,0,0,0.02)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "baseline", gap: 9, letterSpacing: "0.02em" }}>
+                        <span style={{ fontSize: 12, fontWeight: 800, color: "var(--green)" }}>{block.weekday}</span>
+                        <span style={{ fontSize: 12.5, fontWeight: 700, color: "var(--ink)" }}>{block.dateLabel}</span>
+                        <span style={{ marginLeft: "auto", fontSize: 11.5, fontWeight: 600, color: "var(--ink-faint)" }}>
+                          {block.groups.reduce((sum, group) => sum + group.count, 0)} entr{block.groups.reduce((sum, group) => sum + group.count, 0) === 1 ? "y" : "ies"}
+                        </span>
+                      </div>
+                    </td>
+                  </tr>
+                  {block.groups.map((g) => {
               if (g.count === 1) {
                 const r = g.rows[0];
                 return (
-                  <tr key={r.id}>
+                  <tr key={r.id} style={{ background: blockBackground }}>
                     <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
                     <td>{r.client}</td>
                     <td><ExportTaskCell row={r} /></td>
@@ -7270,7 +7322,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
               const expanded = expandedGroups.has(g.key);
               return (
                 <Fragment key={g.key}>
-                  <tr className="cb-export-group-row" style={{ cursor: "pointer", background: "var(--paper)" }} onClick={() => toggleGroup(g.key)}>
+                  <tr className="cb-export-group-row" style={{ cursor: "pointer", background: blockBackground }} onClick={() => toggleGroup(g.key)}>
                     <td>{g.dateLabel}</td>
                     <td>{g.client}</td>
                     <td style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -7301,7 +7353,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     {isAdmin && <td></td>}
                   </tr>
                   {expanded && g.rows.map((r) => (
-                    <tr key={r.id} className="cb-export-group-child">
+                    <tr key={r.id} className="cb-export-group-child" style={{ background: blockBackground }}>
                       <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
                       <td></td>
                       <td><ExportTaskCell row={r} child /></td>
@@ -7332,6 +7384,9 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       )}
                     </tr>
                   ))}
+                </Fragment>
+              );
+                  })}
                 </Fragment>
               );
             })}
