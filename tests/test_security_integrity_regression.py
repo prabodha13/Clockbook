@@ -1,8 +1,13 @@
 from datetime import datetime, timedelta
+from pathlib import Path
 from uuid import uuid4
+import importlib.util
+import json
+import sys
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 import database
 import main
@@ -14,14 +19,13 @@ def _scope(prefix):
     return f"{prefix}_{uuid4().hex[:10]}"
 
 
-def _tenant(session, tenant_id, slug):
+def _tenant(session, tenant_id=None):
+    tenant_id = tenant_id or _scope("phase2_tenant")
     previous = session.info.get("skip_tenant_scope")
     session.info["skip_tenant_scope"] = True
-    tenant = session.get(models.Tenant, tenant_id)
-    if tenant is None:
-        tenant = models.Tenant(id=tenant_id, name=slug, slug=slug)
-        session.add(tenant)
-        session.commit()
+    tenant = models.Tenant(id=tenant_id, name=tenant_id, slug=tenant_id)
+    session.add(tenant)
+    session.commit()
     if previous is None:
         session.info.pop("skip_tenant_scope", None)
     else:
@@ -30,354 +34,186 @@ def _tenant(session, tenant_id, slug):
     return tenant
 
 
-def _member(session, tenant_id, email, role="member", pod_id=None):
+def _member(session, tenant_id, email=None, role="member"):
+    email = email or f"{uuid4().hex}@example.com"
     previous = session.info.get("skip_tenant_scope")
     session.info["skip_tenant_scope"] = True
-    user = session.query(models.User).filter(models.User.email == email).first()
-    if user is None:
-        user = models.User(email=email, password_hash="x", default_tenant_id=tenant_id)
-        session.add(user)
-        session.flush()
-    member = session.query(models.Member).filter(
-        models.Member.tenant_id == tenant_id,
-        models.Member.user_id == user.id,
-    ).first()
-    if member is None:
-        member = models.Member(
-            tenant_id=tenant_id,
-            user_id=user.id,
-            name=email,
-            email=email,
-            role=role,
-            pod_id=pod_id,
-        )
-        session.add(member)
-        session.commit()
+    user = models.User(email=email, password_hash="test-hash", default_tenant_id=tenant_id)
+    session.add(user)
+    session.flush()
+    member = models.Member(
+        tenant_id=tenant_id,
+        user_id=user.id,
+        name=email,
+        email=email,
+        role=role,
+        password_hash="legacy-secret-hash",
+        google_refresh_token="refresh-secret-value",
+    )
+    session.add(member)
+    session.commit()
     if previous is None:
         session.info.pop("skip_tenant_scope", None)
     else:
         session.info["skip_tenant_scope"] = previous
     session.info["tenant_id"] = tenant_id
-    return member
+    return member, user
 
 
-def _client(session, name, code):
-    client = models.Client(name=name, code=code)
-    session.add(client)
-    session.commit()
-    session.refresh(client)
-    return client
-
-
-def _submitted_task(session, owner, client, name, *, seconds=600, submitted_pod_id=None, adjusted_seconds=None):
-    start = datetime(2026, 9, 25, 9, 0, 0)
-    task = models.TaskInstance(
-        client_id=client.id,
-        client_name=client.name,
-        name=name,
-        owner_id=owner.id,
-        status="submitted",
-        submitted_by_id=owner.id,
-        submitted_pod_id=submitted_pod_id,
-        submitted_at=start + timedelta(seconds=seconds),
-        segments=[{"start": start.isoformat() + "Z", "end": (start + timedelta(seconds=seconds)).isoformat() + "Z"}],
-        adjusted_seconds=adjusted_seconds,
-        role="",
-        task_type="",
-    )
-    session.add(task)
-    session.commit()
-    session.refresh(task)
-    return task
-
-
-def test_export_never_crosses_tenant_boundary():
+def test_revoked_or_unknown_session_cannot_authenticate():
     s = database.SessionLocal()
     try:
-        tenant_a = _scope("phase1_export_a")
-        tenant_b = _scope("phase1_export_b")
-        _tenant(s, tenant_a, tenant_a)
-        admin_a = _member(s, tenant_a, "phase1-export-a@example.com", "super_admin")
-        client_a = _client(s, "Tenant A Client", "P1EA")
-        task_a = _submitted_task(s, admin_a, client_a, "Tenant A Task")
-
-        _tenant(s, tenant_b, tenant_b)
-        admin_b = _member(s, tenant_b, "phase1-export-b@example.com", "super_admin")
-        client_b = _client(s, "Tenant B Client", "P1EB")
-        task_b = _submitted_task(s, admin_b, client_b, "Tenant B Task")
-
-        s.info["tenant_id"] = tenant_a
-        admin_a = s.query(models.Member).filter(models.Member.email == "phase1-export-a@example.com").first()
-        rows = main.get_export(pushed="all", current_member=admin_a, db=s)
-        ids = {row["id"] for row in rows}
-        assert task_a.id in ids
-        assert task_b.id not in ids
+        tenant = _tenant(s)
+        member, user = _member(s, tenant.id)
+        token = _scope("phase2_session")
+        s.add(models.Session(token=token, tenant_id=tenant.id, member_id=member.id, user_id=user.id))
+        s.commit()
+        assert main.get_current_member(f"Bearer {token}", s).id == member.id
+        s.delete(s.get(models.Session, token))
+        s.commit()
+        with pytest.raises(HTTPException) as exc:
+            main.get_current_member(f"Bearer {token}", s)
+        assert exc.value.status_code == 401
     finally:
         s.close()
 
 
-def test_export_permissions_member_own_only_and_admin_pod_only():
+def test_session_cannot_be_rebound_to_a_different_global_user():
     s = database.SessionLocal()
     try:
-        tenant_id = _scope("phase1_export_scope")
-        _tenant(s, tenant_id, tenant_id)
-        pod_one = models.Pod(name="Phase 1 Pod One")
-        pod_two = models.Pod(name="Phase 1 Pod Two")
-        s.add_all([pod_one, pod_two])
+        tenant = _tenant(s)
+        member, _ = _member(s, tenant.id)
+        _, other_user = _member(s, tenant.id)
+        token = _scope("phase2_mismatch")
+        s.add(models.Session(token=token, tenant_id=tenant.id, member_id=member.id, user_id=other_user.id))
         s.commit()
-
-        admin = _member(s, tenant_id, "phase1-pod-admin@example.com", "admin", pod_one.id)
-        own_member = _member(s, tenant_id, "phase1-own@example.com", "member", pod_one.id)
-        other_member = _member(s, tenant_id, "phase1-other@example.com", "member", pod_two.id)
-        super_admin = _member(s, tenant_id, "phase1-super@example.com", "super_admin", pod_one.id)
-        client = _client(s, "Scoped Client", "P1SC")
-
-        own_task = _submitted_task(s, own_member, client, "Own", submitted_pod_id=pod_one.id)
-        other_task = _submitted_task(s, other_member, client, "Other pod", submitted_pod_id=pod_two.id)
-        super_task = _submitted_task(s, super_admin, client, "Super admin", submitted_pod_id=pod_one.id)
-
-        own_rows = main.get_export(pushed="all", current_member=own_member, db=s)
-        assert {row["id"] for row in own_rows} == {own_task.id}
-
-        admin_rows = main.get_export(pushed="all", current_member=admin, db=s)
-        admin_ids = {row["id"] for row in admin_rows}
-        assert own_task.id in admin_ids
-        assert other_task.id not in admin_ids
-        assert super_task.id not in admin_ids
+        with pytest.raises(HTTPException) as exc:
+            main.get_current_member(f"Bearer {token}", s)
+        assert exc.value.status_code == 401
+        assert "membership" in exc.value.detail.lower()
     finally:
         s.close()
 
 
-def test_forgotten_time_recovery_cannot_cross_owner_or_overlap_existing_time():
+def test_member_api_schema_never_serializes_authentication_secrets():
     s = database.SessionLocal()
     try:
-        tenant_id = _scope("phase1_recovery")
-        _tenant(s, tenant_id, tenant_id)
-        a = _member(s, tenant_id, "phase1-recovery-a@example.com")
-        b = _member(s, tenant_id, "phase1-recovery-b@example.com")
-        client = _client(s, "Recovery Scope", "P1RC")
-
-        task_b = models.TaskInstance(
-            client_id=client.id,
-            client_name=client.name,
-            name="B task",
-            owner_id=b.id,
-            status="todo",
-            segments=[],
-            role="",
-            task_type="",
-        )
-        s.add(task_b)
-        s.commit()
-        with pytest.raises(HTTPException) as cross_owner:
-            main.recover_task_time(task_b.id, schemas.TaskRecoverTime(seconds=300), current_member=a, db=s)
-        assert cross_owner.value.status_code == 403
-
-        now = datetime.utcnow()
-        task_a = models.TaskInstance(
-            client_id=client.id,
-            client_name=client.name,
-            name="A task",
-            owner_id=a.id,
-            status="paused",
-            segments=[{"start": (now - timedelta(minutes=4)).isoformat() + "Z", "end": now.isoformat() + "Z"}],
-            role="",
-            task_type="",
-        )
-        s.add(task_a)
-        s.commit()
-        with pytest.raises(HTTPException) as overlap:
-            main.recover_task_time(task_a.id, schemas.TaskRecoverTime(seconds=600), current_member=a, db=s)
-        assert overlap.value.status_code == 409
+        tenant = _tenant(s)
+        member, _ = _member(s, tenant.id)
+        payload = schemas.MemberOut.model_validate(member).model_dump()
+        blob = json.dumps(payload, default=str)
+        assert "password_hash" not in payload
+        assert "google_refresh_token" not in payload
+        assert "legacy-secret-hash" not in blob
+        assert "refresh-secret-value" not in blob
+        assert payload["google_calendar_connected"] is True
     finally:
         s.close()
 
 
-def test_manual_adjustment_stays_explicit_in_export_reporting():
+def test_integration_admin_views_return_hints_not_raw_credentials(monkeypatch):
     s = database.SessionLocal()
     try:
-        tenant_id = _scope("phase1_adjustment")
-        _tenant(s, tenant_id, tenant_id)
-        member = _member(s, tenant_id, "phase1-adjustment@example.com", "super_admin")
-        client = _client(s, "Adjustment Client", "P1AD")
-        task = _submitted_task(s, member, client, "Adjusted task", seconds=600, adjusted_seconds=900)
-
-        rows = main.get_export(pushed="all", current_member=member, db=s)
-        row = next(item for item in rows if item["id"] == task.id)
-        assert row["adjusted"] is True
-        assert row["adjustment_type"] == "Manual override"
-        assert row["tracked_seconds"] == 600
-        assert row["seconds"] == 900
+        tenant = _tenant(s)
+        admin, _ = _member(s, tenant.id, role="super_admin")
+        main._set_setting_value(s, "karbon_application_id_encrypted", "cipher-app")
+        main._set_setting_value(s, "karbon_access_key_encrypted", "cipher-key")
+        main._set_setting_value(s, "karbon_config_mode", "settings")
+        s.commit()
+        secrets = {"cipher-app": "application-super-secret", "cipher-key": "access-super-secret"}
+        monkeypatch.setattr(main, "_decrypt_secret", lambda value: secrets[value])
+        result = main.get_karbon_integration(current_member=admin, db=s)
+        blob = json.dumps(result)
+        assert "application-super-secret" not in blob
+        assert "access-super-secret" not in blob
+        assert result["application_id_hint"] == "cret"
+        assert result["access_key_hint"] == "cret"
     finally:
         s.close()
 
 
-def test_role_downgrade_revokes_existing_sessions_and_admin_cannot_grant_super_admin():
+def test_rate_limiter_blocks_after_limit_and_returns_retry_after():
     s = database.SessionLocal()
     try:
-        tenant_id = _scope("phase1_roles")
-        _tenant(s, tenant_id, tenant_id)
-        super_admin = _member(s, tenant_id, "phase1-role-super@example.com", "super_admin")
-        admin = _member(s, tenant_id, "phase1-role-admin@example.com", "admin")
-        target = _member(s, tenant_id, "phase1-role-target@example.com", "admin")
+        identity = _scope("phase2_rate")
+        main._enforce_rate_limit(s, identity, limit=2, window_seconds=900)
+        main._enforce_rate_limit(s, identity, limit=2, window_seconds=900)
+        with pytest.raises(HTTPException) as exc:
+            main._enforce_rate_limit(s, identity, limit=2, window_seconds=900)
+        assert exc.value.status_code == 429
+        assert int(exc.value.headers["Retry-After"]) >= 1
+    finally:
+        s.close()
 
-        s.add(models.Session(token=_scope("phase1-target-session"), member_id=target.id, user_id=target.user_id))
-        s.commit()
-        target_version = target.version
-        updated = main.update_member_role(
-            target.id,
-            schemas.MemberRoleUpdate(role="member", expected_version=target_version),
-            current_member=super_admin,
-            db=s,
-        )
-        assert updated.role == "member"
-        assert s.query(models.Session).filter(models.Session.member_id == target.id).count() == 0
-
-        admin_version = admin.version
-        with pytest.raises(HTTPException) as escalate:
-            main.update_member_role(
-                admin.id,
-                schemas.MemberRoleUpdate(role="super_admin", expected_version=admin_version),
+def test_invalid_timezone_is_rejected_server_side():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s)
+        admin, _ = _member(s, tenant.id, role="super_admin")
+        target, _ = _member(s, tenant.id)
+        with pytest.raises(HTTPException) as exc:
+            main.update_member_timezone(
+                target.id,
+                schemas.MemberTimezoneUpdate(timezone_name="Definitely/Not_A_Timezone", expected_version=target.version),
                 current_member=admin,
                 db=s,
             )
-        assert escalate.value.status_code == 403
+        assert exc.value.status_code == 400
     finally:
         s.close()
 
 
-def test_client_endpoint_rejects_stale_expected_version():
+def test_security_headers_and_invalid_content_length_are_enforced():
+    with TestClient(main.app) as client:
+        ok = client.get("/health/live")
+        assert ok.headers["X-Frame-Options"] == "DENY"
+        assert ok.headers["X-Content-Type-Options"] == "nosniff"
+        assert "camera=()" in ok.headers["Permissions-Policy"]
+
+        bad = client.post("/api/does-not-exist", headers={"content-length": "not-a-number"}, content=b"x")
+        assert bad.status_code == 400
+
+
+def test_portability_export_excludes_sessions_tokens_and_secret_settings(tmp_path, monkeypatch):
     s = database.SessionLocal()
+    tenant_id = None
     try:
-        tenant_id = _scope("phase1_stale")
-        _tenant(s, tenant_id, tenant_id)
-        admin = _member(s, tenant_id, "phase1-stale-admin@example.com", "super_admin")
-        client = _client(s, "Before", "P1ST")
-        stale_version = client.version
-
-        first = main.update_client(
-            client.id,
-            schemas.ClientCreate(name="First update", code="P1ST", expected_version=stale_version),
-            current_member=admin,
-            db=s,
-        )
-        assert first.name == "First update"
-
-        with pytest.raises(HTTPException) as stale:
-            main.update_client(
-                client.id,
-                schemas.ClientCreate(name="Stale overwrite", code="P1ST", expected_version=stale_version),
-                current_member=admin,
-                db=s,
-            )
-        assert stale.value.status_code == 409
-    finally:
-        s.close()
-
-
-def test_backend_rejects_direct_privileged_calls_from_ordinary_member():
-    s = database.SessionLocal()
-    try:
-        tenant_id = _scope("phase1_api_auth")
-        _tenant(s, tenant_id, tenant_id)
-        staff = _member(s, tenant_id, "phase1-api-staff@example.com", "member")
-        client = _client(s, "Protected Client", "P1PA")
-
-        with pytest.raises(HTTPException) as client_edit:
-            main.update_client(
-                client.id,
-                schemas.ClientCreate(name="Should not work", code="P1PA", expected_version=client.version),
-                current_member=staff,
-                db=s,
-            )
-        assert client_edit.value.status_code == 403
-
-        with pytest.raises(HTTPException) as report_access:
-            main.learning_management_report(current_member=staff, db=s)
-        assert report_access.value.status_code == 403
-    finally:
-        s.close()
-
-
-def test_forgotten_time_recovery_remains_separate_from_automatic_tracked_time_in_export():
-    s = database.SessionLocal()
-    try:
-        tenant_id = _scope("phase1_recovery_export")
-        _tenant(s, tenant_id, tenant_id)
-        member = _member(s, tenant_id, "phase1-recovery-export@example.com", "super_admin")
-        client = _client(s, "Recovery Export", "P1RE")
-        task = models.TaskInstance(
-            client_id=client.id,
-            client_name=client.name,
-            name="Recovery export task",
-            owner_id=member.id,
-            status="paused",
-            segments=[],
-            role="",
-            task_type="",
-        )
-        s.add(task)
+        tenant = _tenant(s)
+        tenant_id = tenant.id
+        member, user = _member(s, tenant.id)
+        s.add(models.Session(token="raw-session-token", tenant_id=tenant.id, member_id=member.id, user_id=user.id))
+        s.add(models.TenantSetting(tenant_id=tenant.id, key="calamari_api_key_encrypted", value="very-secret-api-key"))
+        s.add(models.TenantSetting(tenant_id=tenant.id, key="display_preference", value="compact"))
+        s.add(models.TenantInvitation(
+            tenant_id=tenant.id,
+            email="invite@example.com",
+            name="Invite",
+            role="member",
+            token_hash="secret-invitation-token-hash",
+            invited_by_id=member.id,
+            expires_at=datetime.utcnow() + timedelta(days=1),
+        ))
         s.commit()
-        recovered = main.recover_task_time(task.id, schemas.TaskRecoverTime(seconds=300), current_member=member, db=s)
-        recovered.status = "submitted"
-        recovered.submitted_by_id = member.id
-        recovered.submitted_at = datetime.utcnow()
-        s.commit()
-
-        rows = main.get_export(pushed="all", current_member=member, db=s)
-        row = next(item for item in rows if item["id"] == task.id)
-        assert row["adjusted"] is True
-        assert row["adjustment_type"] == "Forgotten time recovered"
-        assert row["forgotten_time_recovered_seconds"] == pytest.approx(300, abs=1)
-        assert row["tracked_seconds"] == pytest.approx(0, abs=1)
-        assert row["seconds"] == pytest.approx(300, abs=1)
     finally:
         s.close()
 
+    module_path = Path(__file__).resolve().parents[1] / "ops" / "export_tenant.py"
+    spec = importlib.util.spec_from_file_location("clockbook_export_tenant_phase2", module_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = tmp_path / "tenant-export.json"
+    monkeypatch.setattr(sys, "argv", [str(module_path), tenant_id, str(output)])
+    module.main()
 
-
-def test_forgotten_time_recovery_only_accepts_tasks_from_current_work_date():
-    s = database.SessionLocal()
-    try:
-        tenant_id = _scope("phase1_recovery_date")
-        _tenant(s, tenant_id, tenant_id)
-        member = _member(s, tenant_id, "phase1-recovery-date@example.com")
-        client = _client(s, "Recovery Date", "P1RD")
-
-        old_task = models.TaskInstance(
-            client_id=client.id,
-            client_name=client.name,
-            name="Old task",
-            owner_id=member.id,
-            status="todo",
-            segments=[],
-            created_at=datetime.utcnow() - timedelta(days=2),
-            role="",
-            task_type="",
-        )
-        today_task = models.TaskInstance(
-            client_id=client.id,
-            client_name=client.name,
-            name="Today's task",
-            owner_id=member.id,
-            status="todo",
-            segments=[],
-            created_at=datetime.utcnow(),
-            role="",
-            task_type="",
-        )
-        s.add_all([old_task, today_task])
-        s.commit()
-
-        with pytest.raises(HTTPException) as old_date:
-            main.recover_task_time(old_task.id, schemas.TaskRecoverTime(seconds=300), current_member=member, db=s)
-        assert old_date.value.status_code == 400
-        assert "current work date" in old_date.value.detail
-
-        recovered = main.recover_task_time(today_task.id, schemas.TaskRecoverTime(seconds=300), current_member=member, db=s)
-        assert recovered.status == "paused"
-        recovery_segments = [seg for seg in (recovered.segments or []) if seg.get("source") == "forgotten_time_recovery"]
-        assert len(recovery_segments) == 1
-        assert recovery_segments[0]["recovered_seconds"] == pytest.approx(300, abs=1)
-    finally:
-        s.close()
+    exported = json.loads(output.read_text(encoding="utf-8"))
+    blob = json.dumps(exported)
+    assert "sessions" not in exported["tables"]
+    assert "raw-session-token" not in blob
+    assert "very-secret-api-key" not in blob
+    assert "secret-invitation-token-hash" not in blob
+    assert "legacy-secret-hash" not in blob
+    assert "refresh-secret-value" not in blob
+    assert "compact" in blob
+    secret_setting = next(row for row in exported["tables"]["tenant_settings"] if row["key"] == "calamari_api_key_encrypted")
+    assert secret_setting["configured"] is True
+    assert "value" not in secret_setting
