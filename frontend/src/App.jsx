@@ -7293,16 +7293,16 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           zIndex: 250,
           pointerEvents: "none",
           overflow: "hidden",
-          background: "var(--paper)",
-          boxShadow: "0 3px 8px rgba(24, 38, 30, 0.10)",
+          background: "#ffffff",
+          boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)",
           borderBottom: "1px solid var(--line)",
         }}>
-          <table className="cb-table" style={{ width: "100%", tableLayout: "fixed", margin: 0 }}>
+          <table className="cb-table" style={{ width: "100%", tableLayout: "fixed", margin: 0, background: "#ffffff" }}>
             <colgroup>{floatingExportHeader.columns.map((width, index) => <col key={index} style={{ width }} />)}</colgroup>
-            <thead><tr>
-              <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
-              <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
-              <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
+            <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff", height: 38 }}>
+              <th style={{ background: "#ffffff" }}>Date</th><th style={{ background: "#ffffff" }}>Client</th><th style={{ background: "#ffffff" }}>Task</th><th style={{ background: "#ffffff" }}>Role</th><th style={{ background: "#ffffff" }}>Task type</th><th style={{ background: "#ffffff" }}>Period</th>
+              <th className="num" style={{ background: "#ffffff" }}>Duration</th><th className="num" style={{ background: "#ffffff" }}>Tracked</th><th style={{ background: "#ffffff" }}>Bank Account</th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
+              <th style={{ background: "#ffffff" }}>Note</th><th style={{ background: "#ffffff" }}>Tracked by</th><th style={{ background: "#ffffff" }}>Pushed</th><th style={{ background: "#ffffff" }}></th>{isAdmin && <th style={{ background: "#ffffff" }}></th>}
             </tr></thead>
           </table>
         </div>,
