@@ -6373,18 +6373,18 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 <td className="num">{memberData && <button type="button" className="cb-icon-btn" title={expanded ? "Hide daily detail" : "Show daily detail"} onClick={() => toggleMember(entry.member.id)}>{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>}</td>
               </tr>
               {expanded && memberData && <tr><td colSpan={showLoginToShutdown ? 9 : 6} style={{ padding: 0, background: "var(--paper-soft)" }}>
-                <div style={{ padding: "10px 14px 14px" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{entry.member.name} · Daily comparison</div>
+                <div style={{ padding: "10px 0 14px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, padding: "0 14px" }}>{entry.member.name} · Daily comparison</div>
                   <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
-                    <col style={{ width: showLoginToShutdown ? "16%" : "30%" }} />
+                    <col style={{ width: showLoginToShutdown ? "18%" : "30%" }} />
                     <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
                     <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
                     <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
                     {showLoginToShutdown && <col style={{ width: "16%" }} />}
                     {showLoginToShutdown && <col style={{ width: "11%" }} />}
                     {showLoginToShutdown && <col style={{ width: "11%" }} />}
-                    <col style={{ width: showLoginToShutdown ? "11%" : "18%" }} />
-                    <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
+                    <col style={{ width: showLoginToShutdown ? "10%" : "18%" }} />
+                    <col style={{ width: showLoginToShutdown ? "7%" : "10%" }} />
                   </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs Karbon</th>}<th>ClockBook vs Karbon</th><th>Note</th></tr></thead><tbody>
                     {(memberData.rows || []).map((row) => {
                       const rowOk = isMatched(row.difference_minutes, tolerance);
