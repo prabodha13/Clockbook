@@ -4643,7 +4643,7 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
         client_name = UNASSIGNED_CLIENT_NAME
     else:
         client = db.get(models.Client, client_id)
-        if not client:
+        if not client or client.tenant_id != current_member.tenant_id:
             raise HTTPException(404, "Client not found")
         client_name = client.name
 
