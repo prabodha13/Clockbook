@@ -7084,8 +7084,20 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
         bankAccountLabel: label(bankAccounts),
         metricLabel: label(metrics),
       };
+    }).sort((a, b) => {
+      const dateCmp = String(b.workDateKey || "").localeCompare(String(a.workDateKey || ""));
+      if (dateCmp !== 0) return dateCmp;
+      const staffCmp = String(a.trackedByLabel || "").localeCompare(String(b.trackedByLabel || ""), undefined, { sensitivity: "base" });
+      if (staffCmp !== 0) return staffCmp;
+      const clientCmp = String(a.client || "").localeCompare(String(b.client || ""), undefined, { sensitivity: "base" });
+      if (clientCmp !== 0) return clientCmp;
+      const roleCmp = String(a.role || "").localeCompare(String(b.role || ""), undefined, { sensitivity: "base" });
+      if (roleCmp !== 0) return roleCmp;
+      return String(a.task_type || "").localeCompare(String(b.task_type || ""), undefined, { sensitivity: "base" });
     });
   }, [rows]);
+
+  const allStaffExportView = isAdmin && !forceSelfOnly && staffFilter === "all";
 
   const exportDateBlockIndexes = useMemo(() => {
     const indexes = new Map();
@@ -7324,13 +7336,15 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
             {groups.map((g, groupIndex) => {
               const dateKey = g.workDateKey || "unknown";
               const dateBlockIndex = exportDateBlockIndexes.get(dateKey) ?? 0;
-              const previousDateKey = groupIndex > 0 ? (groups[groupIndex - 1].workDateKey || "unknown") : null;
+              const previousGroup = groupIndex > 0 ? groups[groupIndex - 1] : null;
+              const previousDateKey = previousGroup ? (previousGroup.workDateKey || "unknown") : null;
               const firstOfDate = groupIndex === 0 || previousDateKey !== dateKey;
+              const firstOfStaff = allStaffExportView && (firstOfDate || !previousGroup || previousGroup.trackedByLabel !== g.trackedByLabel);
               const dayLabel = exportDayLabel(dateKey);
               const blockBackground = dateBlockIndex % 2 === 0 ? "var(--paper)" : "rgba(29, 74, 56, 0.025)";
               const topLevelRowStyle = {
                 background: blockBackground,
-                ...(firstOfDate ? { boxShadow: "inset 0 2px 0 var(--line-strong, var(--line))" } : {}),
+                ...(firstOfDate ? { boxShadow: "inset 0 2px 0 var(--line-strong, var(--line))" } : firstOfStaff ? { boxShadow: "inset 0 1px 0 rgba(29, 74, 56, 0.18)" } : {}),
               };
               if (g.count === 1) {
                 const r = g.rows[0];
@@ -7355,7 +7369,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                     </td>
                     <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                    <td>{r.tracked_by || "none"}</td>
+                    <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
                     <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
                     <td>
                       <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
@@ -7399,7 +7413,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     <td>{g.metricLabel}</td>
                     <td></td>
                     <td>{g.noteCount > 0 ? `${g.noteCount} note${g.noteCount > 1 ? "s" : ""}` : "none"}</td>
-                    <td>{g.trackedByLabel}</td>
+                    <td>{allStaffExportView && g.trackedByLabel && g.trackedByLabel !== "none" ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{g.trackedByLabel}</span> : g.trackedByLabel}</td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" className="cb-checkbox" checked={g.allPushed} onChange={() => handleToggleGroupPushed(g)} />
                     </td>
@@ -7431,7 +7445,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                         {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                       </td>
                       <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                      <td>{r.tracked_by || "none"}</td>
+                      <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "nowrap" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
                       <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
                       <td>
                         <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
