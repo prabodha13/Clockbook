@@ -7238,16 +7238,20 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
       {loadError && <div className="cb-error" style={{ marginBottom: 10 }}>{loadError}</div>}
 
       <style>{`
+        .cb-export-table-wrap {
+          overflow-x: clip !important;
+          overflow-y: visible !important;
+        }
         .cb-export-sticky-head thead th {
           position: sticky;
           top: 0;
-          z-index: 8;
+          z-index: 20;
           background: var(--paper);
-          box-shadow: inset 0 -1px 0 var(--line, var(--border));
+          box-shadow: inset 0 -1px 0 var(--line, var(--border)), 0 2px 6px rgba(24, 38, 30, 0.06);
         }
       `}</style>
-      <div className="cb-table-wrap">
-        <table className="cb-table cb-export-sticky-head">
+      <div className="cb-table-wrap cb-export-table-wrap" style={{ overflowX: "clip", overflowY: "visible", maxWidth: "100%" }}>
+        <table className="cb-table cb-export-sticky-head" style={{ width: "100%" }}>
           <thead>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
