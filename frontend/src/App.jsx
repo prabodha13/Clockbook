@@ -1075,6 +1075,7 @@ const ACCESS_PERMISSION = {
   MANAGE_INTEGRATIONS: "manage_integrations",
   MANAGE_AUDIT_RECORDING: "manage_audit_recording",
   MANAGE_SUPER_ADMINS: "manage_super_admins",
+  VIEW_TRACKED_TIME: "view_tracked_time",
 };
 
 function hasAdditionalPermission(member, permission) {
@@ -4420,6 +4421,7 @@ function SettingsView({
                   {checkbox(ACCESS_PERMISSION.MANAGE_LEARNING_CATEGORIES, "Manage L&D categories", "Create, rename, archive and restore Learning & Development categories.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_DELEGATION_EXCLUSIONS, "Manage delegation exclusions", "Choose work types that Insights must never suggest for delegation.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_SUPER_ADMINS, "Manage Super Admins", "Make Super Admin accounts visible like staff within this Admin's existing Dashboard, Insights, Karbon Check, L&D and granted Reports access. This does not allow role, security, permission or credential changes to Super Admins.", true)}
+                  {checkbox(ACCESS_PERMISSION.VIEW_TRACKED_TIME, "View tracked time", "See the original automatically tracked time alongside final Duration in Export. Without this permission, Admins see Duration only.", true)}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Workspace</div>
                   {checkbox(ACCESS_PERMISSION.MANAGE_WORKSPACE_BRANDING, "Manage workspace branding", "Change the workspace logo and branding settings.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_INTEGRATIONS, "Manage integrations", "Connect, replace, test or disconnect Karbon and Calamari credentials.", true)}
@@ -7029,6 +7031,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
 }
 
 function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
+  const canViewTrackedTime = currentUser?.role !== "admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.VIEW_TRACKED_TIME);
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
   const [staffFilter, setStaffFilter] = useState("all");
@@ -7130,12 +7133,14 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
 
   const allStaffExportView = isAdmin && !forceSelfOnly && staffFilter === "all";
 
-  // Keep Export within the viewport and guarantee the action columns remain visible.
-  // The floating header and body use this exact same percentage layout.
-  const exportColumnWidths = useMemo(() => (isAdmin
-    ? [8, 8, 10.5, 7, 8, 4.5, 5.5, 5, 7, 6, 5.5, 7, 7.5, 4.5, 3, 3]
-    : [8, 8, 10.5, 7, 8, 4.5, 5.5, 5, 7, 6, 5.5, 7, 7.5, 4.5, 6]
-  ), [isAdmin]);
+  // Keep Export within the viewport and guarantee Date + the two action buttons always
+  // have enough room. The floating header and body share this exact layout. Admins who do
+  // not have View tracked time get a true 15-column layout rather than an empty Tracked column.
+  const exportColumnWidths = useMemo(() => {
+    if (isAdmin && canViewTrackedTime) return [10, 8.5, 9.5, 7, 8, 4.5, 5.5, 5, 6.5, 5.5, 5.5, 6, 7, 4.5, 3.5, 3.5];
+    if (isAdmin) return [10, 9, 10, 7.5, 8.5, 5, 6, 6.5, 6, 5.5, 7, 7.5, 4.5, 3.5, 3.5];
+    return [10.5, 9.5, 11, 7, 8, 4.5, 5.5, 5, 6.5, 5.5, 5.5, 7, 7, 4.5, 3];
+  }, [isAdmin, canViewTrackedTime]);
 
   const exportDateBlockIndexes = useMemo(() => {
     const indexes = new Map();
@@ -7183,7 +7188,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
       window.removeEventListener("resize", schedule);
       if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [rows, groups, isAdmin]);
+  }, [rows, groups, isAdmin, canViewTrackedTime]);
 
   function exportDayLabel(dateKey) {
     if (!dateKey || dateKey === "unknown") return "—";
@@ -7206,7 +7211,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
     const hm = formatHM(r.seconds);
     const countPart = r.change != null ? ` | ${r.metric}: ${r.start_count} to ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "";
     const bankPart = r.bank_account ? ` | ${r.bank_account}` : "";
-    const adjustedPart = r.adjusted ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
+    const adjustedPart = r.adjusted && canViewTrackedTime && r.tracked_seconds != null ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
     const periodPart = r.period ? ` | Period: ${r.period}` : "";
     const text = `${r.client}${bankPart}: ${exportTaskText(r)} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"}${periodPart} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
@@ -7350,6 +7355,23 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           text-align: center;
           white-space: nowrap;
           overflow-wrap: normal;
+          padding-left: 5px;
+          padding-right: 5px;
+        }
+        .cb-export-table-wrap .cb-table th:first-child,
+        .cb-export-table-wrap .cb-table td:first-child {
+          padding-left: 14px;
+          padding-right: 8px;
+        }
+        .cb-export-table-wrap .cb-table th:nth-child(2),
+        .cb-export-table-wrap .cb-table td:nth-child(2) {
+          padding-left: 8px;
+        }
+        .cb-export-table-wrap .cb-icon-btn {
+          width: 28px;
+          min-width: 28px;
+          height: 28px;
+          padding: 0;
         }
       `}</style>
       {floatingExportHeader.visible && createPortal(
@@ -7369,7 +7391,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
             <colgroup>{exportColumnWidths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
             <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff", height: 38 }}>
               <th style={{ background: "#ffffff" }}>Date</th><th style={{ background: "#ffffff" }}>Client</th><th style={{ background: "#ffffff" }}>Task</th><th style={{ background: "#ffffff" }}>Role</th><th style={{ background: "#ffffff" }}>Task type</th><th style={{ background: "#ffffff" }}>Period</th>
-              <th className="num" style={{ background: "#ffffff" }}>Duration</th><th className="num" style={{ background: "#ffffff" }}>Tracked</th><th style={{ background: "#ffffff" }}>Bank Account</th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
+              <th className="num" style={{ background: "#ffffff" }}>Duration</th>{canViewTrackedTime && <th className="num" style={{ background: "#ffffff" }}>Tracked</th>}<th style={{ background: "#ffffff" }}>Bank Account</th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
               <th style={{ background: "#ffffff" }}>Note</th><th style={{ background: "#ffffff" }}>Tracked by</th><th style={{ background: "#ffffff" }}>Pushed</th><th style={{ background: "#ffffff" }}></th>{isAdmin && <th style={{ background: "#ffffff" }}></th>}
             </tr></thead>
           </table>
@@ -7382,13 +7404,13 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           <thead ref={exportHeaderRef}>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
-              <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
+              <th className="num">Duration</th>{canViewTrackedTime && <th className="num">Tracked</th>}<th>Bank Account</th><th>Metric</th><th className="num">Change</th>
               <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={isAdmin ? 16 : 15}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
+              <tr><td colSpan={(isAdmin ? 15 : 14) + (canViewTrackedTime ? 1 : 0)}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
             {groups.map((g, groupIndex) => {
               const dateKey = g.workDateKey || "unknown";
@@ -7419,7 +7441,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     <td>{r.task_type || "none"}</td>
                     <td>{r.period || "none"}</td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                    <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                    {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                     <td>{r.bank_account || "none"}</td>
                     <td>{r.metric || "none"}</td>
                     <td className="num cb-mono">
@@ -7465,7 +7487,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       {formatHM(g.totalSeconds)}
                       {g.anyAdjusted && <span title="At least one of these was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}
                     </td>
-                    <td></td>
+                    {canViewTrackedTime && <td></td>}
                     <td>{g.bankAccountLabel}</td>
                     <td>{g.metricLabel}</td>
                     <td></td>
@@ -7495,7 +7517,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       <td>{r.task_type || "none"}</td>
                       <td>{r.period || "none"}</td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                      <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                      {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                       <td>{r.bank_account || "none"}</td>
                       <td>{r.metric || "none"}</td>
                       <td className="num cb-mono">
