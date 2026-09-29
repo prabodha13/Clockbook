@@ -1834,31 +1834,68 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
       {open && viewportAware && menuStyle && createPortal(
         <div
           ref={portalRef}
-          className="cb-searchable-wrap"
           style={{
             ...menuStyle,
-            background: "var(--paper)",
-            border: "1px solid var(--line)",
+            background: "#FFFFFF",
+            color: "#17201A",
+            border: "1px solid #D7DDD7",
             borderRadius: 10,
-            boxShadow: "0 12px 28px rgba(18, 28, 45, .14)",
+            boxShadow: "0 12px 28px rgba(18, 28, 45, .16)",
             overflow: "hidden",
+            boxSizing: "border-box",
+            fontFamily: "inherit",
           }}
         >
           <div
-            className="cb-searchable-list"
+            role="listbox"
             style={{
-              position: "static",
               width: "100%",
               maxHeight: menuStyle.maxHeight,
               overflowY: "auto",
-              background: "var(--paper)",
-              border: 0,
-              boxShadow: "none",
+              overflowX: "hidden",
+              background: "#FFFFFF",
               padding: 6,
               boxSizing: "border-box",
+              scrollbarGutter: "stable",
             }}
           >
-            {menuContents}
+            {filtered.length === 0 && (
+              <div style={{ padding: "9px 10px", fontSize: 13, color: "#6B746E" }}>No matches</div>
+            )}
+            {filtered.map((o) => (
+              <div
+                key={o.id}
+                role="option"
+                aria-selected={o.id === value}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  onChange(o.id);
+                  setOpen(false);
+                  setQuery("");
+                }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#F3F6F3"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = o.id === value ? "#EEF5F0" : "#FFFFFF"; }}
+                style={{
+                  display: "block",
+                  minHeight: 34,
+                  padding: "8px 10px",
+                  borderRadius: 7,
+                  background: o.id === value ? "#EEF5F0" : "#FFFFFF",
+                  color: "#17201A",
+                  fontSize: 13,
+                  lineHeight: "18px",
+                  whiteSpace: "normal",
+                  overflowWrap: "anywhere",
+                  cursor: "pointer",
+                  boxSizing: "border-box",
+                }}
+              >
+                <div style={{ fontWeight: o.id === value ? 650 : 500 }}>{getLabel(o)}</div>
+                {getSecondary && getSecondary(o) && (
+                  <div style={{ marginTop: 2, fontSize: 11.5, color: "#6B746E" }}>{getSecondary(o)}</div>
+                )}
+              </div>
+            ))}
           </div>
         </div>,
         document.body
