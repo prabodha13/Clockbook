@@ -275,3 +275,32 @@ def test_manage_super_admins_allows_admin_to_receive_super_admin_tasks_in_read_s
         assert task.id in {row.id for row in main.list_tasks(current_member=admin, db=s)}
     finally:
         s.close()
+
+
+def test_tracked_time_is_hidden_from_admin_until_explicitly_granted():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_admin_tracked_time")
+        super_admin = _member(s, tenant.id, "tracked-super@example.com", "super_admin")
+        admin = _member(s, tenant.id, "tracked-admin@example.com", "admin")
+
+        sample = [{"seconds": 1200.0, "tracked_seconds": 900.0, "tracked_hours": 0.25}]
+        restricted = main._hide_tracked_time_for_member([dict(sample[0])], admin)
+        assert restricted[0]["seconds"] == 1200.0
+        assert restricted[0]["tracked_seconds"] is None
+        assert restricted[0]["tracked_hours"] is None
+
+        admin = main.update_member_additional_permissions(
+            admin.id,
+            schemas.MemberAdditionalPermissionsUpdate(
+                permissions=[main.PERMISSION_VIEW_TRACKED_TIME],
+                expected_version=admin.version,
+            ),
+            current_member=super_admin,
+            db=s,
+        )
+        visible = main._hide_tracked_time_for_member([dict(sample[0])], admin)
+        assert visible[0]["tracked_seconds"] == 900.0
+        assert visible[0]["tracked_hours"] == 0.25
+    finally:
+        s.close()
