@@ -8118,7 +8118,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
     <div className="cb-overlay">
       <div className="cb-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">Away time detected</div>
+          <div className="cb-modal-title">Time away from ClockBook</div>
         </div>
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
