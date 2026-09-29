@@ -11,13 +11,13 @@ class BaseModel(PydanticBaseModel):
 class Segment(BaseModel):
     start: str = Field(min_length=1, max_length=64)
     end: Optional[str] = Field(default=None, max_length=64)
-    # Forgotten-time recovery stores batch metadata on recovered segments so the
-    # original manual recovery can be reconstructed later. These are response
-    # fields only; allowing them here prevents strict response validation from
-    # rejecting otherwise valid recovered task segments.
+    source: Optional[str] = Field(default=None, max_length=64)
+    recovered_seconds: Optional[float] = Field(default=None, ge=0, le=28800)
+    # Audit metadata used by split forgotten-time recovery. These fields are output-safe
+    # metadata only; normal timer segments simply leave them null.
     recovery_batch_id: Optional[str] = Field(default=None, max_length=128)
-    recovery_allocation_index: Optional[int] = Field(default=None, ge=0)
-    recovery_total_seconds: Optional[float] = Field(default=None, ge=0)
+    recovery_allocation_index: Optional[int] = Field(default=None, ge=0, le=1000)
+    recovery_total_seconds: Optional[float] = Field(default=None, ge=0, le=86400)
 
 
 class MemberOut(BaseModel):
@@ -38,6 +38,7 @@ class MemberOut(BaseModel):
     capacity_effective_from: Optional[date] = None
     timezone_name: str = "Asia/Colombo"
     can_view_leave_capacity_insights: bool = False
+    additional_permissions: List[str] = Field(default_factory=list)
     staff_tour_completed: bool = False
 
 
@@ -107,6 +108,11 @@ class MemberTimezoneUpdate(BaseModel):
 
 class MemberInsightsPermissionUpdate(BaseModel):
     enabled: bool
+    expected_version: int = Field(ge=1)
+
+
+class MemberAdditionalPermissionsUpdate(BaseModel):
+    permissions: List[str] = Field(default_factory=list, max_length=32)
     expected_version: int = Field(ge=1)
 
 
@@ -481,6 +487,10 @@ class TaskStart(BaseModel):
     start_at: Optional[str] = Field(default=None, max_length=64)
 
 
+class TaskRecoverTime(BaseModel):
+    seconds: float = Field(gt=0, le=28800)
+
+
 class TaskReassign(BaseModel):
     owner_id: str = Field(min_length=1, max_length=128)
 
@@ -597,6 +607,10 @@ class InactivityEventDetail(BaseModel):
 
 class InactivityAuditSettingUpdate(BaseModel):
     enabled: bool
+
+
+class DelegationSuggestionExclusionsUpdate(BaseModel):
+    exclusions: List[str] = Field(default_factory=list, max_length=100)
 
 
 class AuditEventOut(BaseModel):
