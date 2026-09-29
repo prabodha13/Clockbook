@@ -8,6 +8,442 @@ import {
   Mail, Lock, Eye, EyeOff, ShieldCheck, GraduationCap, BookOpen, ExternalLink,
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
+import { ENGLISH_WORDS_RAW } from "./spellcheckDictionary.js";
+
+const CLOCKBOOK_SPELLCHECK_WORDS = new Set([
+  "clockbook", "karbon", "xero", "brightpay", "brightbooks", "brightbook", "dext", "calamari",
+  "shopify", "sumup", "revolut", "modulr", "cloudpay", "webflow", "skytab", "shift4",
+  "ros", "cro", "rbo", "vies", "rtd", "intrastat", "rct", "pswt", "eori", "prsa", "paye",
+  "prsi", "bik", "sepa", "vat", "xbrl", "ixbrl", "ct1", "frs", "saas", "oauth", "api",
+  "csv", "pdf", "aws", "postgresql", "postgres", "fastapi", "uvicorn", "sqlalchemy", "github",
+  "google", "microsoft", "dropbox", "sharepoint", "onedrive", "slack", "fireflies", "cognito",
+  "notion", "docusign", "wise", "stripe", "worldpay", "amazon", "payroll", "bookkeeping",
+  "timesheet", "timesheets", "workflow", "workflows", "superadmin", "admin", "billable",
+  // Common accounting, tax, compliance and day-to-day work vocabulary. These are kept
+  // locally so ClockBook does not depend on the browser dictionary for normal business English.
+  "revenue", "revenues", "letter", "letters", "review", "reviewed", "reviewing", "reviews",
+  "return", "returns", "file", "filed", "filing", "files", "reconcile", "reconciled",
+  "reconciling", "reconciliation", "submit", "submitted", "submitting", "submission",
+  "prepare", "prepared", "preparing", "preparation", "complete", "completed", "completing",
+  "finalise", "finalised", "finalising", "finalize", "finalized", "finalizing",
+  "accounts", "accounting", "accountant", "accountants", "audit", "audited", "auditing",
+  "tax", "taxes", "taxation", "compliance", "corporation", "company", "companies",
+  "client", "clients", "customer", "customers", "invoice", "invoices", "invoiced",
+  "payment", "payments", "payable", "payables", "receivable", "receivables", "creditor",
+  "creditors", "debtor", "debtors", "expense", "expenses", "income", "cost", "costs",
+  "balance", "balances", "ledger", "ledgers", "journal", "journals", "bank", "banking",
+  "pension", "pensions", "employee", "employees", "employer", "employers", "salary",
+  "salaries", "bonus", "bonuses", "director", "directors", "shareholder", "shareholders",
+  "share", "shares", "capital", "allowance", "allowances", "grant", "grants",
+  "transaction", "transactions", "document", "documents", "schedule", "schedules",
+  "query", "queries", "response", "responses", "draft", "drafted", "drafting",
+  "approve", "approved", "approval", "update", "updated", "updating", "check", "checked",
+  "checking", "prepare", "prepared", "reviewer", "manager", "management", "meeting",
+  "meetings", "internal", "support", "training", "learning", "development", "period",
+  "periods", "weekly", "fortnightly", "monthly", "quarterly", "yearly", "annual",
+  "today", "tomorrow", "yesterday", "deadline", "deadlines", "note", "notes",
+]);
+
+const LOCAL_SPELL_WORDS = new Set(ENGLISH_WORDS_RAW.split("\n"));
+for (const word of CLOCKBOOK_SPELLCHECK_WORDS) LOCAL_SPELL_WORDS.add(word);
+
+let spellBuckets = null;
+function getSpellBuckets() {
+  if (spellBuckets) return spellBuckets;
+  spellBuckets = new Map();
+  for (const word of LOCAL_SPELL_WORDS) {
+    if (!word || word.length < 2 || !/^[a-z]/.test(word)) continue;
+    const key = `${word[0]}:${word.length}`;
+    if (!spellBuckets.has(key)) spellBuckets.set(key, []);
+    spellBuckets.get(key).push(word);
+  }
+  return spellBuckets;
+}
+
+function normalizeSpellWord(word) {
+  return String(word || "")
+    .replace(/[’]/g, "'")
+    .replace(/^'+|'+$/g, "")
+    .toLowerCase();
+}
+
+function looksLikeCodeOrAcronym(raw) {
+  if (!raw) return true;
+  if (/\d/.test(raw) || /[_/@\\]/.test(raw)) return true;
+  if (raw.length <= 12 && raw === raw.toUpperCase() && /[A-Z]/.test(raw)) return true;
+  // Mixed-case product/client codes (e.g. iXBRL, PayPal, ABCdE) are safer to leave alone.
+  if (/[A-Z].*[A-Z]/.test(raw.slice(1))) return true;
+  return false;
+}
+
+function isKnownSpellWord(raw, ignoredWords) {
+  const word = normalizeSpellWord(raw);
+  if (word.length < 3 || looksLikeCodeOrAcronym(raw)) return true;
+  if (ignoredWords?.has(word) || LOCAL_SPELL_WORDS.has(word)) return true;
+  if (word.endsWith("'s") && LOCAL_SPELL_WORDS.has(word.slice(0, -2))) return true;
+
+  // The Hunspell dictionary already contains most inflections, but these conservative
+  // fallbacks prevent ordinary forms from being over-flagged when only a root is present.
+  const suffixes = [
+    ["ies", "y"], ["ing", ""], ["ing", "e"], ["ed", ""], ["ed", "e"],
+    ["es", ""], ["s", ""], ["ly", ""], ["er", ""], ["est", ""],
+  ];
+  for (const [suffix, replacement] of suffixes) {
+    if (word.length > suffix.length + 2 && word.endsWith(suffix)) {
+      const base = word.slice(0, -suffix.length) + replacement;
+      if (LOCAL_SPELL_WORDS.has(base)) return true;
+    }
+  }
+  return false;
+}
+
+function damerauDistanceAtMostTwo(a, b) {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > 2) return 3;
+  const prevPrev = new Array(b.length + 1).fill(0);
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i += 1) {
+    const cur = [i];
+    let rowMin = cur[0];
+    for (let j = 1; j <= b.length; j += 1) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let value = Math.min(
+        prev[j] + 1,
+        cur[j - 1] + 1,
+        prev[j - 1] + cost,
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        value = Math.min(value, prevPrev[j - 2] + 1);
+      }
+      cur[j] = value;
+      rowMin = Math.min(rowMin, value);
+    }
+    if (rowMin > 2) return 3;
+    for (let j = 0; j < prev.length; j += 1) prevPrev[j] = prev[j];
+    prev = cur;
+  }
+  return prev[b.length] <= 2 ? prev[b.length] : 3;
+}
+
+function spellSuggestions(rawWord, limit = 3) {
+  const word = normalizeSpellWord(rawWord);
+  if (word.length < 3) return [];
+  const buckets = getSpellBuckets();
+  const candidates = [];
+  for (let len = Math.max(2, word.length - 2); len <= word.length + 2; len += 1) {
+    const bucket = buckets.get(`${word[0]}:${len}`) || [];
+    for (const candidate of bucket) {
+      const distance = damerauDistanceAtMostTwo(word, candidate);
+      if (distance <= 2) candidates.push({ candidate, distance });
+    }
+  }
+  candidates.sort((a, b) => a.distance - b.distance || Math.abs(a.candidate.length - word.length) - Math.abs(b.candidate.length - word.length) || a.candidate.localeCompare(b.candidate));
+  return candidates.slice(0, limit).map((entry) => entry.candidate);
+}
+
+function spellTokens(text, ignoredWords) {
+  const tokens = [];
+  const re = /[A-Za-z][A-Za-z'’-]*/g;
+  let match;
+  while ((match = re.exec(text || ""))) {
+    const raw = match[0];
+    if (!isKnownSpellWord(raw, ignoredWords)) {
+      tokens.push({ raw, normalized: normalizeSpellWord(raw), start: match.index, end: match.index + raw.length });
+    }
+  }
+  return tokens;
+}
+
+function isSpellcheckElement(el) {
+  if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) return false;
+  if (el.disabled || el.readOnly) return false;
+  if (el instanceof HTMLTextAreaElement) return true;
+  const type = String(el.type || "text").toLowerCase();
+  return type === "text" || type === "search";
+}
+
+function spellOverlayParts(text, issues) {
+  if (!issues.length) return [{ text, misspelled: false, key: "all" }];
+  const result = [];
+  let cursor = 0;
+  issues.forEach((issue, index) => {
+    if (issue.start > cursor) result.push({ text: text.slice(cursor, issue.start), misspelled: false, key: `n-${index}` });
+    result.push({ text: text.slice(issue.start, issue.end), misspelled: true, key: `e-${index}` });
+    cursor = issue.end;
+  });
+  if (cursor < text.length) result.push({ text: text.slice(cursor), misspelled: false, key: "tail" });
+  return result;
+}
+
+function LocalSpellcheckAssist() {
+  const [active, setActive] = useState(null);
+  const [selectedIssue, setSelectedIssue] = useState(null);
+  const [ignoredWords, setIgnoredWords] = useState(() => new Set());
+  const [revision, setRevision] = useState(0);
+
+  const snapshotElement = useCallback((target) => {
+    if (!isSpellcheckElement(target) || !document.body.contains(target)) return null;
+    const text = target.value || "";
+    const issues = spellTokens(text, ignoredWords);
+    const rect = target.getBoundingClientRect();
+    const style = window.getComputedStyle(target);
+    return {
+      element: target,
+      text,
+      issues,
+      rect: { top: rect.top, left: rect.left, width: rect.width, height: rect.height, bottom: rect.bottom },
+      scrollTop: target.scrollTop || 0,
+      scrollLeft: target.scrollLeft || 0,
+      style: {
+        fontFamily: style.fontFamily,
+        fontSize: style.fontSize,
+        fontWeight: style.fontWeight,
+        fontStyle: style.fontStyle,
+        lineHeight: style.lineHeight === "normal" ? `${Math.round(parseFloat(style.fontSize || "16") * 1.2)}px` : style.lineHeight,
+        letterSpacing: style.letterSpacing,
+        textAlign: style.textAlign,
+        paddingTop: style.paddingTop,
+        paddingRight: style.paddingRight,
+        paddingBottom: style.paddingBottom,
+        paddingLeft: style.paddingLeft,
+        whiteSpace: target instanceof HTMLTextAreaElement ? "pre-wrap" : "pre",
+      },
+    };
+  }, [ignoredWords]);
+
+  const issueAtSelection = useCallback((snapshot, target) => {
+    if (!snapshot?.issues?.length) return null;
+    const start = Number.isFinite(target.selectionStart) ? target.selectionStart : 0;
+    const end = Number.isFinite(target.selectionEnd) ? target.selectionEnd : start;
+    return snapshot.issues.find((issue) => (
+      (end > start && issue.start < end && issue.end > start)
+      || (start >= issue.start && start <= issue.end)
+    )) || null;
+  }, []);
+
+  const openIssue = useCallback((target, event) => {
+    const snapshot = snapshotElement(target);
+    if (!snapshot) {
+      setSelectedIssue(null);
+      return;
+    }
+    setActive(snapshot);
+    const issue = issueAtSelection(snapshot, target);
+    if (!issue) {
+      setSelectedIssue(null);
+      return;
+    }
+    setSelectedIssue({
+      ...issue,
+      suggestions: spellSuggestions(issue.raw),
+      anchor: { x: event.clientX, y: event.clientY },
+      element: target,
+    });
+  }, [issueAtSelection, snapshotElement]);
+
+  useEffect(() => {
+    let frame = 0;
+    const refresh = (target = document.activeElement) => {
+      if (!isSpellcheckElement(target)) {
+        setActive(null);
+        setSelectedIssue(null);
+        return;
+      }
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        const snapshot = snapshotElement(target);
+        setActive(snapshot);
+        if (!snapshot) setSelectedIssue(null);
+      });
+    };
+    const onFocus = (event) => {
+      setSelectedIssue(null);
+      refresh(event.target);
+    };
+    const onInput = (event) => {
+      if (!isSpellcheckElement(event.target)) return;
+      setSelectedIssue(null);
+      refresh(event.target);
+    };
+    const onScroll = (event) => {
+      if (event.target === document || event.target === window || isSpellcheckElement(document.activeElement)) {
+        setSelectedIssue(null);
+        refresh(document.activeElement);
+      }
+    };
+    const onResize = () => {
+      setSelectedIssue(null);
+      refresh(document.activeElement);
+    };
+    const onDoubleClick = (event) => {
+      if (isSpellcheckElement(event.target)) openIssue(event.target, event);
+    };
+    const onPointerUp = (event) => {
+      if ((event.pointerType === "touch" || event.pointerType === "pen") && isSpellcheckElement(event.target)) {
+        openIssue(event.target, event);
+      }
+    };
+    const onPointerDown = (event) => {
+      if (event.target.closest?.('[data-clockbook-spell-popover="true"]')) return;
+      if (selectedIssue && event.target !== selectedIssue.element) setSelectedIssue(null);
+    };
+    const onVisibilityChange = () => {
+      if (document.hidden) setSelectedIssue(null);
+    };
+    const onWindowBlur = () => setSelectedIssue(null);
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") setSelectedIssue(null);
+    };
+
+    document.addEventListener("focusin", onFocus, true);
+    document.addEventListener("input", onInput, true);
+    document.addEventListener("scroll", onScroll, true);
+    document.addEventListener("dblclick", onDoubleClick, true);
+    document.addEventListener("pointerup", onPointerUp, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    document.addEventListener("keydown", onKeyDown, true);
+    window.addEventListener("resize", onResize);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("focusin", onFocus, true);
+      document.removeEventListener("input", onInput, true);
+      document.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("dblclick", onDoubleClick, true);
+      document.removeEventListener("pointerup", onPointerUp, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      document.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("resize", onResize);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, [openIssue, revision, selectedIssue, snapshotElement]);
+
+  useEffect(() => {
+    const el = active?.element;
+    if (!el) return undefined;
+    const observer = new MutationObserver(() => {
+      const rect = el.getBoundingClientRect();
+      const hidden = !document.body.contains(el) || rect.width === 0 || rect.height === 0 || el.getClientRects().length === 0;
+      if (hidden) {
+        setActive(null);
+        setSelectedIssue(null);
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+    return () => observer.disconnect();
+  }, [active?.element]);
+
+  const replaceIssue = useCallback((issue, replacement) => {
+    const el = issue?.element || active?.element;
+    if (!el || !document.body.contains(el)) {
+      setSelectedIssue(null);
+      return;
+    }
+    const current = el.value || "";
+    const next = current.slice(0, issue.start) + replacement + current.slice(issue.end);
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+    if (setter) setter.call(el, next); else el.value = next;
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.focus();
+    const caret = issue.start + replacement.length;
+    try { el.setSelectionRange(caret, caret); } catch (_) {}
+    setSelectedIssue(null);
+    setRevision((n) => n + 1);
+  }, [active]);
+
+  if (!active || !active.issues.length) return null;
+
+  const overlayParts = spellOverlayParts(active.text, active.issues);
+  const panelWidth = 340;
+  const anchorX = selectedIssue?.anchor?.x ?? active.rect.left;
+  const anchorY = selectedIssue?.anchor?.y ?? active.rect.bottom;
+  const panelLeft = Math.max(8, Math.min(anchorX - 24, window.innerWidth - panelWidth - 8));
+  const panelTop = anchorY > window.innerHeight - 150
+    ? Math.max(8, anchorY - 112)
+    : Math.min(window.innerHeight - 120, anchorY + 14);
+
+  return createPortal(
+    <>
+      <div
+        aria-hidden="true"
+        style={{
+          position: "fixed", zIndex: 9998, pointerEvents: "none", overflow: "hidden",
+          top: active.rect.top, left: active.rect.left, width: active.rect.width, height: active.rect.height,
+          boxSizing: "border-box", border: "1px solid transparent", borderRadius: 6,
+          ...active.style,
+          color: "transparent", background: "transparent",
+        }}
+      >
+        <div style={{ transform: `translate(${-active.scrollLeft}px, ${-active.scrollTop}px)`, minWidth: "100%", whiteSpace: active.style.whiteSpace, overflowWrap: "break-word" }}>
+          {overlayParts.map((part) => (
+            <span
+              key={part.key}
+              style={part.misspelled ? { textDecorationLine: "underline", textDecorationStyle: "wavy", textDecorationColor: "#c62828", textDecorationThickness: "1.5px", textUnderlineOffset: "2px" } : undefined}
+            >
+              {part.text}
+            </span>
+          ))}
+        </div>
+      </div>
+      {selectedIssue && (
+        <div
+          data-clockbook-spell-popover="true"
+          role="dialog"
+          aria-label="Spelling suggestions"
+          style={{
+            position: "fixed", zIndex: 9999, top: panelTop, left: panelLeft, width: panelWidth,
+            background: "var(--surface, #fff)", color: "var(--ink, #1f2a24)", border: "1px solid var(--line, #d8ded9)",
+            borderRadius: 10, boxShadow: "0 10px 28px rgba(0,0,0,.15)", padding: "11px 12px", fontSize: 13,
+          }}
+        >
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Spelling suggestions</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            {selectedIssue.suggestions.length ? selectedIssue.suggestions.map((suggestion) => (
+              <button
+                key={suggestion}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => replaceIssue(selectedIssue, suggestion)}
+                style={{
+                  border: "1px solid var(--line, #d8ded9)", borderRadius: 7,
+                  background: "var(--paper, #fff)", color: "inherit", padding: "6px 10px",
+                  cursor: "pointer", font: "inherit", fontWeight: 600,
+                }}
+              >
+                {suggestion}
+              </button>
+            )) : (
+              <span style={{ color: "var(--ink-muted, #69736d)" }}>No close suggestion found.</span>
+            )}
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => {
+                setIgnoredWords((prev) => {
+                  const next = new Set(prev);
+                  next.add(selectedIssue.normalized);
+                  return next;
+                });
+                setSelectedIssue(null);
+              }}
+              style={{
+                marginLeft: "auto", border: "1px solid transparent", borderRadius: 7,
+                background: "transparent", color: "var(--ink-muted, #69736d)",
+                padding: "6px 8px", cursor: "pointer", font: "inherit",
+              }}
+            >
+              Ignore
+            </button>
+          </div>
+        </div>
+      )}
+    </>,
+    document.body,
+  );
+}
 
 const MEMBER_TINTS = ["#245C43", "#B5590F", "#5B6660", "#5C4A8C", "#8C2F3A", "#2E5C7A"];
 const UNASSIGNED_CLIENT_ID = "__clockbook_unassigned__";
@@ -77,27 +513,20 @@ function elapsedSeconds(task, nowMs) {
   return total;
 }
 
-// Only count the portion of each segment that falls inside today in the viewer's
-// local timezone. This prevents an old paused/running task, or a task submitted
-// today with earlier segments, from inflating the Dashboard's "Tracked today" total.
-function elapsedSecondsToday(task, nowMs) {
-  const nowDate = new Date(nowMs);
-  const todayStartMs = new Date(
-    nowDate.getFullYear(),
-    nowDate.getMonth(),
-    nowDate.getDate(),
-    0, 0, 0, 0
-  ).getTime();
-
+// Dashboard "Tracked today" is based on the actual work date of each timer segment,
+// never the date the task happened to be submitted. This keeps an older entry that is
+// completed/submitted today out of today's tracked-time totals. Use the tracked person's
+// timezone so team rows are also evaluated against that person's real work date.
+function elapsedSecondsToday(task, nowMs, member) {
+  const timeZone = member?.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const todayKey = workDateKeyInTimeZone(new Date(nowMs), timeZone);
   let total = 0;
   for (const seg of task.segments || []) {
+    if (!seg?.start || workDateKeyInTimeZone(seg.start, timeZone) !== todayKey) continue;
     const rawStart = new Date(seg.start).getTime();
     const rawEnd = seg.end ? new Date(seg.end).getTime() : nowMs;
     if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd)) continue;
-
-    const start = Math.max(rawStart, todayStartMs);
-    const end = Math.min(rawEnd, nowMs);
-    total += Math.max(0, end - start) / 1000;
+    total += Math.max(0, Math.min(rawEnd, nowMs) - rawStart) / 1000;
   }
   return total;
 }
@@ -133,6 +562,25 @@ function localWorkDateKey(iso) {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function workDateKeyInTimeZone(value, timeZone) {
+  if (!value) return "";
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone,
+      year: "numeric", month: "2-digit", day: "2-digit",
+    }).formatToParts(d);
+    const get = (type) => parts.find((part) => part.type === type)?.value || "";
+    const year = get("year");
+    const month = get("month");
+    const day = get("day");
+    return year && month && day ? `${year}-${month}-${day}` : "";
+  } catch {
+    return localWorkDateKey(d.toISOString());
+  }
 }
 
 function isToday(iso) {
@@ -517,12 +965,12 @@ function InvitationAcceptScreen({ token, onAccepted }) {
             <form onSubmit={submit}>
               <div className="cb-field" style={{ textAlign: "left" }}>
                 <label className="cb-label">Email</label>
-                <input className="cb-input" value={invite.email} disabled />
+                <input spellCheck={false} lang="en" className="cb-input" value={invite.email} disabled />
               </div>
               {!invite.existing_user && (
                 <div className="cb-field" style={{ textAlign: "left" }}>
                   <label className="cb-label">Your name</label>
-                  <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
+                  <input spellCheck={false} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
                 </div>
               )}
               <div className="cb-field" style={{ textAlign: "left" }}>
@@ -593,7 +1041,7 @@ function ClaimScreen({ unclaimed, onClaim }) {
           ) : (
             <div className="cb-field" style={{ textAlign: "left" }}>
               <label className="cb-label">Your name</label>
-              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required />
+              <input spellCheck={false} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} required />
             </div>
           )}
           <div className="cb-field" style={{ textAlign: "left" }}>
@@ -614,7 +1062,41 @@ function ClaimScreen({ unclaimed, onClaim }) {
   );
 }
 
-function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = false, karbonConnected = false }) {
+const ACCESS_PERMISSION = {
+  INSIGHTS_LEAVE_CAPACITY: "insights_leave_capacity",
+  REPORT_HELP: "report_help",
+  REPORT_OVERRIDES: "report_manual_overrides",
+  REPORT_AUDIT: "report_audit",
+  MANAGE_PODS: "manage_pods",
+  ADD_STAFF_MANUALLY: "add_staff_manually",
+  MANAGE_LEARNING_CATEGORIES: "manage_learning_categories",
+  MANAGE_DELEGATION_EXCLUSIONS: "manage_delegation_exclusions",
+  MANAGE_WORKSPACE_BRANDING: "manage_workspace_branding",
+  MANAGE_INTEGRATIONS: "manage_integrations",
+  MANAGE_AUDIT_RECORDING: "manage_audit_recording",
+  MANAGE_SUPER_ADMINS: "manage_super_admins",
+  VIEW_TRACKED_TIME: "view_tracked_time",
+};
+
+function hasAdditionalPermission(member, permission) {
+  if (!member) return false;
+  if (member.role === "super_admin") return true;
+  if (permission === ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY && member.can_view_leave_capacity_insights) return true;
+  return Array.isArray(member.additional_permissions) && member.additional_permissions.includes(permission);
+}
+
+function reportModesForMember(member) {
+  if (!member) return [];
+  if (member.role === "super_admin") return ["help", "overrides", "inactivity"];
+  if (member.role !== "admin") return [];
+  const modes = [];
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_HELP)) modes.push("help");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_OVERRIDES)) modes.push("overrides");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_AUDIT)) modes.push("inactivity");
+  return modes;
+}
+
+function Sidebar({ view, setView, isAdmin, isSuperAdmin, canViewReports = false, alwaysShowSettings = false, karbonConnected = false }) {
   const items = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "templates", label: "Templates", icon: ListTree },
@@ -625,7 +1107,7 @@ function Sidebar({ view, setView, isAdmin, isSuperAdmin, alwaysShowSettings = fa
     ...(karbonConnected ? [{ id: "reconcile", label: "Karbon Check", icon: CheckCircle2 }] : []),
     { id: "learning", label: "Learning & Development", icon: GraduationCap },
     { id: "staff", label: "Staff", icon: Users },
-    ...(isSuperAdmin ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
+    ...(canViewReports ? [{ id: "reports", label: "Reports", icon: HeartHandshake }] : []),
     ...((isAdmin || alwaysShowSettings) ? [{ id: "settings", label: "Settings", icon: Settings }] : []),
   ];
   return (
@@ -857,6 +1339,7 @@ function resolvedBankAccountId(row, taskId, clientAccounts) {
 
 const BUILTIN_HELPING_TASK_TYPE = "Helping/Training";
 const BUILTIN_LEARNING_TASK_TYPE = "Learning & Development";
+const MIN_LEARNING_NOTE_WORDS = 5;
 
 function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, members, currentUser, onClose, onDone, onCreateTasks }) {
   const [rows, setRows] = useState(() =>
@@ -1249,7 +1732,9 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const isSuperAdmin = currentUser.role === "super_admin";
-  const pickableMembers = members.filter((m) => m.id !== currentUser.id && (isSuperAdmin || m.role !== "super_admin"));
+  const canSeeSuperAdmins = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+  const canUseTeamView = isAdmin || currentUser.role === "admin" || currentUser.role === "super_admin";
+  const pickableMembers = members.filter((m) => m.id !== currentUser.id && (canSeeSuperAdmins || m.role !== "super_admin"));
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
 
   const visibleTasks = (() => {
@@ -1292,21 +1777,21 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   // "Everyone" keeps the existing behavior of showing the signed-in person's own summary.
   const statsMember = viewedMember || currentUser;
   const statsTasks = tasks.filter((t) => t.owner_id === statsMember.id);
-  const todaySeconds = statsTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
+  const todaySeconds = statsTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now, statsMember), 0);
   const myRunningCount = statsTasks.filter((t) => t.status === "running" || t.status === "paused").length;
   const mySubmittedTodayCount = statsTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
   const activeNowCount = tasks.filter((t) => t.status === "running").length;
 
-  const teamMembers = isAdmin
+  const teamMembers = canUseTeamView
     ? (isSuperAdmin
         ? members
-        : members.filter((member) => member.pod_id && member.pod_id === currentUser.pod_id))
+        : members.filter((member) => (canSeeSuperAdmins || member.role !== "super_admin") && (member.role === "super_admin" || !currentUser.pod_id || member.pod_id === currentUser.pod_id)))
     : [];
 
   const teamRows = teamMembers
         .map((member) => {
           const memberTasks = tasks.filter((t) => t.owner_id === member.id);
-          const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now), 0);
+          const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now, member), 0);
           const inProgressCount = memberTasks.filter((t) => t.status === "running" || t.status === "paused").length;
           const submittedTodayCount = memberTasks.filter((t) => t.status === "submitted" && isToday(t.submitted_at)).length;
           const runningTask = memberTasks.find((t) => t.status === "running");
@@ -1392,7 +1877,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
           </div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          {isAdmin && (
+          {canUseTeamView && (
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: 4, border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper-soft)" }}>
               <div className="cb-tabs cb-tabs-plain" style={{ margin: 0 }}>
                 <button className={`cb-tab cb-tab-plain ${viewFilter === "everyone" ? "active" : ""}`} onClick={() => setViewFilter("everyone")}>Everyone</button>
@@ -1421,7 +1906,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         </div>
       </div>
 
-      {isAdmin && viewFilter === "team" && (
+      {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
           <table className="cb-table">
             <thead>
@@ -1499,7 +1984,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       <div data-tour="task-search" style={{ margin: "2px 0 18px", maxWidth: 460 }}>
         <div style={{ position: "relative" }}>
           <Search size={16} aria-hidden="true" style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-          <input
+          <input spellCheck={false} lang="en"
             className="cb-input"
             type="search"
             aria-label="Search client or task"
@@ -1770,17 +2255,8 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
       const top = openUpwards
         ? Math.max(gutter, rect.top - maxHeight - gap)
         : Math.min(rect.bottom + gap, Math.max(gutter, viewportHeight - maxHeight - gutter));
-
-      setMenuStyle({
-        position: "fixed",
-        top,
-        left,
-        width,
-        maxHeight,
-        zIndex: 9999,
-      });
+      setMenuStyle({ position: "fixed", top, left, width, maxHeight, zIndex: 9999 });
     }
-
     updateMenuPosition();
     window.addEventListener("resize", updateMenuPosition);
     window.addEventListener("scroll", updateMenuPosition, true);
@@ -1817,7 +2293,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
 
   return (
     <div ref={containerRef} className="cb-searchable-wrap" style={{ position: "relative" }}>
-      <input
+      <input spellCheck={false} lang="en"
         ref={inputRef}
         className="cb-input"
         placeholder={placeholder}
@@ -1826,11 +2302,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
         onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
         onKeyDown={(e) => { if (e.key === "Escape") { e.target.blur(); setOpen(false); } }}
       />
-      {open && !viewportAware && (
-        <div className="cb-searchable-list">
-          {menuContents}
-        </div>
-      )}
+      {open && !viewportAware && <div className="cb-searchable-list">{menuContents}</div>}
       {open && viewportAware && menuStyle && createPortal(
         <div
           ref={portalRef}
@@ -1846,54 +2318,20 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
             fontFamily: "inherit",
           }}
         >
-          <div
-            role="listbox"
-            style={{
-              width: "100%",
-              maxHeight: menuStyle.maxHeight,
-              overflowY: "auto",
-              overflowX: "hidden",
-              background: "#FFFFFF",
-              padding: 6,
-              boxSizing: "border-box",
-              scrollbarGutter: "stable",
-            }}
-          >
-            {filtered.length === 0 && (
-              <div style={{ padding: "9px 10px", fontSize: 13, color: "#6B746E" }}>No matches</div>
-            )}
+          <div role="listbox" style={{ width: "100%", maxHeight: menuStyle.maxHeight, overflowY: "auto", overflowX: "hidden", background: "#FFFFFF", padding: 6, boxSizing: "border-box", scrollbarGutter: "stable" }}>
+            {filtered.length === 0 && <div style={{ padding: "9px 10px", fontSize: 13, color: "#6B746E" }}>No matches</div>}
             {filtered.map((o) => (
               <div
                 key={o.id}
                 role="option"
                 aria-selected={o.id === value}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  onChange(o.id);
-                  setOpen(false);
-                  setQuery("");
-                }}
+                onMouseDown={(e) => { e.preventDefault(); onChange(o.id); setOpen(false); setQuery(""); }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = "#F3F6F3"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = o.id === value ? "#EEF5F0" : "#FFFFFF"; }}
-                style={{
-                  display: "block",
-                  minHeight: 34,
-                  padding: "8px 10px",
-                  borderRadius: 7,
-                  background: o.id === value ? "#EEF5F0" : "#FFFFFF",
-                  color: "#17201A",
-                  fontSize: 13,
-                  lineHeight: "18px",
-                  whiteSpace: "normal",
-                  overflowWrap: "anywhere",
-                  cursor: "pointer",
-                  boxSizing: "border-box",
-                }}
+                style={{ display: "block", minHeight: 34, padding: "8px 10px", borderRadius: 7, background: o.id === value ? "#EEF5F0" : "#FFFFFF", color: "#17201A", fontSize: 13, lineHeight: "18px", whiteSpace: "normal", overflowWrap: "anywhere", cursor: "pointer", boxSizing: "border-box" }}
               >
                 <div style={{ fontWeight: o.id === value ? 650 : 500 }}>{getLabel(o)}</div>
-                {getSecondary && getSecondary(o) && (
-                  <div style={{ marginTop: 2, fontSize: 11.5, color: "#6B746E" }}>{getSecondary(o)}</div>
-                )}
+                {getSecondary && getSecondary(o) && <div style={{ marginTop: 2, fontSize: 11.5, color: "#6B746E" }}>{getSecondary(o)}</div>}
               </div>
             ))}
           </div>
@@ -1904,7 +2342,7 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
   );
 }
 
-function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient }) {
+function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient, recoveringForgottenTime = false, recoveryAllocationOnly = false }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState("");
   const [newClientName, setNewClientName] = useState("");
@@ -2074,7 +2512,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
     <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="cb-modal" data-tour="new-task-modal">
         <div className="cb-modal-head">
-          <div className="cb-modal-title">New task</div>
+          <div className="cb-modal-title">{recoveryAllocationOnly ? "New task for recovered time" : recoveringForgottenTime ? "New task for forgotten time" : "New task"}</div>
           <button className="cb-icon-btn" onClick={onClose}><X size={16} /></button>
         </div>
         <form onSubmit={handleSubmit}>
@@ -2094,8 +2532,8 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                 />
               ) : (
                 <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 160px", gap: 8 }}>
-                  <input className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
-                  <input className="cb-input" placeholder="Client code" value={newClientCode} onChange={(e) => setNewClientCode(e.target.value)} required />
+                  <input spellCheck={false} lang="en" className="cb-input" placeholder="Client name" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                  <input spellCheck={false} lang="en" className="cb-input" placeholder="Client code" value={newClientCode} onChange={(e) => setNewClientCode(e.target.value)} required />
                 </div>
               )}
             </div>
@@ -2123,7 +2561,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                         <div className="cb-hint" style={{ padding: 10 }}>This template has no tasks yet.</div>
                       )}
                       {selectedTemplate.tasks.length > 5 && (
-                        <input
+                        <input spellCheck={false} lang="en"
                           className="cb-input" placeholder="Search tasks in this template..."
                           value={taskSearchQuery} onChange={(e) => setTaskSearchQuery(e.target.value)}
                           style={{ margin: 8, width: "calc(100% - 16px)" }}
@@ -2260,7 +2698,7 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
                   )}
                 </>
               ) : (
-                <input className="cb-input" placeholder={taskNamePlaceholder(null, taskType)} value={customName} onChange={(e) => setCustomName(e.target.value)} />
+                <input spellCheck={false} lang="en" className="cb-input" placeholder={taskNamePlaceholder(null, taskType)} value={customName} onChange={(e) => setCustomName(e.target.value)} />
               )}
             </div>
 
@@ -2308,18 +2746,32 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
           </div>
           <div className="cb-modal-foot">
             <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>
-              {taskMode === "template" && selectedTaskIds.length > 1 ? `Add ${selectedTaskIds.length} tasks` : "Add to dashboard"}
-            </button>
-            <button
-              type="button"
-              className="cb-btn cb-btn-primary"
-              disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
-              title={ownerId !== currentUser.id ? "A timer can only be started for your own task" : (taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task to add and start" : "Add this task and start its timer immediately")}
-              onClick={(e) => handleSubmit(e, true)}
-            >
-              Add & Start
-            </button>
+            {recoveringForgottenTime ? (
+              <button
+                type="button"
+                className="cb-btn cb-btn-primary"
+                disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
+                title={taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task for the recovered time" : recoveryAllocationOnly ? "Create this task and add it to the recovery split" : "Create this task, add the forgotten time, and continue its timer"}
+                onClick={(e) => handleSubmit(e, !recoveryAllocationOnly)}
+              >
+                {recoveryAllocationOnly ? "Create task" : "Recover & continue"}
+              </button>
+            ) : (
+              <>
+                <button type="submit" className="cb-btn cb-btn-primary" disabled={busy}>
+                  {taskMode === "template" && selectedTaskIds.length > 1 ? `Add ${selectedTaskIds.length} tasks` : "Add to dashboard"}
+                </button>
+                <button
+                  type="button"
+                  className="cb-btn cb-btn-primary"
+                  disabled={busy || ownerId !== currentUser.id || (taskMode === "template" && selectedTaskIds.length !== 1)}
+                  title={ownerId !== currentUser.id ? "A timer can only be started for your own task" : (taskMode === "template" && selectedTaskIds.length !== 1 ? "Select one task to add and start" : "Add this task and start its timer immediately")}
+                  onClick={(e) => handleSubmit(e, true)}
+                >
+                  Add & Start
+                </button>
+              </>
+            )}
           </div>
         </form>
       </div>
@@ -2376,7 +2828,7 @@ function LearningReferenceEditor({ label, items, onChange }) {
       <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
         {items.map((item, index) => (
           <div key={index} style={{ display: "grid", gridTemplateColumns: "minmax(0, .8fr) minmax(0, 1.45fr) 34px", gap: 7, alignItems: "center", minWidth: 0 }}>
-            <input className="cb-input" style={{ minWidth: 0 }} placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
+            <input spellCheck={false} lang="en" className="cb-input" style={{ minWidth: 0 }} placeholder="Title / label" value={item.title} onChange={(e) => update(index, { title: e.target.value })} />
             <input className="cb-input" style={{ minWidth: 0 }} type="url" placeholder="https://..." value={item.url} onChange={(e) => update(index, { url: e.target.value })} />
             <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove reference" aria-label={`Remove ${label} reference ${index + 1}`} onClick={() => remove(index)}><Trash2 size={13} /></button>
           </div>
@@ -2413,6 +2865,8 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
   const isWeeklyBookkeeping = periodType === "weekly" && isBookkeepingWork(task);
   const effectiveTaskType = task.task_type || taskType;
   const isLearningTask = effectiveTaskType === BUILTIN_LEARNING_TASK_TYPE;
+  const learningNoteWordCount = whatILearned.trim() ? whatILearned.trim().split(/\s+/).filter((word) => /[A-Za-z0-9]/.test(word)).length : 0;
+  const learningNoteTooShort = isLearningTask && learningNoteWordCount < MIN_LEARNING_NOTE_WORDS;
   const needsClient = task.client_id === UNASSIGNED_CLIENT_ID && !isLearningTask;
   const [clientId, setClientId] = useState(task.client_id === UNASSIGNED_CLIENT_ID ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
@@ -2577,12 +3031,15 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
                 </div>
                 <div className="cb-field" style={{ marginBottom: 10 }}>
                   <label className="cb-label">Topic *</label>
-                  <input className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
+                  <input spellCheck={false} lang="en" className="cb-input" value={learningTopic} onChange={(e) => setLearningTopic(e.target.value)} placeholder="What subject did you learn about?" />
                 </div>
               </div>
               <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
-                <textarea className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
+                <textarea spellCheck={false} lang="en" className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
+                <div style={{ marginTop: 5, fontSize: 12, color: learningNoteTooShort && whatILearned.trim() ? "var(--danger)" : "var(--ink-faint)" }}>
+                  Minimum {MIN_LEARNING_NOTE_WORDS} words{whatILearned.trim() ? ` · ${learningNoteWordCount} entered` : ""}
+                </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "start" }}>
                 <LearningReferenceEditor label="TDM References" items={tdmReferences} onChange={setTdmReferences} />
@@ -2592,14 +3049,14 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
           )}
           <div className="cb-field">
             <label className="cb-label"><StickyNote size={12} style={{ verticalAlign: -1, marginRight: 4 }} />Note (optional)</label>
-            <textarea className="cb-textarea" rows={2} placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
+            <textarea spellCheck={false} lang="en" className="cb-textarea" rows={2} placeholder="Anything worth flagging for this entry" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
-              || (isLearningTask && (!learningCategory || !learningTopic.trim() || !whatILearned.trim()))
+              || (isLearningTask && (!learningCategory || !learningTopic.trim() || learningNoteTooShort))
               || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
@@ -2677,7 +3134,7 @@ function InviteMemberModal({ onClose, onInvite, currentUser }) {
             <div className="cb-modal-body">
               <div className="cb-field">
                 <label className="cb-label">Name</label>
-                <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
+                <input spellCheck={false} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus placeholder="e.g. Priya Nair" required />
               </div>
               <div className="cb-field">
                 <label className="cb-label">Email</label>
@@ -2709,7 +3166,7 @@ function InviteMemberModal({ onClose, onInvite, currentUser }) {
               </div>
               <div className="cb-field">
                 <label className="cb-label">Invitation link</label>
-                <input className="cb-input" value={inviteUrl(created.token)} readOnly onFocus={(e) => e.target.select()} />
+                <input spellCheck={false} lang="en" className="cb-input" value={inviteUrl(created.token)} readOnly onFocus={(e) => e.target.select()} />
               </div>
               <div className="cb-hint">You can also copy this link manually. ClockBook stores only a hash of the invitation token, so this exact link is shown only now unless you resend the invitation later.</div>
             </div>
@@ -2760,7 +3217,7 @@ function ManualAddMemberModal({ onClose, onAdd }) {
           <div className="cb-modal-body">
             <div className="cb-field">
               <label className="cb-label">Name</label>
-              <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
+              <input spellCheck={false} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus required />
             </div>
             <div className="cb-field">
               <label className="cb-label">Email</label>
@@ -2902,7 +3359,7 @@ function TemplateTaskEditor({ template, task, roles, taskTypes, trackedMetrics, 
   return (
     <div className="cb-tmpl-task-block">
       <div className="cb-tmpl-task-row">
-        <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} />
+        <input spellCheck={false} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} />
         <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
           <option value="">No role</option>
           {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
@@ -3029,8 +3486,8 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
     <div className="cb-tmpl-card">
       {isEditingHeader ? (
         <div className="cb-tmpl-head" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          <input className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
-          <input className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
+          <input spellCheck={false} lang="en" className="cb-input" style={{ width: 160 }} value={editedField} onChange={(e) => setEditedField(e.target.value)} placeholder="Field" autoFocus />
+          <input spellCheck={false} lang="en" className="cb-input" style={{ width: 220 }} value={editedName} onChange={(e) => setEditedName(e.target.value)} placeholder="Template name" />
           <select className="cb-select" style={{ width: 210 }} value={editedCategory} onChange={(e) => setEditedCategory(e.target.value)}>
             <option value="">No main category (use task type)</option>
             {TEMPLATE_CATEGORY_OPTIONS.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -3097,7 +3554,7 @@ function TemplateEditor({ template, isAdmin, roles, taskTypes, trackedMetrics, o
           {isAdmin && addingTask && (
             <form className="cb-tmpl-task-block" onSubmit={addTask}>
               <div className="cb-tmpl-task-row">
-                <input className="cb-input" placeholder={taskNamePlaceholder(template, tType)} value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
+                <input spellCheck={false} lang="en" className="cb-input" placeholder={taskNamePlaceholder(template, tType)} value={tName} onChange={(e) => setTName(e.target.value)} autoFocus />
                 <select className="cb-select" value={tRole} onChange={(e) => setTRole(e.target.value)}>
                   <option value="">No role</option>
                   {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
@@ -3361,11 +3818,11 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
             <form onSubmit={createWorkspace} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1.2fr) minmax(180px,1fr) auto", gap: 10, alignItems: "end", maxWidth: 820 }}>
               <div>
                 <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace name</label>
-                <input className="cb-input" value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. Test Company Ltd" />
+                <input spellCheck={false} lang="en" className="cb-input" value={newWorkspaceName} onChange={(e) => setNewWorkspaceName(e.target.value)} placeholder="e.g. Test Company Ltd" />
               </div>
               <div>
                 <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Slug <span className="cb-hint">(optional)</span></label>
-                <input className="cb-input" value={newWorkspaceSlug} onChange={(e) => setNewWorkspaceSlug(e.target.value)} placeholder="test-company" />
+                <input spellCheck={false} lang="en" className="cb-input" value={newWorkspaceSlug} onChange={(e) => setNewWorkspaceSlug(e.target.value)} placeholder="test-company" />
               </div>
               <button type="submit" className="cb-btn cb-btn-primary" style={{ minHeight: 40, whiteSpace: "nowrap" }} disabled={creatingWorkspace || !newWorkspaceName.trim()}>
                 {creatingWorkspace ? "Creating..." : "Create workspace"}
@@ -3435,7 +3892,8 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 
   const managerMembers = useMemo(() => {
     if (currentUser.role === "super_admin") return members;
-    return members.filter((m) => m.role !== "super_admin" && (!currentUser.pod_id || m.pod_id === currentUser.pod_id));
+    const canSeeSuperAdmins = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+    return members.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !currentUser.pod_id || m.pod_id === currentUser.pod_id));
   }, [members, currentUser]);
 
   const loadReport = useCallback(async () => {
@@ -3490,7 +3948,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
       {mode === "library" && <>
         <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 14, marginBottom: 16 }}>
           <div style={{ display: "grid", gridTemplateColumns: "minmax(240px,1.5fr) minmax(190px,.8fr)", gap: 10, alignItems: "end" }}>
-            <div><div className="cb-label">Keyword search</div><div style={{ position: "relative" }}><Search size={15} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-faint)" }} /><input className="cb-input" style={{ paddingLeft: 34 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Search topic or what was learned..." /></div></div>
+            <div><div className="cb-label">Keyword search</div><div style={{ position: "relative" }}><Search size={15} style={{ position: "absolute", left: 11, top: 11, color: "var(--ink-faint)" }} /><input spellCheck={false} lang="en" className="cb-input" style={{ paddingLeft: 34 }} value={keyword} onChange={(e) => setKeyword(e.target.value)} placeholder="Search topic or what was learned..." /></div></div>
             <div><div className="cb-label">Major Category</div><select className="cb-select" value={category} onChange={(e) => setCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
           </div>
           <div style={{ marginTop: 12 }}>
@@ -3523,7 +3981,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
             <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
             <div><div className="cb-label">Person</div><SearchableSelect options={managerMembers} value={personId} onChange={setPersonId} placeholder="All people" getLabel={(m) => m.name} /></div>
             <div><div className="cb-label">Category</div><select className="cb-select" value={reportCategory} onChange={(e) => setReportCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
-            <div><div className="cb-label">Keyword</div><input className="cb-input" value={reportKeyword} onChange={(e) => setReportKeyword(e.target.value)} placeholder="Topic or learning..." /></div>
+            <div><div className="cb-label">Keyword</div><input spellCheck={false} lang="en" className="cb-input" value={reportKeyword} onChange={(e) => setReportKeyword(e.target.value)} placeholder="Topic or learning..." /></div>
           </div>
         </div>
         {reportError ? <div className="cb-empty">{reportError}</div> : reportBusy ? <TableSkeleton rows={5} /> : <>
@@ -3545,9 +4003,10 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 function SettingsView({
   roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onUpdateLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
-  members = [], onChangeInsightsPermission,
+  members = [], currentUser = null, onChangeInsightsPermission, onChangeAdditionalPermissions,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
+  onTestForgottenRecovery = null,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -3578,10 +4037,24 @@ function SettingsView({
   const [testingCalamari, setTestingCalamari] = useState(false);
   const [calamariMessage, setCalamariMessage] = useState("");
   const [permissionSearch, setPermissionSearch] = useState("");
+  const [permissionMemberId, setPermissionMemberId] = useState("");
+  const [permissionListOpen, setPermissionListOpen] = useState(false);
+  const [delegationExclusions, setDelegationExclusions] = useState([]);
+  const [delegationDefaults, setDelegationDefaults] = useState([]);
+  const [delegationExclusionsLoaded, setDelegationExclusionsLoaded] = useState(false);
+  const [savingDelegationExclusions, setSavingDelegationExclusions] = useState(false);
+  const [delegationMessage, setDelegationMessage] = useState("");
   const [platformSettingsReady, setPlatformSettingsReady] = useState(false);
 
+  const canManagePods = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS);
+  const canManageLearningCategories = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_LEARNING_CATEGORIES);
+  const canManageDelegationExclusions = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_DELEGATION_EXCLUSIONS);
+  const canManageBranding = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_WORKSPACE_BRANDING);
+  const canManageIntegrations = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_INTEGRATIONS);
+  const canManageAuditRecording = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_AUDIT_RECORDING);
+
   useEffect(() => {
-    if (!realIsSuperAdmin) {
+    if (!canManageLearningCategories) {
       setManagedLearningCategories([]);
       return;
     }
@@ -3590,10 +4063,10 @@ function SettingsView({
       .then((rows) => { if (alive) setManagedLearningCategories(rows); })
       .catch((err) => { if (alive) setError(err.message || "Could not load learning categories"); });
     return () => { alive = false; };
-  }, [realIsSuperAdmin]);
+  }, [canManageLearningCategories]);
 
   useEffect(() => {
-    if (!realIsSuperAdmin) return;
+    if (!canManageIntegrations) return;
     let alive = true;
     api.getKarbonIntegration()
       .then((r) => { if (alive) setKarbonIntegration(r); })
@@ -3602,10 +4075,32 @@ function SettingsView({
       .then((r) => { if (alive) { setCalamariIntegration(r); if (r?.tenant) setCalamariTenant(r.tenant); } })
       .catch((err) => { if (alive) setCalamariMessage(err.message); });
     return () => { alive = false; };
-  }, [realIsSuperAdmin]);
+  }, [canManageIntegrations]);
 
   useEffect(() => {
-    if (!isSuperAdmin) return;
+    if (!canManageDelegationExclusions) {
+      setDelegationExclusionsLoaded(false);
+      return;
+    }
+    let alive = true;
+    setDelegationExclusionsLoaded(false);
+    api.getDelegationSuggestionExclusions()
+      .then((result) => {
+        if (!alive) return;
+        setDelegationExclusions(Array.isArray(result?.exclusions) ? result.exclusions : []);
+        setDelegationDefaults(Array.isArray(result?.defaults) ? result.defaults : []);
+        setDelegationExclusionsLoaded(true);
+      })
+      .catch((err) => {
+        if (!alive) return;
+        setDelegationMessage(err.message || "Could not load delegation exclusions");
+        setDelegationExclusionsLoaded(true);
+      });
+    return () => { alive = false; };
+  }, [canManageDelegationExclusions, activeWorkspaceId]);
+
+  useEffect(() => {
+    if (!canManageAuditRecording && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.REPORT_AUDIT)) return;
     let alive = true;
     api.getInactivityAuditStatus()
       .then((r) => { if (alive) setInactivityAuditEnabled(!!r.enabled); })
@@ -3616,7 +4111,7 @@ function SettingsView({
         }
       });
     return () => { alive = false; };
-  }, [isSuperAdmin]);
+  }, [canManageAuditRecording, currentUser]);
 
   async function saveKarbonIntegration(e) {
     e.preventDefault();
@@ -3720,7 +4215,7 @@ function SettingsView({
   }
 
   async function toggleInactivityAudit() {
-    if (!isSuperAdmin || savingInactivityAudit || inactivityAuditEnabled == null) return;
+    if (!canManageAuditRecording || savingInactivityAudit || inactivityAuditEnabled == null) return;
     setSavingInactivityAudit(true);
     setError("");
     try {
@@ -3730,6 +4225,22 @@ function SettingsView({
       setError(err.message);
     } finally {
       setSavingInactivityAudit(false);
+    }
+  }
+
+  async function saveDelegationExclusions() {
+    if (!realIsSuperAdmin || savingDelegationExclusions) return;
+    setSavingDelegationExclusions(true);
+    setDelegationMessage("");
+    try {
+      const result = await api.setDelegationSuggestionExclusions(delegationExclusions);
+      setDelegationExclusions(Array.isArray(result?.exclusions) ? result.exclusions : []);
+      setDelegationDefaults(Array.isArray(result?.defaults) ? result.defaults : delegationDefaults);
+      setDelegationMessage("Delegation exclusions saved.");
+    } catch (err) {
+      setDelegationMessage(err.message || "Could not save delegation exclusions");
+    } finally {
+      setSavingDelegationExclusions(false);
     }
   }
 
@@ -3864,7 +4375,7 @@ function SettingsView({
         activeWorkspaceId={activeWorkspaceId}
         onSwitchWorkspace={onSwitchWorkspace}
         onWorkspaceCreated={onWorkspaceCreated}
-        canManageBranding={realIsSuperAdmin && viewMode === "super_admin"}
+        canManageBranding={canManageBranding}
         onBrandingUpdated={onBrandingUpdated}
         onPlatformResolved={() => setPlatformSettingsReady(true)}
       />
@@ -3901,117 +4412,170 @@ function SettingsView({
       )}
 
       {realIsSuperAdmin && viewMode === "super_admin" && (() => {
-        const enabledMembers = members.filter((m) => m.role !== "super_admin" && !!m.can_view_leave_capacity_insights);
-        const search = permissionSearch.trim().toLowerCase();
-        const searchResults = search
-          ? members.filter((m) => m.role !== "super_admin" && !m.can_view_leave_capacity_insights && m.name.toLowerCase().includes(search))
-          : [];
-        return (
+        const eligibleMembers = members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
+        const normalizedSearch = permissionSearch.trim().toLowerCase();
+        const visibleMembers = normalizedSearch
+          ? eligibleMembers.filter((m) => `${m.name} ${roleLabel(m.role)}`.toLowerCase().includes(normalizedSearch))
+          : eligibleMembers;
+        const selected = eligibleMembers.find((m) => m.id === permissionMemberId) || null;
+        const selectedPermissions = new Set(selected?.additional_permissions || []);
+        if (selected?.can_view_leave_capacity_insights) selectedPermissions.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
+        const togglePermission = async (permission, enabled) => {
+          if (!selected || !onChangeAdditionalPermissions) return;
+          const next = new Set(selectedPermissions);
+          if (enabled) next.add(permission); else next.delete(permission);
+          await onChangeAdditionalPermissions(selected.id, Array.from(next));
+        };
+        const checkbox = (permission, label, description, adminOnly = false) => {
+          const disabled = adminOnly && selected?.role !== "admin";
+          return <label key={permission} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "11px 0", borderTop: "1px solid var(--border)", opacity: disabled ? 0.5 : 1, cursor: disabled ? "default" : "pointer" }}>
+            <input type="checkbox" checked={selectedPermissions.has(permission)} disabled={!selected || disabled} onChange={(e) => togglePermission(permission, e.target.checked)} style={{ marginTop: 3 }} />
+            <span><span style={{ display: "block", fontSize: 13.5, fontWeight: 700 }}>{label}</span><span className="cb-hint">{description}</span></span>
+          </label>;
+        };
+        const permissionCount = (member) => {
+          const values = new Set(member?.additional_permissions || []);
+          if (member?.can_view_leave_capacity_insights) values.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
+          return values.size;
+        };
+        return <>
           <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
             <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
-              <div>
-                <div className="cb-tmpl-field">Permissions</div>
-                <div className="cb-tmpl-name">{integrationStatus.calamari_connected ? <>Leave &amp; capacity insights</> : <>Capacity insights</>}</div>
+              <div><div className="cb-tmpl-field">Permissions</div><div className="cb-tmpl-name">Additional access</div></div>
+            </div>
+            <div style={SETTINGS_BODY_STYLE}>
+              <div className="cb-hint" style={{ marginBottom: 10 }}>
+                Grant selected access without changing someone's role. Only Super Admins can change these permissions. Admin report access always stays within that Admin's normal pod/team scope.
               </div>
-              <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10, color: "var(--ink-soft)" }}>
-                <span style={{ fontSize: 12.5 }}>{enabledMembers.length} {enabledMembers.length === 1 ? "person" : "people"} enabled</span>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", maxWidth: 760 }}>
+                <div className="cb-hint">{eligibleMembers.length} staff/admin account{eligibleMembers.length === 1 ? "" : "s"}</div>
+                <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionListOpen((open) => !open)}>
+                  {permissionListOpen ? "Hide staff" : "Show staff"}
+                </button>
+              </div>
+              {permissionListOpen && <>
+                <div style={{ maxWidth: 420, margin: "10px 0" }}>
+                  <input spellCheck={false} lang="en" className="cb-input" value={permissionSearch} onChange={(e) => setPermissionSearch(e.target.value)} placeholder="Search staff or admin..." />
+                </div>
+                <div style={{ border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden", maxWidth: 760, maxHeight: 360, overflowY: "auto" }}>
+                  {visibleMembers.length === 0 ? <div className="cb-empty" style={{ padding: 18 }}>No matching staff or admins.</div> : visibleMembers.map((member, index) => {
+                    const count = permissionCount(member);
+                    return <div key={member.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 12px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)" }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ fontSize: 13.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
+                        <div className="cb-hint">{roleLabel(member.role)} · {count ? `${count} additional permission${count === 1 ? "" : "s"}` : "No additional access"}</div>
+                      </div>
+                      <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionMemberId(member.id)}>Edit permissions</button>
+                    </div>;
+                  })}
+                </div>
+              </>}
+            </div>
+          </div>
+
+          {selected && (
+            <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) setPermissionMemberId(""); }}>
+              <div className="cb-modal" style={{ maxWidth: 620 }}>
+                <div className="cb-modal-head">
+                  <div>
+                    <div className="cb-modal-title">Edit permissions</div>
+                    <div className="cb-hint" style={{ marginTop: 2 }}>{selected.name} · {roleLabel(selected.role)}</div>
+                  </div>
+                  <button type="button" className="cb-icon-btn" onClick={() => setPermissionMemberId("")}><X size={16} /></button>
+                </div>
+                <div className="cb-modal-body">
+                  <div className="cb-hint" style={{ marginBottom: 12 }}>
+                    These permissions add specific access without changing the person's main role. Report access for Admins remains restricted to their normal pod/team scope.
+                  </div>
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "4px 0 6px" }}>Insights</div>
+                  {checkbox(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY, integrationStatus.calamari_connected ? "Leave & capacity insights" : "Capacity insights", integrationStatus.calamari_connected ? "View Leave Trends and Capacity & Utilisation in Insights." : "View Capacity & Utilisation in Insights. Leave Trends will appear when Calamari is connected.")}
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Team & Staff</div>
+                  {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Elevated administration permissions can only be granted to Admins.</div>}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_PODS, "Manage pods", "Create/delete pods and change staff or Admin pod assignments.", true)}
+                  {checkbox(ACCESS_PERMISSION.ADD_STAFF_MANUALLY, "Add staff manually", "Create a new staff login directly from the Staff page.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_LEARNING_CATEGORIES, "Manage L&D categories", "Create, rename, archive and restore Learning & Development categories.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_DELEGATION_EXCLUSIONS, "Manage delegation exclusions", "Choose work types that Insights must never suggest for delegation.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_SUPER_ADMINS, "Manage Super Admins", "Make Super Admin accounts visible like staff within this Admin's existing Dashboard, Insights, Karbon Check, L&D and granted Reports access. This does not allow role, security, permission or credential changes to Super Admins.", true)}
+                  {checkbox(ACCESS_PERMISSION.VIEW_TRACKED_TIME, "View tracked time", "See the original automatically tracked time alongside final Duration in Export. Without this permission, Admins see Duration only.", true)}
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Workspace</div>
+                  {checkbox(ACCESS_PERMISSION.MANAGE_WORKSPACE_BRANDING, "Manage workspace branding", "Change the workspace logo and branding settings.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_INTEGRATIONS, "Manage integrations", "Connect, replace, test or disconnect Karbon and Calamari credentials.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_AUDIT_RECORDING, "Manage audit recording", "Turn inactivity/audit event recording on or off for the workspace.", true)}
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Reports</div>
+                  {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Report access can only be granted to Admins.</div>}
+                  {checkbox(ACCESS_PERMISSION.REPORT_HELP, "Help activity", "View the Help activity report for the Admin's permitted team scope.", true)}
+                  {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
+                  {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
+                  <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Always Super Admin only</div>
+                  <div className="cb-hint" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>Additional Admin Permissions, Super Admin promotion/demotion, emergency workspace session revocation, Platform Admin controls, cross-pod Super Admin reporting, and Demo/View Mode cannot be delegated.</div>
+                </div>
+                <div className="cb-modal-foot">
+                  <button type="button" className="cb-btn" onClick={() => setPermissionMemberId("")}>Done</button>
+                </div>
               </div>
             </div>
-
-            <div style={{ padding: "0 16px 12px" }}>
-                <div className="cb-hint" style={{ marginBottom: 9 }}>
-                  {integrationStatus.calamari_connected ? "Choose who can view Leave Trends and Capacity & Utilisation in Insights." : "Choose who can view Capacity & Utilisation in Insights. Leave reporting stays hidden until this workspace connects Calamari."} Super Admins always have access. Staff with access only see their own data; Admins keep their normal permitted team scope.
-                </div>
-
-                <div style={{ position: "relative", maxWidth: 460, marginBottom: 10 }}>
-                  <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-                  <input
-                    className="cb-input"
-                    value={permissionSearch}
-                    onChange={(e) => setPermissionSearch(e.target.value)}
-                    placeholder="Search staff to add..."
-                    aria-label="Search staff to add leave and capacity insights access"
-                    style={{ width: "100%", paddingLeft: 34, paddingRight: permissionSearch ? 34 : 10 }}
-                  />
-                  {permissionSearch && (
-                    <button
-                      type="button"
-                      className="cb-icon-btn"
-                      onClick={() => setPermissionSearch("")}
-                      aria-label="Clear staff search"
-                      style={{ position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)", border: 0, background: "transparent" }}
-                    >
-                      <X size={14} />
-                    </button>
-                  )}
-                </div>
-
-                {search && (
-                  <div style={{ maxWidth: 620, marginBottom: 12, border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                    {searchResults.length ? searchResults.map((m, index) => (
-                      <div
-                        key={m.id}
-                        style={{
-                          display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                          padding: "7px 10px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
-                        }}
-                      >
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
-                          <div className="cb-hint">{roleLabel(m.role)}</div>
-                        </div>
-                        <button
-                          type="button"
-                          className="cb-btn cb-btn-sm"
-                          onClick={() => {
-                            onChangeInsightsPermission && onChangeInsightsPermission(m.id, true);
-                            setPermissionSearch("");
-                          }}
-                        >
-                          <Plus size={13} /> Add access
-                        </button>
-                      </div>
-                    )) : (
-                      <div className="cb-hint" style={{ padding: "10px 11px" }}>No matching staff without access.</div>
-                    )}
-                  </div>
-                )}
-
-                <div style={{ maxWidth: 620 }}>
-                  <div className="cb-label" style={{ marginBottom: 7 }}>Has access</div>
-                  {enabledMembers.length ? (
-                    <div style={{ border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" }}>
-                      {enabledMembers.map((m, index) => (
-                        <div
-                          key={m.id}
-                          style={{
-                            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
-                            padding: "7px 10px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)"
-                          }}
-                        >
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 13, fontWeight: 650 }}>{m.name}</div>
-                            <div className="cb-hint">{roleLabel(m.role)}</div>
-                          </div>
-                          <button
-                            type="button"
-                            className="cb-btn cb-btn-sm cb-btn-danger"
-                            onClick={() => onChangeInsightsPermission && onChangeInsightsPermission(m.id, false)}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="cb-hint">No additional staff have access.</div>
-                  )}
-                  <div className="cb-hint" style={{ marginTop: 9 }}>Super Admins always have access and do not need to be added.</div>
-                </div>
-              </div>
-          </div>
-        );
+          )}
+        </>;
       })()}
+
+      {canManageDelegationExclusions && (
+        <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
+          <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
+            <div>
+              <div className="cb-tmpl-field">Insights</div>
+              <div className="cb-tmpl-name">Delegation suggestion exclusions</div>
+            </div>
+          </div>
+          <div style={SETTINGS_BODY_STYLE}>
+            <div className="cb-hint" style={{ marginBottom: 10, maxWidth: 760 }}>
+              Choose work that Insights must never suggest for delegation. This only filters the delegation suggestions; it does not change tracked time, billable status, capacity, or reporting.
+            </div>
+            {!delegationExclusionsLoaded ? (
+              <SettingsLoadingBlock rows={3} minHeight={90} />
+            ) : (() => {
+              const fixedOptions = ["Admin", "Support given", "Support received", BUILTIN_LEARNING_TASK_TYPE];
+              const options = [...fixedOptions, ...taskTypes.map((t) => (t.name || "").trim()).filter(Boolean)]
+                .filter((label, index, rows) => rows.findIndex((item) => item.toLowerCase() === label.toLowerCase()) === index);
+              const selectedKeys = new Set(delegationExclusions.map((value) => String(value || "").toLowerCase()));
+              const toggle = (label) => {
+                const key = label.toLowerCase();
+                setDelegationMessage("");
+                setDelegationExclusions((prev) => {
+                  const exists = prev.some((value) => String(value || "").toLowerCase() === key);
+                  return exists ? prev.filter((value) => String(value || "").toLowerCase() !== key) : [...prev, label];
+                });
+              };
+              return (
+                <>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8, maxWidth: 900 }}>
+                    {options.map((label) => (
+                      <label key={label.toLowerCase()} style={{ display: "flex", alignItems: "center", gap: 9, border: "1px solid var(--border)", borderRadius: 8, padding: "9px 10px", background: "var(--surface)", cursor: "pointer", minWidth: 0 }}>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeys.has(label.toLowerCase())}
+                          onChange={() => toggle(label)}
+                          style={{ width: 16, height: 16, flexShrink: 0 }}
+                        />
+                        <span style={{ fontSize: 13.5, minWidth: 0 }}>{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 12 }}>
+                    <button type="button" className="cb-btn cb-btn-sm cb-btn-primary" onClick={saveDelegationExclusions} disabled={savingDelegationExclusions}>
+                      {savingDelegationExclusions ? "Saving..." : "Save exclusions"}
+                    </button>
+                    <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setDelegationExclusions(delegationDefaults); setDelegationMessage(""); }} disabled={savingDelegationExclusions}>
+                      Restore defaults
+                    </button>
+                    {delegationMessage && <span className="cb-hint">{delegationMessage}</span>}
+                  </div>
+                  <div className="cb-hint" style={{ marginTop: 8 }}>Meetings remain excluded automatically because they are not treated as repeatable delegation work.</div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
 
       {effectiveIsAdmin && (
       <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
@@ -4032,7 +4596,7 @@ function SettingsView({
             ))}
             {roles.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No roles added yet.</div>}
             <form onSubmit={submitRole} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input className="cb-input" placeholder="e.g. Manager" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
+              <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. Manager" value={newRole} onChange={(e) => setNewRole(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
           </div>
@@ -4066,7 +4630,7 @@ function SettingsView({
             })}
             {taskTypes.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No task types added yet.</div>}
             <form onSubmit={submitTaskType} style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) auto auto", gap: 8, marginTop: 8, alignItems: "center" }}>
-              <input className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
+              <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. Advisory" value={newTaskType} onChange={(e) => setNewTaskType(e.target.value)} />
               <button
                 type="button"
                 className="cb-btn cb-btn-sm"
@@ -4089,7 +4653,7 @@ function SettingsView({
             ))}
             {trackedMetrics.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>Nothing added yet.</div>}
             <form onSubmit={submitMetric} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-              <input className="cb-input" placeholder="e.g. Unreconciled transactions" value={newMetric} onChange={(e) => setNewMetric(e.target.value)} />
+              <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. Unreconciled transactions" value={newMetric} onChange={(e) => setNewMetric(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
             </form>
           </div>
@@ -4098,7 +4662,7 @@ function SettingsView({
       </div>
       )}
 
-      {realIsSuperAdmin && (
+      {canManageLearningCategories && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
@@ -4111,7 +4675,7 @@ function SettingsView({
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: "0 16px" }}>
               {managedLearningCategories.map((c) => <div key={c.id} className="cb-client-account-row" style={{ opacity: c.is_active ? 1 : 0.65, gap: 8 }}>
                 {editingLearningCategoryId === c.id ? <>
-                  <input className="cb-input" value={editingLearningCategoryName} onChange={(e) => setEditingLearningCategoryName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveLearningCategory(c); } if (e.key === "Escape") { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); } }} autoFocus />
+                  <input spellCheck={false} lang="en" className="cb-input" value={editingLearningCategoryName} onChange={(e) => setEditingLearningCategoryName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); saveLearningCategory(c); } if (e.key === "Escape") { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); } }} autoFocus />
                   <button type="button" className="cb-btn cb-btn-sm cb-btn-primary" onClick={() => saveLearningCategory(c)}>Save</button>
                   <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setEditingLearningCategoryId(null); setEditingLearningCategoryName(""); }}>Cancel</button>
                 </> : <>
@@ -4123,7 +4687,7 @@ function SettingsView({
             </div>
             {managedLearningCategories.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No learning categories configured yet.</div>}
             <form onSubmit={submitLearningCategory} style={{ display: "flex", gap: 8, marginTop: 8, maxWidth: 430 }}>
-              <input className="cb-input" placeholder="e.g. Advisory" value={newLearningCategory} onChange={(e) => setNewLearningCategory(e.target.value)} />
+              <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. Advisory" value={newLearningCategory} onChange={(e) => setNewLearningCategory(e.target.value)} />
               <button type="submit" className="cb-btn cb-btn-sm"><Plus size={13} />Add category</button>
             </form>
           </div>
@@ -4141,20 +4705,20 @@ function SettingsView({
           <div style={SETTINGS_BODY_STYLE}>
             <div className="cb-hint" style={{ marginBottom: 8 }}>
               Assign an admin to a pod on the Staff page and they will only see time and task data for people in that same pod. An admin with no pod keeps seeing everyone, and super admins always see everyone regardless of pod.
-              {!isSuperAdmin && " Pod creation, deletion, and assignment are managed by a Super Admin."}
+              {!canManagePods && " Pod creation, deletion, and assignment require additional access from a Super Admin."}
             </div>
             {pods.map((p) => (
               <div key={p.id} className="cb-client-account-row">
                 <div style={{ fontSize: 13.5 }}>{p.name}</div>
-                {isSuperAdmin && (
+                {canManagePods && (
                   <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeletePod(p.id)}><Trash2 size={13} /></button>
                 )}
               </div>
             ))}
             {pods.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No pods created yet.</div>}
-            {isSuperAdmin && (
+            {canManagePods && (
               <form onSubmit={submitPod} style={{ display: "flex", gap: 8, marginTop: 6, maxWidth: 360 }}>
-                <input className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
+                <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. Bookkeeping Pod 1" value={newPod} onChange={(e) => setNewPod(e.target.value)} />
                 <button type="submit" className="cb-btn cb-btn-sm" style={{ flexShrink: 0 }}><Plus size={13} />Add</button>
               </form>
             )}
@@ -4162,7 +4726,7 @@ function SettingsView({
         </div>
       )}
 
-      {realIsSuperAdmin && viewMode === "super_admin" && (
+      {canManageIntegrations && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
@@ -4250,7 +4814,7 @@ function SettingsView({
               <form onSubmit={saveCalamariIntegration} style={{ display: "grid", gridTemplateColumns: "minmax(220px,1fr) minmax(280px,1.4fr) auto", gap: 10, alignItems: "end", maxWidth: 900 }}>
                 <div>
                   <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>Workspace</label>
-                  <input className="cb-input" placeholder="e.g. your-workspace" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
+                  <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. your-workspace" value={calamariTenant} onChange={(e) => setCalamariTenant(e.target.value)} />
                 </div>
                 <div>
                   <label className="cb-label" style={{ display: "block", marginBottom: 6 }}>API key</label>
@@ -4267,7 +4831,7 @@ function SettingsView({
         </div>
       )}
 
-      {isSuperAdmin && (
+      {canManageAuditRecording && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
@@ -4295,7 +4859,7 @@ function SettingsView({
         </div>
       )}
 
-      {isSuperAdmin && (
+      {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
@@ -4307,9 +4871,16 @@ function SettingsView({
             <div className="cb-hint" style={{ marginBottom: 8 }}>
               Finds any task whose tracked time is stuck growing because of a leftover unclosed period from before a recent fix. Fixing one only ever shortens its time to what was actually tracked, never lengthens it.
             </div>
-            <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
-              {scanning ? "Scanning..." : "Scan for issues"}
-            </button>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
+                {scanning ? "Scanning..." : "Scan for issues"}
+              </button>
+              {realIsSuperAdmin && viewMode === "super_admin" && onTestForgottenRecovery && (
+                <button type="button" className="cb-btn cb-btn-sm" onClick={onTestForgottenRecovery}>
+                  Test forgotten time recovery
+                </button>
+              )}
+            </div>
             {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
             {scanResults && scanResults.length === 0 && Object.keys(repairResults).length === 0 && (
               <div className="cb-hint" style={{ marginTop: 10 }}>No issues found.</div>
@@ -4413,11 +4984,11 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
           <div className="cb-field-row">
             <div className="cb-field">
               <label className="cb-label">Field</label>
-              <input className="cb-input" placeholder="e.g. Corporation Tax Return" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
+              <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. Corporation Tax Return" value={field} onChange={(e) => setField(e.target.value)} autoFocus />
             </div>
             <div className="cb-field">
               <label className="cb-label">Template name</label>
-              <input className="cb-input" placeholder="e.g. CT1" value={name} onChange={(e) => setName(e.target.value)} />
+              <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. CT1" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           </div>
           <div className="cb-field" style={{ marginTop: 10 }}>
@@ -4554,12 +5125,12 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
       {isEditingName ? (
         <div className="cb-row" style={{ background: "var(--paper)" }}>
           <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-            <input
+            <input spellCheck={false} lang="en"
               className="cb-input" style={{ maxWidth: 320 }} value={editedName}
               onChange={(e) => setEditedName(e.target.value)} autoFocus placeholder="Client name"
               onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
             />
-            <input
+            <input spellCheck={false} lang="en"
               className="cb-input" style={{ maxWidth: 140 }} value={editedCode}
               onChange={(e) => setEditedCode(e.target.value)} placeholder="Client code"
               onKeyDown={(e) => { if (e.key === "Enter") saveClientName(); if (e.key === "Escape") setIsEditingName(false); }}
@@ -4605,7 +5176,7 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
             </div>
           ))}
           <form onSubmit={submitAccount} style={{ display: "flex", gap: 8, marginTop: 8 }}>
-            <input className="cb-input" placeholder="e.g. ANZ Business Checking" value={name} onChange={(e) => setName(e.target.value)} />
+            <input spellCheck={false} lang="en" className="cb-input" placeholder="e.g. ANZ Business Checking" value={name} onChange={(e) => setName(e.target.value)} />
             <button type="submit" className="cb-btn cb-btn-sm" disabled={busy} style={{ flexShrink: 0 }}><Plus size={13} />Add account</button>
           </form>
           {isAdmin && (
@@ -4856,14 +5427,14 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onImport, onUpd
         {isAdmin && <button type="button" className="cb-btn" onClick={() => setShowImport(true)}><FileSpreadsheet size={14} />Import CSV</button>}
       </div>
       <form onSubmit={submit} style={{ display: "flex", gap: 8, marginBottom: 10, maxWidth: 560 }}>
-        <input className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input className="cb-input" style={{ maxWidth: 160 }} placeholder="Client code" value={code} onChange={(e) => setCode(e.target.value)} required />
+        <input spellCheck={false} lang="en" className="cb-input" placeholder="New client name" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input spellCheck={false} lang="en" className="cb-input" style={{ maxWidth: 160 }} placeholder="Client code" value={code} onChange={(e) => setCode(e.target.value)} required />
         <button type="submit" className="cb-btn cb-btn-primary" style={{ flexShrink: 0 }}><Plus size={15} />Add</button>
       </form>
       {error && <div className="cb-error" style={{ marginBottom: 10 }}>{error}</div>}
       <div style={{ position: "relative", maxWidth: 420, marginBottom: 12 }}>
         <Search size={15} style={{ position: "absolute", left: 11, top: "50%", transform: "translateY(-50%)", color: "var(--ink-soft)", pointerEvents: "none" }} />
-        <input
+        <input spellCheck={false} lang="en"
           className="cb-input"
           style={{ paddingLeft: 34 }}
           placeholder="Search clients by name or code..."
@@ -5033,7 +5604,7 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
         <div className="cb-modal-body">
           <div className="cb-field">
             <label className="cb-label">Event name</label>
-            <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} autoFocus placeholder="Add title" />
+            <input spellCheck={false} lang="en" className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} autoFocus placeholder="Add title" />
           </div>
           <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, cursor: "pointer" }}>
             <input type="checkbox" checked={allDay} onChange={(e) => toggleAllDay(e.target.checked)} />
@@ -5065,7 +5636,7 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
             </div>
             <div className="cb-field">
               <label className="cb-label">External guests</label>
-              <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
+              <input spellCheck={false} lang="en" className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
             </div>
             <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
               <input type="checkbox" checked={createMeet} onChange={(e) => setCreateMeet(e.target.checked)} />
@@ -5397,7 +5968,8 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const selectableMembers = useMemo(() => {
     if (!isAdmin || forceSelfOnly) return [];
     if (isSuperAdmin) return [...members].sort((a, b) => a.name.localeCompare(b.name));
-    const visible = members.filter((m) => m.role !== "super_admin" && (!currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+    const canSeeSuperAdmins = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+    const visible = members.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !currentUser?.pod_id || m.pod_id === currentUser.pod_id));
     const byId = new Map([[currentUser.id, currentUser], ...visible.map((m) => [m.id, m])]);
     return Array.from(byId.values()).sort((a, b) => a.name.localeCompare(b.name));
   }, [members, isAdmin, forceSelfOnly, isSuperAdmin, currentUser?.pod_id]);
@@ -5948,7 +6520,7 @@ function KarbonReconciliationNoteModal({ row, memberName, onClose, onSave }) {
           <div className="cb-hint" style={{ marginBottom: 12 }}>{memberName} · {formatDate(`${row.date}T12:00:00`)}</div>
           <div className="cb-field">
             <label className="cb-label">Reason for difference</label>
-            <textarea
+            <textarea spellCheck={false} lang="en"
               className="cb-input"
               rows={5}
               autoFocus
@@ -5973,7 +6545,7 @@ function KarbonReconciliationNoteModal({ row, memberName, onClose, onSave }) {
   );
 }
 
-function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false, showLoginToShutdown = false }) {
+function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly = false, showLoginToShutdown = false, pods = [] }) {
   const DEFAULT_TOLERANCE_MINUTES = 10;
   const localDate = (d) => {
     const y = d.getFullYear();
@@ -5988,10 +6560,12 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [customTo, setCustomTo] = useState("");
   const [data, setData] = useState(null);
   const [teamData, setTeamData] = useState(null);
+  const [teamComparisonHasRun, setTeamComparisonHasRun] = useState(false);
   // null means every currently visible team member is selected. Super Admins can narrow
   // Team View to specific people without changing the underlying reconciliation logic.
   // Admin/Staff demo modes ignore this filter entirely and continue to use their normal scope.
   const [selectedTeamMemberIds, setSelectedTeamMemberIds] = useState(null);
+  const [selectedTeamPodId, setSelectedTeamPodId] = useState("");
   const [teamPickerOpen, setTeamPickerOpen] = useState(false);
   const teamPickerRef = useRef(null);
   const [expandedMembers, setExpandedMembers] = useState(() => new Set());
@@ -6001,7 +6575,9 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   const [noteRow, setNoteRow] = useState(null);
   const autoCompareTimerRef = useRef(null);
   const autoComparePendingRef = useRef(false);
-  const effectiveMemberId = (!isAdmin || forceSelfOnly) ? currentUser?.id : memberId;
+  const lastTeamComparisonRangeRef = useRef("");
+  const canUseTeamView = !forceSelfOnly && (isAdmin || currentUser?.role === "admin" || currentUser?.role === "super_admin");
+  const effectiveMemberId = (!canUseTeamView || forceSelfOnly) ? currentUser?.id : memberId;
   const staffOptions = useMemo(() => [...(members || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [members]);
 
   // Team View intentionally mirrors the existing admin visibility model rather than creating
@@ -6010,21 +6586,31 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   // set when no pod is assigned). The backend reconciliation endpoint still enforces the same
   // scope on every member request.
   const teamOptions = useMemo(() => {
-    if (!isAdmin || forceSelfOnly) return [];
+    if (!canUseTeamView) return [];
     if (currentUser?.role === "super_admin") return staffOptions;
-    const visible = staffOptions.filter((m) => m.role !== "super_admin" && (!currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+    const canSeeSuperAdmins = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+    const visible = staffOptions.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !currentUser?.pod_id || m.pod_id === currentUser.pod_id));
     const byId = new Map();
     if (currentUser?.id) byId.set(currentUser.id, currentUser);
     visible.forEach((m) => byId.set(m.id, m));
     return Array.from(byId.values()).sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
-  }, [staffOptions, isAdmin, forceSelfOnly, currentUser?.id, currentUser?.role, currentUser?.pod_id]);
+  }, [staffOptions, canUseTeamView, currentUser?.id, currentUser?.role, currentUser?.pod_id, currentUser?.additional_permissions]);
 
-  const canSelectTeamMembers = currentUser?.role === "super_admin" && isAdmin && !forceSelfOnly;
+  const canSelectTeamMembers = currentUser?.role === "super_admin" && canUseTeamView;
+  const sortedTeamPods = useMemo(() => [...(pods || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [pods]);
+  const podScopedTeamOptions = useMemo(() => {
+    const scoped = canSelectTeamMembers && selectedTeamPodId
+      ? teamOptions.filter((member) => member.pod_id === selectedTeamPodId)
+      : teamOptions;
+    const byId = new Map();
+    scoped.forEach((member) => byId.set(member.id, member));
+    return Array.from(byId.values());
+  }, [teamOptions, canSelectTeamMembers, selectedTeamPodId]);
   const selectedTeamOptions = useMemo(() => {
-    if (!canSelectTeamMembers || selectedTeamMemberIds === null) return teamOptions;
-    return teamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
-  }, [teamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
-  const teamSelectionKey = useMemo(() => selectedTeamOptions.map((member) => member.id).join(","), [selectedTeamOptions]);
+    if (!canSelectTeamMembers || selectedTeamMemberIds === null) return podScopedTeamOptions;
+    return podScopedTeamOptions.filter((member) => selectedTeamMemberIds.has(member.id));
+  }, [podScopedTeamOptions, canSelectTeamMembers, selectedTeamMemberIds]);
+  const teamSelectionKey = useMemo(() => `${selectedTeamPodId}|${selectedTeamOptions.map((member) => member.id).join(",")}`, [selectedTeamPodId, selectedTeamOptions]);
 
   useEffect(() => {
     if (!teamPickerOpen) return;
@@ -6045,6 +6631,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   useEffect(() => {
     if (!canSelectTeamMembers || viewMode !== "team") setTeamPickerOpen(false);
   }, [canSelectTeamMembers, viewMode]);
+
+  useEffect(() => {
+    if (!selectedTeamPodId) return;
+    if (!sortedTeamPods.some((pod) => pod.id === selectedTeamPodId)) {
+      setSelectedTeamPodId("");
+      setSelectedTeamMemberIds(null);
+      setTeamData(null);
+      setTeamComparisonHasRun(false);
+    }
+  }, [selectedTeamPodId, sortedTeamPods]);
 
   useEffect(() => {
     if ((!isAdmin || forceSelfOnly) && currentUser?.id) {
@@ -6068,7 +6664,9 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     autoComparePendingRef.current = false;
     if (!range) return;
     if (viewMode === "team") {
-      if (!isAdmin || forceSelfOnly || selectedTeamOptions.length === 0) return;
+      if (!canUseTeamView || selectedTeamOptions.length === 0) return;
+      lastTeamComparisonRangeRef.current = `${range.from}|${range.to}`;
+      setTeamComparisonHasRun(true);
       setBusy(true); setError(""); setTeamData(null); setTeamProgress("");
       const results = [];
       try {
@@ -6101,11 +6699,12 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     finally { setBusy(false); }
   }
 
-  // Team View behaves like a live SaaS filter: once the user changes the period or
-  // selected team members, rerun the existing comparison automatically. The
-  // reconciliation function itself is unchanged; this only changes when it is invoked.
+  // Team View waits for the user to run the first comparison manually. After that,
+  // only period changes refresh the existing comparison automatically. Team/Pod
+  // selection changes deliberately require another explicit Run comparison so users
+  // can finish setting the comparison scope before any Karbon requests are sent.
   useEffect(() => {
-    if (viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+    if (!teamComparisonHasRun || viewMode !== "team" || !canUseTeamView || !range || selectedTeamOptions.length === 0) {
       autoComparePendingRef.current = false;
       if (autoCompareTimerRef.current) {
         clearTimeout(autoCompareTimerRef.current);
@@ -6113,6 +6712,8 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
       }
       return;
     }
+    const rangeKey = `${range.from}|${range.to}`;
+    if (rangeKey === lastTeamComparisonRangeRef.current) return;
     if (busy) {
       autoComparePendingRef.current = true;
       return;
@@ -6129,14 +6730,19 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         autoCompareTimerRef.current = null;
       }
     };
-  }, [viewMode, isAdmin, forceSelfOnly, range?.from, range?.to, teamSelectionKey]);
+  }, [teamComparisonHasRun, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to]);
 
-  // If filters change while a comparison is already running, wait for that request to
-  // finish and then refresh once with the latest selection instead of starting overlapping
+  // If the period changes while a comparison is already running, wait for the active
+  // request to finish and refresh once with the latest period rather than overlapping
   // Karbon requests.
   useEffect(() => {
     if (busy || !autoComparePendingRef.current) return;
-    if (viewMode !== "team" || !isAdmin || forceSelfOnly || !range || selectedTeamOptions.length === 0) {
+    if (!teamComparisonHasRun || viewMode !== "team" || !canUseTeamView || !range || selectedTeamOptions.length === 0) {
+      autoComparePendingRef.current = false;
+      return;
+    }
+    const rangeKey = `${range.from}|${range.to}`;
+    if (rangeKey === lastTeamComparisonRangeRef.current) {
       autoComparePendingRef.current = false;
       return;
     }
@@ -6152,7 +6758,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         autoCompareTimerRef.current = null;
       }
     };
-  }, [busy, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to, teamSelectionKey]);
+  }, [busy, teamComparisonHasRun, viewMode, isAdmin, forceSelfOnly, range?.from, range?.to]);
 
   const signed = (minutes) => {
     const n = Math.round(minutes || 0);
@@ -6219,14 +6825,33 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
       </div>
     </div>
 
-    {isAdmin && !forceSelfOnly && <div className="cb-tabs" style={{ width: "fit-content", marginBottom: 16 }}>
+    {canUseTeamView && <div className="cb-tabs" style={{ width: "fit-content", marginBottom: 16 }}>
       <button type="button" className={`cb-tab ${viewMode === "individual" ? "active" : ""}`} onClick={() => { setViewMode("individual"); setError(""); }}>Individual view</button>
-      <button type="button" className={`cb-tab ${viewMode === "team" ? "active" : ""}`} onClick={() => { setViewMode("team"); setError(""); }}>Team view</button>
+      <button type="button" className={`cb-tab ${viewMode === "team" ? "active" : ""}`} onClick={() => { setViewMode("team"); setError(""); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; setTeamData(null); }}>Team view</button>
     </div>}
 
     <div style={styles.controlPanel}>
       <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-        {viewMode === "individual" && isAdmin && !forceSelfOnly && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "individual" && canUseTeamView && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "team" && canSelectTeamMembers && sortedTeamPods.length > 0 && <div style={{ minWidth: 190 }}>
+          <div className="cb-label">Pod</div>
+          <select
+            className="cb-select"
+            value={selectedTeamPodId}
+            onChange={(e) => {
+              setSelectedTeamPodId(e.target.value);
+              setSelectedTeamMemberIds(null);
+              setTeamData(null);
+              setTeamComparisonHasRun(false);
+              lastTeamComparisonRangeRef.current = "";
+              setExpandedMembers(new Set());
+            }}
+            style={{ width: "100%", minHeight: 38 }}
+          >
+            <option value="">All pods</option>
+            {sortedTeamPods.map((pod) => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
+          </select>
+        </div>}
         {viewMode === "team" && <div style={{ minWidth: canSelectTeamMembers ? 280 : 220 }}>
           <div className="cb-label">Team</div>
           {canSelectTeamMembers ? (
@@ -6239,24 +6864,26 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 onClick={() => setTeamPickerOpen((open) => !open)}
                 style={{ width: "100%", display: "flex", alignItems: "center", minHeight: 38, cursor: "pointer", userSelect: "none", textAlign: "left" }}
               >
-                <span>{selectedTeamOptions.length} of {teamOptions.length} team member{teamOptions.length === 1 ? "" : "s"} selected</span>
+                <span>{selectedTeamOptions.length} of {podScopedTeamOptions.length} team member{podScopedTeamOptions.length === 1 ? "" : "s"} selected</span>
                 <ChevronDown size={14} style={{ marginLeft: "auto", transform: teamPickerOpen ? "rotate(180deg)" : "none", transition: "transform 120ms ease" }} />
               </button>
               {teamPickerOpen && <div role="listbox" aria-multiselectable="true" style={{ position: "absolute", zIndex: 80, top: "calc(100% + 5px)", left: 0, minWidth: 300, maxHeight: 320, overflowY: "auto", background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 10px 28px rgba(18, 28, 45, .14)", padding: 8 }}>
                 <div style={{ display: "flex", gap: 6, padding: "2px 2px 8px", borderBottom: "1px solid var(--line)", marginBottom: 4 }}>
-                  <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setSelectedTeamMemberIds(null); setTeamData(null); }}>Select all</button>
-                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => { setSelectedTeamMemberIds(new Set()); setTeamData(null); }}>Clear</button>
+                  <button type="button" className="cb-btn cb-btn-sm" onClick={() => { setSelectedTeamMemberIds(null); setTeamData(null); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; }}>Select all</button>
+                  <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => { setSelectedTeamMemberIds(new Set()); setTeamData(null); setTeamComparisonHasRun(false); lastTeamComparisonRangeRef.current = ""; }}>Clear</button>
                 </div>
-                {teamOptions.map((member) => {
+                {podScopedTeamOptions.map((member) => {
                   const checked = selectedTeamMemberIds === null || selectedTeamMemberIds.has(member.id);
                   return <label key={member.id} style={{ display: "flex", alignItems: "center", gap: 9, padding: "7px 6px", cursor: "pointer", borderRadius: 6 }}>
                     <input type="checkbox" className="cb-checkbox" checked={checked} onChange={() => {
                       setSelectedTeamMemberIds((previous) => {
-                        const next = previous === null ? new Set(teamOptions.map((item) => item.id)) : new Set(previous);
+                        const next = previous === null ? new Set(podScopedTeamOptions.map((item) => item.id)) : new Set(previous);
                         if (next.has(member.id)) next.delete(member.id); else next.add(member.id);
                         return next;
                       });
                       setTeamData(null);
+                      setTeamComparisonHasRun(false);
+                      lastTeamComparisonRangeRef.current = "";
                     }} />
                     <span>{member.name}</span>
                   </label>;
@@ -6274,7 +6901,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div></div>
         {preset === "custom" && <><div><div className="cb-label">From</div><input className="cb-input" type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} /></div><div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} /></div></>}
         <button className="cb-btn cb-btn-primary" onClick={compare} disabled={busy || !range || (viewMode === "individual" ? !effectiveMemberId : selectedTeamOptions.length === 0)}>
-          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? "Refresh comparison" : "Compare with Karbon")}
+          {busy ? (viewMode === "team" && teamProgress ? `Comparing ${teamProgress}...` : "Comparing...") : (viewMode === "team" ? (teamComparisonHasRun ? "Refresh comparison" : "Run comparison") : "Compare with Karbon")}
         </button>
       </div>
     </div>
@@ -6314,15 +6941,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div>
 
         <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
-          <col style={{ width: showLoginToShutdown ? "18%" : "30%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-          {showLoginToShutdown && <col style={{ width: "17%" }} />}
-          {showLoginToShutdown && <col style={{ width: "12%" }} />}
+          <col style={{ width: showLoginToShutdown ? "16%" : "30%" }} />
+          <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+          {showLoginToShutdown && <col style={{ width: "16%" }} />}
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
           <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
-        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
+          <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
+        </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="First login-to-shutdown span less recorded inactivity time.">Net login to<br />shutdown</th>}{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs<br />ClockBook</th>}{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs<br />Karbon</th>}<th style={{ whiteSpace: "nowrap", paddingRight: 16 }}>ClockBook vs Karbon</th><th style={{ whiteSpace: "nowrap", paddingLeft: 16 }}>Note</th></tr></thead><tbody>
           {(data.rows || []).map((r) => {
             const ok = isMatched(r.difference_minutes);
             return <tr key={r.date} style={ok ? undefined : styles.reviewRow}>
@@ -6332,6 +6960,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
               <td className="num cb-mono" style={ok ? styles.differenceGood : styles.differenceReview}>{signed(r.difference_minutes)}</td>
               {showLoginToShutdown && <td className="num cb-mono" title={r.inactivity_seconds ? `Gross span ${formatHM(r.first_login_to_shutdown_seconds)} less ${formatHM(r.inactivity_seconds)} inactivity` : "First login-to-shutdown span less recorded inactivity time."}>{r.net_first_login_to_shutdown_seconds != null ? formatHM(r.net_first_login_to_shutdown_seconds) : "—"}</td>}
               {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">{r.net_first_login_to_shutdown_seconds != null ? signedSeconds(r.net_first_login_to_shutdown_seconds - ((r.clockbook_minutes || 0) * 60)) : "—"}</td>}
+              {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">{r.net_first_login_to_shutdown_seconds != null ? signedSeconds(r.net_first_login_to_shutdown_seconds - ((r.karbon_minutes || 0) * 60)) : "—"}</td>}
               <td><span style={styles.statusPill(ok)}><span style={styles.statusDot(ok)} />{ok ? "Matched" : "Review"}</span></td>
               <td>
                 <button type="button" className="cb-btn cb-btn-sm" title={r.note || "Add reconciliation note"} onClick={() => setNoteRow({ ...r, _member_id: data.member_id, _member_name: data.member_name })} style={{ minWidth: 66, justifyContent: "center" }}>
@@ -6381,15 +7010,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
         </div>
 
         <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
-          <col style={{ width: showLoginToShutdown ? "20%" : "30%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-          <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-          {showLoginToShutdown && <col style={{ width: "17%" }} />}
-          {showLoginToShutdown && <col style={{ width: "12%" }} />}
+          <col style={{ width: showLoginToShutdown ? "16%" : "30%" }} />
+          <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+          <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+          {showLoginToShutdown && <col style={{ width: "16%" }} />}
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
+          {showLoginToShutdown && <col style={{ width: "10%" }} />}
           <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
           <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
-        </colgroup><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}<th>Status</th><th></th></tr></thead><tbody>
+        </colgroup><thead><tr><th>Team member</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="First login-to-shutdown span less recorded inactivity time.">Net login to<br />shutdown</th>}{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs<br />ClockBook</th>}{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs<br />Karbon</th>}<th>ClockBook vs Karbon</th><th></th></tr></thead><tbody>
           {teamData.map((entry) => {
             const memberData = entry.data;
             const tolerance = memberData?.tolerance_minutes ?? DEFAULT_TOLERANCE_MINUTES;
@@ -6400,6 +7030,9 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
             const memberClockBookSecondsForSpanDays = showLoginToShutdown && memberData
               ? (memberData.rows || []).reduce((sum, row) => row.net_first_login_to_shutdown_seconds != null ? sum + ((row.clockbook_minutes || 0) * 60) : sum, 0)
               : 0;
+            const memberKarbonSecondsForSpanDays = showLoginToShutdown && memberData
+              ? (memberData.rows || []).reduce((sum, row) => row.net_first_login_to_shutdown_seconds != null ? sum + ((row.karbon_minutes || 0) * 60) : sum, 0)
+              : 0;
             const expanded = expandedMembers.has(entry.member.id);
             return <Fragment key={entry.member.id}>
               <tr style={memberData && !memberOk ? styles.reviewRow : undefined}>
@@ -6409,22 +7042,24 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                 <td className="num cb-mono" style={memberData ? (memberOk ? styles.differenceGood : styles.differenceReview) : undefined}>{memberData ? signed(memberData.difference_minutes) : "—"}</td>
                 {showLoginToShutdown && <td className="num cb-mono" title="Sum of daily login-to-shutdown spans less recorded inactivity.">{memberData && memberLoginToShutdownSeconds > 0 ? formatHM(memberLoginToShutdownSeconds) : "—"}</td>}
                 {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus ClockBook tracked time for days where a net span is available. Informational only; it does not affect Karbon match status.">{memberData && memberLoginToShutdownSeconds > 0 ? signedSeconds(memberLoginToShutdownSeconds - memberClockBookSecondsForSpanDays) : "—"}</td>}
+                {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus Karbon time for days where a net span is available. Informational only; it does not affect Karbon match status.">{memberData && memberLoginToShutdownSeconds > 0 ? signedSeconds(memberLoginToShutdownSeconds - memberKarbonSecondsForSpanDays) : "—"}</td>}
                 <td>{memberData ? <span style={styles.statusPill(memberOk)}><span style={styles.statusDot(memberOk)} />{memberOk ? "Matched" : "Review"}</span> : <span className="cb-hint">Unavailable</span>}</td>
                 <td className="num">{memberData && <button type="button" className="cb-icon-btn" title={expanded ? "Hide daily detail" : "Show daily detail"} onClick={() => toggleMember(entry.member.id)}>{expanded ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button>}</td>
               </tr>
-              {expanded && memberData && <tr><td colSpan={showLoginToShutdown ? 8 : 6} style={{ padding: 0, background: "var(--paper-soft)" }}>
-                <div style={{ padding: "10px 14px 14px" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{entry.member.name} · Daily comparison</div>
+              {expanded && memberData && <tr><td colSpan={showLoginToShutdown ? 9 : 6} style={{ padding: 0, background: "var(--paper-soft)" }}>
+                <div style={{ padding: "10px 0 14px" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 8, padding: "0 14px" }}>{entry.member.name} · Daily comparison</div>
                   <div className="cb-table-wrap"><table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}><colgroup>
-                    <col style={{ width: showLoginToShutdown ? "18%" : "30%" }} />
-                    <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-                    <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-                    <col style={{ width: showLoginToShutdown ? "10%" : "14%" }} />
-                    {showLoginToShutdown && <col style={{ width: "17%" }} />}
-                    {showLoginToShutdown && <col style={{ width: "12%" }} />}
+                    <col style={{ width: showLoginToShutdown ? "16%" : "30%" }} />
+                    <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+                    <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+                    <col style={{ width: showLoginToShutdown ? "9%" : "14%" }} />
+                    {showLoginToShutdown && <col style={{ width: "16%" }} />}
+                    {showLoginToShutdown && <col style={{ width: "10%" }} />}
+                    {showLoginToShutdown && <col style={{ width: "10%" }} />}
                     <col style={{ width: showLoginToShutdown ? "13%" : "18%" }} />
-                    <col style={{ width: showLoginToShutdown ? "10%" : "10%" }} />
-                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" title="First login-to-shutdown span less recorded inactivity time.">Net login to shutdown</th>}{showLoginToShutdown && <th className="num" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs ClockBook</th>}<th>Status</th><th>Note</th></tr></thead><tbody>
+                    <col style={{ width: showLoginToShutdown ? "8%" : "10%" }} />
+                  </colgroup><thead><tr><th>Date</th><th className="num">ClockBook</th><th className="num">Karbon</th><th className="num">Difference</th>{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="First login-to-shutdown span less recorded inactivity time.">Net login to<br />shutdown</th>}{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">Net span vs<br />ClockBook</th>}{showLoginToShutdown && <th className="num" style={{ whiteSpace: "normal", lineHeight: 1.2 }} title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">Net span vs<br />Karbon</th>}<th style={{ whiteSpace: "nowrap", paddingRight: 16 }}>ClockBook vs Karbon</th><th style={{ whiteSpace: "nowrap", paddingLeft: 16 }}>Note</th></tr></thead><tbody>
                     {(memberData.rows || []).map((row) => {
                       const rowOk = isMatched(row.difference_minutes, tolerance);
                       return <tr key={`${entry.member.id}-${row.date}`} style={rowOk ? undefined : styles.reviewRow}>
@@ -6434,6 +7069,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
                         <td className="num cb-mono" style={rowOk ? styles.differenceGood : styles.differenceReview}>{signed(row.difference_minutes)}</td>
                         {showLoginToShutdown && <td className="num cb-mono" title={row.inactivity_seconds ? `Gross span ${formatHM(row.first_login_to_shutdown_seconds)} less ${formatHM(row.inactivity_seconds)} inactivity` : "First login-to-shutdown span less recorded inactivity time."}>{row.net_first_login_to_shutdown_seconds != null ? formatHM(row.net_first_login_to_shutdown_seconds) : "—"}</td>}
                         {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus ClockBook tracked time. Informational only; it does not affect Karbon match status.">{row.net_first_login_to_shutdown_seconds != null ? signedSeconds(row.net_first_login_to_shutdown_seconds - ((row.clockbook_minutes || 0) * 60)) : "—"}</td>}
+                        {showLoginToShutdown && <td className="num cb-mono" title="Net login-to-shutdown time minus Karbon time. Informational only; it does not affect Karbon match status.">{row.net_first_login_to_shutdown_seconds != null ? signedSeconds(row.net_first_login_to_shutdown_seconds - ((row.karbon_minutes || 0) * 60)) : "—"}</td>}
                         <td><span style={styles.statusPill(rowOk)}><span style={styles.statusDot(rowOk)} />{rowOk ? "Matched" : "Review"}</span></td>
                         <td><button type="button" className="cb-btn cb-btn-sm" title={row.note || "Add reconciliation note"} onClick={() => setNoteRow({ ...row, _member_id: memberData.member_id, _member_name: memberData.member_name })} style={{ minWidth: 66, justifyContent: "center" }}><StickyNote size={13} />{row.note ? "View" : "Note"}</button></td>
                       </tr>;
@@ -6470,6 +7106,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
 }
 
 function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
+  const canViewTrackedTime = currentUser?.role !== "admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.VIEW_TRACKED_TIME);
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
   const [staffFilter, setStaffFilter] = useState("all");
@@ -6481,6 +7118,9 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   const effectiveStaffFilter = forceSelfOnly && currentUser?.id ? String(currentUser.id) : staffFilter;
   const [loadError, setLoadError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
+  const exportTableRef = useRef(null);
+  const exportHeaderRef = useRef(null);
+  const [floatingExportHeader, setFloatingExportHeader] = useState({ visible: false, left: 0, width: 0, top: 0, columns: [] });
 
   // Export lists can become large, so keep the client/staff pickers searchable and
   // deterministic. The pseudo "all" option stays at the top; real names are A-Z.
@@ -6537,6 +7177,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
       const label = (values) => (values.length === 1 ? (values[0] || "none") : "Multiple");
       return {
         key,
+        workDateKey: localWorkDateKey(groupRows[0].work_started_at || groupRows[0].submitted_at),
         client: groupRows[0].client,
         role: groupRows[0].role,
         task_type: groupRows[0].task_type,
@@ -6552,8 +7193,85 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
         bankAccountLabel: label(bankAccounts),
         metricLabel: label(metrics),
       };
+    }).sort((a, b) => {
+      const dateCmp = String(b.workDateKey || "").localeCompare(String(a.workDateKey || ""));
+      if (dateCmp !== 0) return dateCmp;
+      const staffCmp = String(a.trackedByLabel || "").localeCompare(String(b.trackedByLabel || ""), undefined, { sensitivity: "base" });
+      if (staffCmp !== 0) return staffCmp;
+      const clientCmp = String(a.client || "").localeCompare(String(b.client || ""), undefined, { sensitivity: "base" });
+      if (clientCmp !== 0) return clientCmp;
+      const roleCmp = String(a.role || "").localeCompare(String(b.role || ""), undefined, { sensitivity: "base" });
+      if (roleCmp !== 0) return roleCmp;
+      return String(a.task_type || "").localeCompare(String(b.task_type || ""), undefined, { sensitivity: "base" });
     });
   }, [rows]);
+
+  const allStaffExportView = isAdmin && !forceSelfOnly && staffFilter === "all";
+
+  // Keep Export within the viewport and guarantee Date + the two action buttons always
+  // have enough room. The floating header and body share this exact layout. Admins who do
+  // not have View tracked time get a true 15-column layout rather than an empty Tracked column.
+  const exportColumnWidths = useMemo(() => {
+    if (isAdmin && canViewTrackedTime) return [10, 8.5, 9.5, 7, 8, 4.5, 5.5, 5, 6.5, 5.5, 5.5, 6, 7, 4.5, 3.5, 3.5];
+    if (isAdmin) return [10, 9, 10, 7.5, 8.5, 5, 6, 6.5, 6, 5.5, 7, 7.5, 4.5, 3.5, 3.5];
+    return [10.5, 9.5, 11, 7, 8, 4.5, 5.5, 5, 6.5, 5.5, 5.5, 7, 7, 4.5, 3];
+  }, [isAdmin, canViewTrackedTime]);
+
+  const exportDateBlockIndexes = useMemo(() => {
+    const indexes = new Map();
+    let nextIndex = 0;
+    for (const group of groups) {
+      const key = group.workDateKey || "unknown";
+      if (!indexes.has(key)) indexes.set(key, nextIndex++);
+    }
+    return indexes;
+  }, [groups]);
+
+  // The normal page is the scroll container, while some shared table styles create
+  // intermediate overflow contexts. A fixed duplicate header is therefore more reliable
+  // than CSS sticky for Export: it follows the real table bounds and uses the measured
+  // column widths so labels always remain aligned with the rows.
+  useLayoutEffect(() => {
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const table = exportTableRef.current;
+      const header = exportHeaderRef.current;
+      if (!table || !header) return;
+      const tableRect = table.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const topbar = document.querySelector(".cb-topbar");
+      const topbarRect = topbar?.getBoundingClientRect?.();
+      const top = Math.max(0, topbarRect && topbarRect.bottom > 0 ? topbarRect.bottom : 0);
+      const visible = headerRect.top < top && tableRect.bottom > top + headerRect.height;
+      const columns = Array.from(header.querySelectorAll("th")).map((cell) => cell.getBoundingClientRect().width);
+      setFloatingExportHeader((prev) => {
+        const next = { visible, left: tableRect.left, width: tableRect.width, top, columns };
+        const sameColumns = prev.columns.length === columns.length && prev.columns.every((v, i) => Math.abs(v - columns[i]) < 0.5);
+        if (prev.visible === next.visible && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 && Math.abs(prev.top - next.top) < 0.5 && sameColumns) return prev;
+        return next;
+      });
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure);
+    };
+    measure();
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    return () => {
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [rows, groups, isAdmin, canViewTrackedTime]);
+
+  function exportDayLabel(dateKey) {
+    if (!dateKey || dateKey === "unknown") return "—";
+    const [year, month, day] = dateKey.split("-").map(Number);
+    const d = new Date(year, month - 1, day, 12, 0, 0);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleDateString(undefined, { weekday: "short" }).toUpperCase();
+  }
 
   function toggleGroup(key) {
     setExpandedGroups((prev) => {
@@ -6568,7 +7286,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
     const hm = formatHM(r.seconds);
     const countPart = r.change != null ? ` | ${r.metric}: ${r.start_count} to ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "";
     const bankPart = r.bank_account ? ` | ${r.bank_account}` : "";
-    const adjustedPart = r.adjusted ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
+    const adjustedPart = r.adjusted && canViewTrackedTime && r.tracked_seconds != null ? ` | tracked ${formatHM(r.tracked_seconds)}, adjusted to ${hm}` : "";
     const periodPart = r.period ? ` | Period: ${r.period}` : "";
     const text = `${r.client}${bankPart}: ${exportTaskText(r)} | Role: ${r.role || "none"} | Task type: ${r.task_type || "none"}${periodPart} | ${hm} (${decHours}h)${adjustedPart}${countPart}${r.note ? ` | Note: ${r.note}` : ""}`;
     copyToClipboard(text).then((ok) => {
@@ -6690,47 +7408,130 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
 
       {loadError && <div className="cb-error" style={{ marginBottom: 10 }}>{loadError}</div>}
 
-      <div className="cb-table-wrap">
-        <table className="cb-table">
-          <thead>
+      <style>{`
+        .cb-export-table-wrap {
+          overflow-x: clip !important;
+          overflow-y: visible !important;
+          width: 100%;
+          max-width: 100%;
+        }
+        .cb-export-table-wrap .cb-table {
+          width: 100% !important;
+          table-layout: fixed !important;
+        }
+        .cb-export-table-wrap .cb-table th,
+        .cb-export-table-wrap .cb-table td {
+          min-width: 0 !important;
+          overflow-wrap: anywhere;
+          word-break: normal;
+        }
+        .cb-export-table-wrap .cb-table th:nth-last-child(-n+3),
+        .cb-export-table-wrap .cb-table td:nth-last-child(-n+3) {
+          text-align: center;
+          white-space: nowrap;
+          overflow-wrap: normal;
+          padding-left: 5px;
+          padding-right: 5px;
+        }
+        .cb-export-table-wrap .cb-table th:first-child,
+        .cb-export-table-wrap .cb-table td:first-child {
+          padding-left: 14px;
+          padding-right: 8px;
+        }
+        .cb-export-table-wrap .cb-table th:nth-child(2),
+        .cb-export-table-wrap .cb-table td:nth-child(2) {
+          padding-left: 8px;
+        }
+        .cb-export-table-wrap .cb-icon-btn {
+          width: 28px;
+          min-width: 28px;
+          height: 28px;
+          padding: 0;
+        }
+      `}</style>
+      {floatingExportHeader.visible && createPortal(
+        <div aria-hidden="true" style={{
+          position: "fixed",
+          left: floatingExportHeader.left,
+          top: floatingExportHeader.top,
+          width: floatingExportHeader.width,
+          zIndex: 250,
+          pointerEvents: "none",
+          overflow: "hidden",
+          background: "#ffffff",
+          boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)",
+          borderBottom: "1px solid var(--line)",
+        }}>
+          <table className="cb-table" style={{ width: "100%", tableLayout: "fixed", margin: 0, background: "#ffffff" }}>
+            <colgroup>{exportColumnWidths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
+            <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff", height: 38 }}>
+              <th style={{ background: "#ffffff" }}>Date</th><th style={{ background: "#ffffff" }}>Client</th><th style={{ background: "#ffffff" }}>Task</th><th style={{ background: "#ffffff" }}>Role</th><th style={{ background: "#ffffff" }}>Task type</th><th style={{ background: "#ffffff" }}>Period</th>
+              <th className="num" style={{ background: "#ffffff" }}>Duration</th>{canViewTrackedTime && <th className="num" style={{ background: "#ffffff" }}>Tracked</th>}<th style={{ background: "#ffffff" }}>Bank Account</th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
+              <th style={{ background: "#ffffff" }}>Note</th><th style={{ background: "#ffffff" }}>Tracked by</th><th style={{ background: "#ffffff" }}>Pushed</th><th style={{ background: "#ffffff" }}></th>{isAdmin && <th style={{ background: "#ffffff" }}></th>}
+            </tr></thead>
+          </table>
+        </div>,
+        document.body
+      )}
+      <div className="cb-table-wrap cb-export-table-wrap" style={{ overflowX: "clip", overflowY: "visible", maxWidth: "100%" }}>
+        <table ref={exportTableRef} className="cb-table" style={{ width: "100%", tableLayout: "fixed" }}>
+          <colgroup>{exportColumnWidths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
+          <thead ref={exportHeaderRef}>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
-              <th className="num">Duration</th><th className="num">Tracked</th><th>Bank Account</th><th>Metric</th><th className="num">Change</th>
+              <th className="num">Duration</th>{canViewTrackedTime && <th className="num">Tracked</th>}<th>Bank Account</th><th>Metric</th><th className="num">Change</th>
               <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><td colSpan={isAdmin ? 16 : 15}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
+              <tr><td colSpan={(isAdmin ? 15 : 14) + (canViewTrackedTime ? 1 : 0)}><div className="cb-empty"><ClipboardList size={18} style={{ marginBottom: 6 }} /><br />Nothing here yet. Completed tasks show up once submitted.</div></td></tr>
             )}
-            {groups.map((g) => {
+            {groups.map((g, groupIndex) => {
+              const dateKey = g.workDateKey || "unknown";
+              const dateBlockIndex = exportDateBlockIndexes.get(dateKey) ?? 0;
+              const previousGroup = groupIndex > 0 ? groups[groupIndex - 1] : null;
+              const previousDateKey = previousGroup ? (previousGroup.workDateKey || "unknown") : null;
+              const firstOfDate = groupIndex === 0 || previousDateKey !== dateKey;
+              const firstOfStaff = allStaffExportView && (firstOfDate || !previousGroup || previousGroup.trackedByLabel !== g.trackedByLabel);
+              const dayLabel = exportDayLabel(dateKey);
+              const blockBackground = dateBlockIndex % 2 === 0 ? "var(--paper)" : "rgba(29, 74, 56, 0.025)";
+              const topLevelRowStyle = {
+                background: blockBackground,
+                ...(firstOfDate ? { boxShadow: "inset 0 2px 0 var(--line-strong, var(--line))" } : firstOfStaff ? { boxShadow: "inset 0 1px 0 rgba(29, 74, 56, 0.18)" } : {}),
+              };
               if (g.count === 1) {
                 const r = g.rows[0];
                 return (
-                  <tr key={r.id}>
-                    <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
+                  <tr key={r.id} style={topLevelRowStyle}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                        <span style={{ minWidth: 34, padding: "2px 5px", borderRadius: 5, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontSize: 10.5, fontWeight: 800, textAlign: "center", letterSpacing: "0.04em" }}>{dayLabel}</span>
+                        <span>{formatDate(r.work_started_at || r.submitted_at)}</span>
+                      </div>
+                    </td>
                     <td>{r.client}</td>
                     <td><ExportTaskCell row={r} /></td>
                     <td>{r.role || "none"}</td>
                     <td>{r.task_type || "none"}</td>
                     <td>{r.period || "none"}</td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                    <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                    {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                     <td>{r.bank_account || "none"}</td>
                     <td>{r.metric || "none"}</td>
                     <td className="num cb-mono">
                       {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                     </td>
                     <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                    <td>{r.tracked_by || "none"}</td>
-                    <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
-                    <td>
+                    <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "normal", lineHeight: 1.15, textAlign: "center" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
+                    <td style={{ textAlign: "center" }}><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
+                    <td style={{ textAlign: "center" }}>
                       <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
                         {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
                       </button>
                     </td>
                     {isAdmin && (
-                      <td>
+                      <td style={{ textAlign: "center" }}>
                         <button className="cb-icon-btn cb-btn-danger" title="Delete" onClick={() => handleDelete(r)}>
                           <Trash2 size={14} />
                         </button>
@@ -6742,8 +7543,13 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
               const expanded = expandedGroups.has(g.key);
               return (
                 <Fragment key={g.key}>
-                  <tr className="cb-export-group-row" style={{ cursor: "pointer", background: "var(--paper)" }} onClick={() => toggleGroup(g.key)}>
-                    <td>{g.dateLabel}</td>
+                  <tr className="cb-export-group-row" style={{ cursor: "pointer", ...topLevelRowStyle }} onClick={() => toggleGroup(g.key)}>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                        <span style={{ minWidth: 34, padding: "2px 5px", borderRadius: 5, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontSize: 10.5, fontWeight: 800, textAlign: "center", letterSpacing: "0.04em" }}>{dayLabel}</span>
+                        <span>{g.dateLabel}</span>
+                      </div>
+                    </td>
                     <td>{g.client}</td>
                     <td style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       <ChevronDown size={14} style={{ transform: expanded ? "rotate(180deg)" : "none", transition: "transform 0.15s", flexShrink: 0 }} />
@@ -6756,16 +7562,16 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       {formatHM(g.totalSeconds)}
                       {g.anyAdjusted && <span title="At least one of these was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}
                     </td>
-                    <td></td>
+                    {canViewTrackedTime && <td></td>}
                     <td>{g.bankAccountLabel}</td>
                     <td>{g.metricLabel}</td>
                     <td></td>
                     <td>{g.noteCount > 0 ? `${g.noteCount} note${g.noteCount > 1 ? "s" : ""}` : "none"}</td>
-                    <td>{g.trackedByLabel}</td>
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td>{allStaffExportView && g.trackedByLabel && g.trackedByLabel !== "none" ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "normal", lineHeight: 1.15, textAlign: "center" }}>{g.trackedByLabel}</span> : g.trackedByLabel}</td>
+                    <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                       <input type="checkbox" className="cb-checkbox" checked={g.allPushed} onChange={() => handleToggleGroupPushed(g)} />
                     </td>
-                    <td onClick={(e) => e.stopPropagation()}>
+                    <td style={{ textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
                       <button className="cb-icon-btn" title="Copy summary for Karbon" onClick={() => copyGroup(g)}>
                         {copiedId === g.key ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
                       </button>
@@ -6773,23 +7579,28 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     {isAdmin && <td></td>}
                   </tr>
                   {expanded && g.rows.map((r) => (
-                    <tr key={r.id} className="cb-export-group-child">
-                      <td>{formatDate(r.work_started_at || r.submitted_at)}</td>
+                    <tr key={r.id} className="cb-export-group-child" style={{ background: blockBackground }}>
+                      <td>
+                        <div style={{ display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}>
+                          <span style={{ minWidth: 34, padding: "2px 5px", borderRadius: 5, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontSize: 10.5, fontWeight: 800, textAlign: "center", letterSpacing: "0.04em" }}>{dayLabel}</span>
+                          <span>{formatDate(r.work_started_at || r.submitted_at)}</span>
+                        </div>
+                      </td>
                       <td></td>
                       <td><ExportTaskCell row={r} child /></td>
                       <td>{r.role || "none"}</td>
                       <td>{r.task_type || "none"}</td>
                       <td>{r.period || "none"}</td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
-                      <td className="num cb-mono">{r.adjusted ? formatHM(r.tracked_seconds) : ""}</td>
+                      {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                       <td>{r.bank_account || "none"}</td>
                       <td>{r.metric || "none"}</td>
                       <td className="num cb-mono">
                         {r.change != null ? `${r.start_count} \u2192 ${r.end_count} (${r.change > 0 ? "+" : ""}${r.change})` : "none"}
                       </td>
                       <td style={{ maxWidth: 200 }}>{r.note || "none"}</td>
-                      <td>{r.tracked_by || "none"}</td>
-                      <td><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
+                      <td>{allStaffExportView && r.tracked_by ? <span style={{ display: "inline-flex", alignItems: "center", padding: "2px 7px", borderRadius: 999, background: "var(--green-soft, rgba(29, 74, 56, 0.09))", color: "var(--green)", fontWeight: 700, whiteSpace: "normal", lineHeight: 1.15, textAlign: "center" }}>{r.tracked_by}</span> : (r.tracked_by || "none")}</td>
+                      <td style={{ textAlign: "center" }}><input type="checkbox" className="cb-checkbox" checked={r.pushed} onChange={() => handleTogglePushed(r.id)} /></td>
                       <td>
                         <button className="cb-icon-btn" title="Copy line" onClick={() => copyRow(r)}>
                           {copiedId === r.id ? <CheckCircle2 size={14} color="var(--green)" /> : <Copy size={14} />}
@@ -6927,7 +7738,7 @@ function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, 
           {!member.slack_connected ? (
             <div className="cb-field">
               <label className="cb-label">Your Slack email</label>
-              <input className="cb-input" value={slackEmail} onChange={(e) => setSlackEmail(e.target.value)} placeholder="you@company.com" />
+              <input spellCheck={false} lang="en" className="cb-input" value={slackEmail} onChange={(e) => setSlackEmail(e.target.value)} placeholder="you@company.com" />
               <div className="cb-hint" style={{ marginTop: 6 }}>The email your Slack account uses, so Clockbook can find and message you there.</div>
             </div>
           ) : (
@@ -7107,7 +7918,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
         </div>
         {isAdmin && (
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            {currentUser?.role === "super_admin" && (
+            {(currentUser?.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.ADD_STAFF_MANUALLY)) && (
               <button className="cb-btn cb-btn-ghost" onClick={onManualAddMember}><Plus size={15} />Add staff manually</button>
             )}
             <button className="cb-btn cb-btn-primary" onClick={onAddMember}><Plus size={15} />Invite teammate</button>
@@ -7148,7 +7959,9 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
               <div>
                 <div className="cb-row-task">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
                 <div className="cb-row-meta">
-                  {roleLabel(m.role)}
+                  {m.id === currentUser.id
+                    ? (currentUser.role === "member" ? "Staff" : roleLabel(currentUser.role))
+                    : roleLabel(m.role)}
                   {!m.email && " \u00b7 No login set up yet"}
                   {m.google_calendar_connected && " \u00b7 Calendar connected"}
                   {m.pod_id && ` \u00b7 ${(pods.find((p) => p.id === m.pod_id) || {}).name || "Unknown pod"}`}
@@ -7197,12 +8010,12 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                     value={m.timezone_name || "Asia/Colombo"}
                     onChange={(value) => value && value !== (m.timezone_name || "Asia/Colombo") && onChangeTimezone(m.id, value)}
                     placeholder="Search time zones..."
-                    viewportAware
                     getLabel={(z) => z.name}
+                    viewportAware
                   />
                 </div>
               )}
-              {currentUser.role === "super_admin" && pods.length > 0 && (
+              {(currentUser.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS)) && pods.length > 0 && (
                 <select
                   className="cb-select"
                   style={{ width: 150, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
@@ -7212,6 +8025,15 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                   <option value="">No pod</option>
                   {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+              )}
+              {currentUser.role === "admin" && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) && (
+                <div
+                  className="cb-select"
+                  title="Pod assignments are managed by a Super Admin"
+                  style={{ width: 150, padding: "7px 10px", fontSize: 12.5, color: "var(--ink-soft)", background: "var(--paper-soft)", cursor: "default" }}
+                >
+                  {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
+                </div>
               )}
               <StaffRowMenu
                 items={[
@@ -7288,6 +8110,7 @@ function HelpReportView() {
   const [customTo, setCustomTo] = useState("");
   const [expandedPair, setExpandedPair] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [personFilter, setPersonFilter] = useState("all");
 
   function loadReports(showRefreshing = false) {
     if (showRefreshing) setIsRefreshing(true);
@@ -7349,7 +8172,7 @@ function HelpReportView() {
     return { start, end };
   }, [periodMode, customFrom, customTo]);
 
-  const filteredDetails = useMemo(() => {
+  const periodDetails = useMemo(() => {
     if (!details) return [];
     if (!activeRange.start || !activeRange.end) return details;
     return details.filter((d) => {
@@ -7357,6 +8180,13 @@ function HelpReportView() {
       return Number.isFinite(t) && t >= activeRange.start.getTime() && t <= activeRange.end.getTime();
     });
   }, [details, activeRange]);
+
+  const helpPeople = useMemo(() => Array.from(new Set((periodDetails || []).map((d) => d.member_name).filter(Boolean))).sort((a, b) => a.localeCompare(b)), [periodDetails]);
+
+  const filteredDetails = useMemo(() => {
+    if (personFilter === "all") return periodDetails;
+    return periodDetails.filter((d) => d.member_name === personFilter);
+  }, [periodDetails, personFilter]);
 
   const summaryRows = useMemo(() => {
     const byPerson = {};
@@ -7371,8 +8201,32 @@ function HelpReportView() {
         row.received_count += 1;
       }
     }
-    return Object.values(byPerson).sort((a, b) => b[sortBy] - a[sortBy]);
+    return Object.values(byPerson).map((row) => {
+      const totalCount = row.helped_count + row.received_count;
+      const totalSeconds = row.helped_seconds + row.received_seconds;
+      return {
+        ...row,
+        net_support_seconds: row.helped_seconds - row.received_seconds,
+        average_entry_seconds: totalCount ? totalSeconds / totalCount : 0,
+      };
+    }).sort((a, b) => b[sortBy] - a[sortBy]);
   }, [filteredDetails, sortBy]);
+
+  const helpSummary = useMemo(() => {
+    const helpedSeconds = summaryRows.reduce((sum, row) => sum + Number(row.helped_seconds || 0), 0);
+    const receivedSeconds = summaryRows.reduce((sum, row) => sum + Number(row.received_seconds || 0), 0);
+    const entryCount = summaryRows.reduce((sum, row) => sum + Number(row.helped_count || 0) + Number(row.received_count || 0), 0);
+    const topHelper = [...summaryRows].sort((a, b) => b.helped_seconds - a.helped_seconds)[0] || null;
+    const mostSupported = [...summaryRows].sort((a, b) => b.received_seconds - a.received_seconds)[0] || null;
+    return {
+      helpedSeconds,
+      receivedSeconds,
+      netSeconds: helpedSeconds - receivedSeconds,
+      averageEntrySeconds: entryCount ? (helpedSeconds + receivedSeconds) / entryCount : 0,
+      topHelper,
+      mostSupported,
+    };
+  }, [summaryRows]);
 
   const reconciliationRows = useMemo(() => {
     const pairs = {};
@@ -7409,6 +8263,63 @@ function HelpReportView() {
     });
   }, [filteredDetails]);
 
+  const reconciliationSummary = useMemo(() => {
+    const counts = { Matched: 0, Review: 0, "Missing receiver entry": 0, "Missing helper entry": 0 };
+    for (const row of reconciliationRows) counts[row.status] = (counts[row.status] || 0) + 1;
+    return counts;
+  }, [reconciliationRows]);
+
+  const helpTrendRows = useMemo(() => {
+    if (!activeRange.start || !activeRange.end) return [];
+    const dayCount = Math.max(1, Math.floor((activeRange.end.getTime() - activeRange.start.getTime()) / 86400000) + 1);
+    const mode = dayCount <= 31 ? "daily" : dayCount <= 120 ? "weekly" : "monthly";
+    const buckets = new Map();
+
+    const keyFor = (date) => {
+      const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      if (mode === "monthly") return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+      if (mode === "weekly") return localDateKeyFromDate(startOfLocalWeek(d));
+      return localDateKeyFromDate(d);
+    };
+
+    const cursor = new Date(activeRange.start.getFullYear(), activeRange.start.getMonth(), activeRange.start.getDate());
+    const last = new Date(activeRange.end.getFullYear(), activeRange.end.getMonth(), activeRange.end.getDate());
+    while (cursor <= last) {
+      const key = keyFor(cursor);
+      if (!buckets.has(key)) buckets.set(key, { period_start: key, helped_seconds: 0, received_seconds: 0 });
+      if (mode === "monthly") cursor.setMonth(cursor.getMonth() + 1, 1);
+      else if (mode === "weekly") cursor.setDate(cursor.getDate() + 7);
+      else cursor.setDate(cursor.getDate() + 1);
+    }
+
+    for (const d of filteredDetails) {
+      const dt = new Date(d.created_at);
+      if (!Number.isFinite(dt.getTime())) continue;
+      const key = keyFor(dt);
+      if (!buckets.has(key)) buckets.set(key, { period_start: key, helped_seconds: 0, received_seconds: 0 });
+      const row = buckets.get(key);
+      if (d.direction === "helped") row.helped_seconds += Number(d.seconds || 0);
+      else row.received_seconds += Number(d.seconds || 0);
+    }
+    return Array.from(buckets.values()).sort((a, b) => a.period_start.localeCompare(b.period_start));
+  }, [filteredDetails, activeRange]);
+
+  function HelpTrendChart({ rows = [], compact = false }) {
+    if (!rows.length) return <div className="cb-empty">No help activity in this period.</div>;
+    const width = 760, height = compact ? 150 : 220, padL = 46, padR = 18, padT = 18, padB = compact ? 28 : 36;
+    const maxValue = Math.max(1, ...rows.flatMap((r) => [Number(r.helped_seconds || 0), Number(r.received_seconds || 0)]));
+    const plotW = width - padL - padR, plotH = height - padT - padB;
+    const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
+    const y = (v) => padT + plotH - (Number(v || 0) / maxValue) * plotH;
+    const points = (key) => rows.map((r, i) => `${x(i)},${y(r[key])}`).join(" ");
+    const maxLabels = compact ? 6 : 10;
+    const labelEvery = Math.max(1, Math.ceil(rows.length / maxLabels));
+    return <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: compact ? 155 : 220, display: "block" }} role="img" aria-label="Recorded help activity trend">
+      {[0, .25, .5, .75, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="2" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
+      <polyline fill="none" stroke="#245C43" strokeWidth="2.5" points={points("helped_seconds")}/><polyline fill="none" stroke="#2467D7" strokeWidth="2.5" points={points("received_seconds")}/>{rows.map((r, i) => <g key={r.period_start}><circle cx={x(i)} cy={y(r.helped_seconds)} r="3" fill="#245C43"/><circle cx={x(i)} cy={y(r.received_seconds)} r="3" fill="#2467D7"/>{(i % labelEvery === 0 || i === rows.length - 1) && <text x={x(i)} y={height-9} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>}</g>)}
+    </svg>;
+  }
+
   const expandedDailyRows = useMemo(() => {
     if (!expandedPair) return [];
     const pair = reconciliationRows.find((r) => r.key === expandedPair);
@@ -7435,7 +8346,7 @@ function HelpReportView() {
     }).sort((a, b) => b.date.localeCompare(a.date));
   }, [expandedPair, reconciliationRows]);
 
-  useEffect(() => { setExpandedPair(null); }, [periodMode, customFrom, customTo]);
+  useEffect(() => { setExpandedPair(null); }, [periodMode, customFrom, customTo, personFilter]);
 
   function statusBadge(status) {
     const matched = status === "Matched";
@@ -7471,6 +8382,8 @@ function HelpReportView() {
           <div><div className="cb-label">To</div><input className="cb-input" type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} style={{ width: 145 }} /></div>
         </div>}
 
+        <div style={{ width: 210, flex: "0 0 auto" }}><div className="cb-label">Person</div><select className="cb-select" value={personFilter} onChange={(e) => setPersonFilter(e.target.value)} style={{ width: "100%" }}><option value="all">All people</option>{helpPeople.map((name) => <option key={name} value={name}>{name}</option>)}</select></div>
+
         <button className="cb-btn cb-btn-sm" onClick={() => loadReports(true)} disabled={isRefreshing} style={{ height: 36, padding: "0 12px", flex: "0 0 auto" }}><RotateCcw size={13} />{isRefreshing ? "Refreshing…" : "Refresh"}</button>
       </div>
 
@@ -7481,22 +8394,39 @@ function HelpReportView() {
       )}
 
       {!detailsError && details !== null && filteredDetails.length > 0 && <>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))", gap: 10, marginBottom: 14 }}>
+          {[
+            ["Time spent helping", formatHM(helpSummary.helpedSeconds), helpSummary.topHelper ? `Top helper: ${helpSummary.topHelper.member_name}` : "Recorded help given"],
+            ["Time received help", formatHM(helpSummary.receivedSeconds), helpSummary.mostSupported ? `Most supported: ${helpSummary.mostSupported.member_name}` : "Recorded help received"],
+            ["Net recorded support", helpSummary.netSeconds === 0 ? "0m" : `${helpSummary.netSeconds > 0 ? "+" : "−"}${formatHM(Math.abs(helpSummary.netSeconds))}`, "Helping minus help received"],
+            ["Average help entry", formatHM(helpSummary.averageEntrySeconds), "Average duration of a recorded help entry"],
+          ].map(([label, value, detail]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "13px 15px", minWidth: 0 }}><div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div><div className="cb-serif" style={{ fontSize: 23, fontWeight: 700, marginTop: 3 }}>{value}</div><div className="cb-hint" style={{ marginTop: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{detail}</div></div>)}
+        </div>
+
+        <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: 16, marginBottom: 20 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 4 }}><div className="cb-group-title">Help trend</div><div style={{ display: "flex", gap: 14, fontSize: 10.5, color: "var(--ink-soft)" }}><span><span style={{ display: "inline-block", width: 14, borderTop: "2px solid #245C43", marginRight: 5, verticalAlign: "middle" }}/>Helping</span><span><span style={{ display: "inline-block", width: 14, borderTop: "2px solid #2467D7", marginRight: 5, verticalAlign: "middle" }}/>Receiving help</span></div></div>
+          <div className="cb-hint" style={{ marginBottom: 6 }}>Trend is based on recorded help entries in the selected period{personFilter !== "all" ? ` for ${personFilter}` : ""}.</div>
+          <HelpTrendChart rows={helpTrendRows} />
+        </div>
+
         <div className="cb-group-head" style={{ justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Help activity</div><div className="cb-group-count">{summaryRows.length}</div></div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
-            <colgroup><col style={{ width: "31%" }} /><col style={{ width: "22%" }} /><col style={{ width: "22%" }} /><col style={{ width: "12.5%" }} /><col style={{ width: "12.5%" }} /></colgroup>
+            <colgroup><col style={{ width: "24%" }} /><col style={{ width: "17%" }} /><col style={{ width: "17%" }} /><col style={{ width: "14%" }} /><col style={{ width: "12%" }} /><col style={{ width: "8%" }} /><col style={{ width: "8%" }} /></colgroup>
             <thead><tr>
               <th>Person</th>
               <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("helped_seconds")}>Time spent helping{sortBy === "helped_seconds" ? " ↓" : ""}</th>
               <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("received_seconds")}>Time received help{sortBy === "received_seconds" ? " ↓" : ""}</th>
-              <th className="num">Times helped</th><th className="num">Times received</th>
+              <th className="num" style={{ cursor: "pointer" }} onClick={() => setSortBy("net_support_seconds")} title="Recorded time helping minus recorded time receiving help">Net recorded support{sortBy === "net_support_seconds" ? " ↓" : ""}</th>
+              <th className="num">Avg help entry</th><th className="num">Times helped</th><th className="num">Times received</th>
             </tr></thead>
-            <tbody>{summaryRows.map((r) => <tr key={r.member_name}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.helped_seconds)}</td><td className="num cb-mono">{formatHM(r.received_seconds)}</td><td className="num cb-mono">{r.helped_count}</td><td className="num cb-mono">{r.received_count}</td></tr>)}</tbody>
+            <tbody>{summaryRows.map((r) => <tr key={r.member_name}><td>{r.member_name}</td><td className="num cb-mono">{formatHM(r.helped_seconds)}</td><td className="num cb-mono">{formatHM(r.received_seconds)}</td><td className="num cb-mono">{r.net_support_seconds === 0 ? "0m" : `${r.net_support_seconds > 0 ? "+" : "−"}${formatHM(Math.abs(r.net_support_seconds))}`}</td><td className="num cb-mono">{formatHM(r.average_entry_seconds)}</td><td className="num cb-mono">{r.helped_count}</td><td className="num cb-mono">{r.received_count}</td></tr>)}</tbody>
           </table>
         </div>
 
         <div className="cb-group-head" style={{ marginTop: 30, justifyContent: "flex-start", gap: 8 }}><div className="cb-group-title">Help reconciliation</div><div className="cb-group-count">{reconciliationRows.length}</div></div>
         <div className="cb-hint" style={{ marginBottom: 10 }}>Compares what the receiver logged against what the helper logged for the same pairing. Matching is based on total duration, so one 60-minute entry can reconcile with two 30-minute entries.</div>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}><span className="cb-hint" style={{ border: "1px solid #b7e4c7", background: "#effaf3", color: "#176b3a", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Matched {reconciliationSummary.Matched || 0}</span><span className="cb-hint" style={{ border: "1px solid #f4d58d", background: "#fff8e8", color: "#986000", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Review {reconciliationSummary.Review || 0}</span><span className="cb-hint" style={{ border: "1px solid #f3c7c7", background: "#fff3f3", color: "#a33a3a", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Missing receiver {reconciliationSummary["Missing receiver entry"] || 0}</span><span className="cb-hint" style={{ border: "1px solid #f3c7c7", background: "#fff3f3", color: "#a33a3a", borderRadius: 999, padding: "4px 9px", fontWeight: 700 }}>Missing helper {reconciliationSummary["Missing helper entry"] || 0}</span></div>
         <div className="cb-table-wrap">
           <table className="cb-table" style={{ tableLayout: "fixed", width: "100%" }}>
             <colgroup><col style={{ width: "20%" }} /><col style={{ width: "20%" }} /><col style={{ width: "18%" }} /><col style={{ width: "18%" }} /><col style={{ width: "10%" }} /><col style={{ width: "14%" }} /></colgroup>
@@ -7511,6 +8441,7 @@ function HelpReportView() {
               </tr>
               {expandedPair === r.key && <tr><td colSpan={6} style={{ padding: 0, background: "var(--paper)" }}><div style={{ padding: "12px 16px 16px 32px" }}>
                 <div className="cb-hint" style={{ marginBottom: 8 }}>Daily comparison for {r.receiver} and {r.helper}</div>
+                {expandedDailyRows.length > 1 && <div style={{ marginBottom: 10, border: "1px solid var(--line)", borderRadius: 8, padding: "8px 10px", background: "#fff" }}><div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}><strong style={{ fontSize: 11.5 }}>Pair trend</strong><span className="cb-hint">Helper reported vs receiver reported</span></div><HelpTrendChart compact rows={[...expandedDailyRows].reverse().map((day) => ({ period_start: day.date, helped_seconds: day.helperSeconds, received_seconds: day.receiverSeconds }))} /></div>}
                 <table className="cb-table" style={{ background: "transparent" }}><thead><tr><th>Date</th><th className="num">Receiver reported</th><th className="num">Helper reported</th><th className="num">Difference</th><th>Status</th></tr></thead>
                   <tbody>{expandedDailyRows.map((day) => <tr key={day.date}><td>{formatDate(`${day.date}T12:00:00`)}</td><td className="num cb-mono">{formatHM(day.receiverSeconds)} · {day.receiverCount}x</td><td className="num cb-mono">{formatHM(day.helperSeconds)} · {day.helperCount}x</td><td className="num cb-mono">{day.delta === 0 ? "0m" : `${day.delta > 0 ? "+" : "−"}${formatHM(Math.abs(day.delta))}`}</td><td>{statusBadge(day.status)}</td></tr>)}</tbody>
                 </table>
@@ -7606,6 +8537,7 @@ function ManualOverridesReportView() {
 
   const [trendUser, setTrendUser] = useState("");
   const [trendHover, setTrendHover] = useState(null);
+  const [trendPinned, setTrendPinned] = useState(null);
 
   useEffect(() => {
     if (!userRows.length) {
@@ -7728,7 +8660,7 @@ function ManualOverridesReportView() {
       <div className="cb-page-head">
         <div>
           <div className="cb-page-title cb-serif">Reports</div>
-          <div className="cb-page-sub">Manual time overrides only. This report reads existing submitted entries and does not change recorded time.</div>
+          <div className="cb-page-sub">Manual time changes, including forgotten-time recovery. This report reads existing submitted entries and does not change recorded time.</div>
         </div>
       </div>
 
@@ -7783,7 +8715,7 @@ function ManualOverridesReportView() {
                 <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 8 }}>
                   <div>
                     <div className="cb-group-title">Override trend over time</div>
-                    <div className="cb-hint" style={{ marginTop: 3 }}>{trendGranularity === "day" ? "Daily" : trendGranularity === "week" ? "Weekly" : "Monthly"} time added and reduced, with net change shown as the trend line. Periods with no manual adjustment stay at zero.</div>
+                    <div className="cb-hint" style={{ marginTop: 3 }}>{trendGranularity === "day" ? "Daily" : trendGranularity === "week" ? "Weekly" : "Monthly"} time added and reduced, with net change shown as a line. Periods with no manual adjustment stay at zero.</div>
                   </div>
                   <div style={{ width: 260, maxWidth: "42%", flex: "0 0 auto" }}>
                     <SearchableSelect
@@ -7809,7 +8741,7 @@ function ManualOverridesReportView() {
                       const labelEvery = trend.length <= 7 ? 1 : trend.length <= 14 ? 2 : Math.ceil(trend.length / 7);
                       const showLabel = i === 0 || i === trend.length - 1 || i % labelEvery === 0;
                       const hitLeft = padL + slotWidth * i;
-                      const hovered = trendHover?.key === d.key;
+                      const hovered = (trendHover || trendPinned)?.key === d.key;
                       const net = (d.added || 0) - (d.reduced || 0);
                       return <Fragment key={d.key}>
                         {hovered && <line x1={x} x2={x} y1={plotTop} y2={plotBottom} stroke="var(--line-strong, #cbd5cf)" strokeWidth="1" strokeDasharray="3 4" />}
@@ -7821,9 +8753,13 @@ function ManualOverridesReportView() {
                           width={Math.max(8, slotWidth)}
                           height={plotHeight}
                           fill="transparent"
-                          style={{ cursor: "crosshair" }}
+                          style={{ cursor: "pointer" }}
                           onMouseEnter={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, net, x })}
                           onMouseMove={() => setTrendHover({ key: d.key, label: d.label, added: d.added, reduced: d.reduced, net, x })}
+                          onClick={() => {
+                            const point = { key: d.key, label: d.label, added: d.added, reduced: d.reduced, net, x };
+                            setTrendPinned((current) => current?.key === d.key ? null : point);
+                          }}
                         />
                         {showLabel && <text x={x} y={chartH - 13} fontSize="10" fill="var(--ink-faint)" textAnchor="middle">{d.label}</text>}
                       </Fragment>;
@@ -7831,13 +8767,13 @@ function ManualOverridesReportView() {
                     <polyline fill="none" stroke={netTrendColor} strokeWidth="2.8" strokeLinejoin="round" strokeLinecap="round" points={netLinePoints} />
                     {trend.map((d, i) => {
                       const x = trendX(i);
-                      const hovered = trendHover?.key === d.key;
+                      const hovered = (trendHover || trendPinned)?.key === d.key;
                       return <circle key={`net-${d.key}`} cx={x} cy={netY(d)} r={hovered ? "4.6" : "3.2"} fill={netTrendColor} />;
                     })}
                   </svg>
-                  {trendHover && <div style={{
+                  {(trendHover || trendPinned) && <div style={{
                     position: "absolute",
-                    left: `clamp(92px, ${(trendHover.x / chartW) * 100}%, calc(100% - 92px))`,
+                    left: `clamp(92px, ${(((trendHover || trendPinned).x) / chartW) * 100}%, calc(100% - 92px))`,
                     top: 10,
                     transform: "translateX(-50%)",
                     pointerEvents: "none",
@@ -7851,16 +8787,16 @@ function ManualOverridesReportView() {
                     fontSize: 11.5,
                     lineHeight: 1.35,
                   }}>
-                    <div style={{ fontWeight: 750, marginBottom: 4 }}>{trendHover.label}</div>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time added</span><span className="cb-mono">{formatHM(trendHover.added)}</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time reduced</span><span className="cb-mono">{formatHM(trendHover.reduced)}</span></div>
-                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 2, paddingTop: 2, borderTop: "1px solid rgba(255,255,255,.16)" }}><span>Net change</span><span className="cb-mono">{signedDuration(trendHover.net)}</span></div>
+                    <div style={{ fontWeight: 750, marginBottom: 4 }}>{(trendHover || trendPinned).label}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time added</span><span className="cb-mono">{formatHM((trendHover || trendPinned).added)}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><span>Time reduced</span><span className="cb-mono">{formatHM((trendHover || trendPinned).reduced)}</span></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginTop: 2, paddingTop: 2, borderTop: "1px solid rgba(255,255,255,.16)" }}><span>Net change</span><span className="cb-mono">{signedDuration((trendHover || trendPinned).net)}</span></div>
                   </div>}
                   </div>
                   <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: -4 }}>
                     <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 9, borderRadius: 2, background: addedColor }} />Time added</span>
                     <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 12, height: 9, borderRadius: 2, background: reducedColor }} />Time reduced</span>
-                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: netTrendColor }} />Net trend</span>
+                    <span className="cb-hint" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}><span style={{ width: 18, height: 3, borderRadius: 999, background: netTrendColor }} />Net change</span>
                   </div>
                 </>}
               </div>
@@ -7894,14 +8830,14 @@ function ManualOverridesReportView() {
                 </div>
               </div>
             </div>
-            <div className="cb-hint" style={{ marginBottom: 10 }}>An override is an existing submitted task where the final duration differs from the duration ClockBook tracked. Note shows the note already submitted with that entry.</div>
+            <div className="cb-hint" style={{ marginBottom: 10 }}>Manual changes include submission-time overrides and time explicitly recovered after a user confirms they forgot to start a timer. Recovered time is flagged separately.</div>
             <div className="cb-table-wrap" style={{ overflowX: "hidden" }}>
               <table className="cb-table" style={{ tableLayout: "fixed", width: "100%", minWidth: 0 }}>
-                <colgroup><col style={{ width: "9%" }} /><col style={{ width: "12%" }} /><col style={{ width: "13%" }} /><col style={{ width: "16%" }} /><col style={{ width: "20%" }} /><col style={{ width: "8%" }} /><col style={{ width: "8%" }} /><col style={{ width: "7%" }} /><col style={{ width: "7%" }} /></colgroup>
-                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th>Note</th><th className="num">Tracked</th><th className="num">Final</th><th className="num">Difference</th><th>Submitted</th></tr></thead>
+                <colgroup><col style={{ width: "7%" }} /><col style={{ width: "10%" }} /><col style={{ width: "11%" }} /><col style={{ width: "13%" }} /><col style={{ width: "13%" }} /><col style={{ width: "17%" }} /><col style={{ width: "6%" }} /><col style={{ width: "6%" }} /><col style={{ width: "8%" }} /><col style={{ width: "9%" }} /></colgroup>
+                <thead><tr><th>Date</th><th>Person</th><th>Client</th><th>Task</th><th>Type</th><th>Note</th><th className="num">Tracked</th><th className="num">Final</th><th className="num" style={{ paddingRight: 16 }}>Difference</th><th style={{ paddingLeft: 16 }}>Submitted</th></tr></thead>
                 <tbody>{filteredEntryRows.map((row) => {
                   const delta = Number(row.seconds || 0) - Number(row.tracked_seconds || 0);
-                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td>{row.task || "—"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{row.note || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined }}>{signedDuration(delta)}</td><td>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
+                  return <tr key={row.id}><td>{row.date ? formatDate(`${row.date}T12:00:00`) : "—"}</td><td>{row.tracked_by || "—"}</td><td>{row.client || "—"}</td><td>{row.task || "—"}</td><td style={{ whiteSpace: "normal" }}>{row.adjustment_type || "Manual override"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{row.note || "—"}</td><td className="num cb-mono">{formatHM(Number(row.tracked_seconds || 0))}</td><td className="num cb-mono">{formatHM(Number(row.seconds || 0))}</td><td className="num cb-mono" style={{ color: delta > 0 ? "var(--amber)" : delta < 0 ? "var(--green)" : undefined, paddingRight: 16 }}>{signedDuration(delta)}</td><td style={{ paddingLeft: 16, whiteSpace: "normal" }}>{row.submitted_at ? formatDate(row.submitted_at) : "—"}</td></tr>;
                 })}</tbody>
               </table>
               {filteredEntryRows.length === 0 && <div className="cb-empty">No override entries match these filters.</div>}
@@ -7994,7 +8930,7 @@ function InactivityAuditView({ members }) {
     <div>
       <div style={{ marginBottom: 4 }}>
         <div className="cb-page-title cb-serif">Audit</div>
-        <div className="cb-page-sub">Super-admin review of daily start activity plus Clockbook-detected lock, sleep, and offline gaps. Times use each person’s configured time zone.</div>
+        <div className="cb-page-sub">Daily start activity plus Clockbook-detected lock, sleep, and offline gaps for people within your permitted scope. Times use each person’s configured time zone.</div>
 
         <div style={{ display: "flex", gap: 14, alignItems: "flex-end", marginTop: 14, flexWrap: "wrap", minHeight: 64 }}>
           <div style={{ flex: "0 0 150px" }}>
@@ -8067,22 +9003,22 @@ function InactivityAuditView({ members }) {
   );
 }
 
-function SuperAdminReportsView({ members }) {
-  const [mode, setMode] = useState("help");
+function SuperAdminReportsView({ members, allowedModes = ["help", "overrides", "inactivity"] }) {
+  const available = [
+    { value: "help", label: "Help activity" },
+    { value: "overrides", label: "Manual overrides" },
+    { value: "inactivity", label: "Audit" },
+  ].filter((item) => allowedModes.includes(item.value));
+  const [mode, setMode] = useState(available[0]?.value || "");
+  useEffect(() => {
+    if (!available.some((item) => item.value === mode)) setMode(available[0]?.value || "");
+  }, [allowedModes.join("|"), mode]);
+  if (!available.length) return null;
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
-        <StableSaaSTabs
-          value={mode}
-          onChange={setMode}
-          ariaLabel="Reports view"
-          options={[
-            { value: "help", label: "Help activity" },
-            { value: "overrides", label: "Manual overrides" },
-            { value: "inactivity", label: "Audit" },
-          ]}
-        />
-      </div>
+      {available.length > 1 && <div style={{ marginBottom: 16 }}>
+        <StableSaaSTabs value={mode} onChange={setMode} ariaLabel="Reports view" options={available} />
+      </div>}
       {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : <InactivityAuditView members={members} />}
     </div>
   );
@@ -8231,7 +9167,7 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
             <>
               <div className="cb-field">
                 <label className="cb-label">Meeting name</label>
-                <input className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Year-end query discussion" autoFocus />
+                <input spellCheck={false} lang="en" className="cb-input" value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="e.g. Year-end query discussion" autoFocus />
               </div>
               <div className="cb-field">
                 <label className="cb-label">Client (optional)</label>
@@ -8255,7 +9191,7 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
               </div>
               <div className="cb-field">
                 <label className="cb-label">External guests (optional)</label>
-                <input className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
+                <input spellCheck={false} lang="en" className="cb-input" value={externalGuests} onChange={(e) => setExternalGuests(e.target.value)} placeholder="name@example.com, another@example.com" />
                 <div className="cb-hint">Separate multiple email addresses with commas.</div>
               </div>
               <div className="cb-field">
@@ -8324,7 +9260,7 @@ function LearningDevelopmentTaskModal({ roles, onClose, onCreate }) {
           </div>
           <div className="cb-field">
             <label className="cb-label">Task name</label>
-            <input className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+            <input spellCheck={false} lang="en" className="cb-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
           </div>
           <div className="cb-field">
             <label className="cb-label">Role</label>
@@ -8446,7 +9382,7 @@ function AdHocMeetingFinishModal({ task, members, currentUser, onClose, onConfir
           </div>
           <div className="cb-field">
             <label className="cb-label">What was it about?</label>
-            <textarea className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Brief context..." />
+            <textarea spellCheck={false} lang="en" className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Brief context..." />
             <div className="cb-hint">Required. This becomes the meeting/support context in Clockbook.</div>
           </div>
           {error && <div className="cb-error">{error}</div>}
@@ -8519,7 +9455,7 @@ function ManualHelpModal({ members, currentUser, onClose, onConfirm }) {
           </div>
           <div className="cb-field" style={{ marginTop: 14 }}>
             <label className="cb-label">What was the help about?</label>
-            <textarea className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Briefly describe the help given or received" required />
+            <textarea spellCheck={false} lang="en" className="cb-input" rows={3} value={context} onChange={(e) => setContext(e.target.value)} placeholder="Briefly describe the help given or received" required />
           </div>
           {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
         </div>
@@ -8580,7 +9516,7 @@ function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onC
           </div>
           <div className="cb-field" style={{ marginTop: 12 }}>
             <label className="cb-label">What was the help about?</label>
-            <textarea
+            <textarea spellCheck={false} lang="en"
               className="cb-input"
               rows={3}
               value={context}
@@ -8723,7 +9659,202 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
   );
 }
 
+function ForgottenTimeRecoveryModal({
+  gapMs, tasks, currentUser, clients, templates, members, bankAccounts, roles, taskTypes,
+  onAddClient, onClose, onRecoverSplit, onCreateRecoveryTask, previewOnly = false,
+}) {
+  const recoveredSeconds = Math.max(1, Math.round(gapMs / 1000));
+  const allocationIdRef = useRef(1);
+  const [createdTasks, setCreatedTasks] = useState([]);
+  const [showTaskCreator, setShowTaskCreator] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const eligibleTasks = useMemo(() => {
+    const timeZone = currentUser?.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const todayKey = workDateKeyInTimeZone(new Date(), timeZone);
+    const belongsToToday = (task) => {
+      if (workDateKeyInTimeZone(task.created_at, timeZone) === todayKey) return true;
+      return (task.segments || []).some((seg) => workDateKeyInTimeZone(seg?.start, timeZone) === todayKey);
+    };
+    const combined = [...(tasks || []), ...createdTasks];
+    const seen = new Set();
+    return combined.filter((t) => {
+      if (!t || seen.has(t.id)) return false;
+      seen.add(t.id);
+      return t.owner_id === currentUser.id && (t.status === "paused" || t.status === "todo") && belongsToToday(t);
+    }).sort((a, b) => {
+      const rank = (t) => t.status === "paused" ? 0 : 1;
+      return rank(a) - rank(b) || String(a.client_name || "").localeCompare(String(b.client_name || "")) || String(a.name || "").localeCompare(String(b.name || ""));
+    });
+  }, [tasks, createdTasks, currentUser.id, currentUser?.timezone_name]);
+
+  const [allocations, setAllocations] = useState(() => [{ id: 1, taskId: "", seconds: 0 }]);
+
+  useEffect(() => {
+    if (!allocations[0]?.taskId && eligibleTasks[0]?.id) {
+      setAllocations((prev) => prev.map((row, index) => index === 0 ? { ...row, taskId: eligibleTasks[0].id } : row));
+    }
+  }, [eligibleTasks]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const secondsBeforeLast = allocations.slice(0, -1).reduce((sum, row) => sum + Math.max(0, Number(row.seconds) || 0), 0);
+  const remainingSeconds = Math.max(0, recoveredSeconds - secondsBeforeLast);
+  const allocatedSeconds = secondsBeforeLast + remainingSeconds;
+  const overAllocated = secondsBeforeLast >= recoveredSeconds && allocations.length > 1;
+
+  function addAllocation(taskId = "") {
+    setAllocations((prev) => {
+      const priorBeforeLast = prev.slice(0, -1).reduce((sum, row) => sum + Math.max(0, Number(row.seconds) || 0), 0);
+      const priorRemaining = Math.max(0, recoveredSeconds - priorBeforeLast);
+      const next = prev.map((row, index) => index === prev.length - 1 ? { ...row, seconds: priorRemaining } : row);
+      return [...next, { id: ++allocationIdRef.current, taskId, seconds: 0 }];
+    });
+  }
+
+  function removeAllocation(id) {
+    setAllocations((prev) => prev.length <= 1 ? prev : prev.filter((row) => row.id !== id));
+  }
+
+  function updateAllocation(id, patch) {
+    setAllocations((prev) => prev.map((row) => row.id === id ? { ...row, ...patch } : row));
+  }
+
+  async function createRecoveryTask(payloads) {
+    if (!payloads || payloads.length !== 1) throw new Error("Create one task at a time for recovered time");
+    const created = await onCreateRecoveryTask(payloads[0]);
+    setCreatedTasks((prev) => [created, ...prev]);
+    addAllocation(created.id);
+    setShowTaskCreator(false);
+  }
+
+  async function recover() {
+    if (busy) return;
+    setError("");
+    const normalized = allocations.map((row, index) => ({
+      task_id: row.taskId,
+      seconds: index === allocations.length - 1 ? remainingSeconds : Math.max(0, Math.round(Number(row.seconds) || 0)),
+    }));
+    if (normalized.some((row) => !row.task_id)) {
+      setError("Select a task for every recovery allocation.");
+      return;
+    }
+    if (new Set(normalized.map((row) => row.task_id)).size !== normalized.length) {
+      setError("Use each task only once in the recovery split.");
+      return;
+    }
+    if (overAllocated || normalized.some((row) => row.seconds < 1) || normalized.reduce((sum, row) => sum + row.seconds, 0) !== recoveredSeconds) {
+      setError("The split must allocate exactly the full forgotten-time amount.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onRecoverSplit(normalized, recoveredSeconds);
+    } catch (err) {
+      setError(err.message || "Could not recover the forgotten time");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+        <div className="cb-modal" style={{ width: "min(760px, calc(100vw - 28px))" }}>
+          <div className="cb-modal-head">
+            <div className="cb-modal-title">{previewOnly ? "Test forgotten time recovery" : "Recover forgotten time"}</div>
+            <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+          </div>
+          <div className="cb-modal-body">
+            {previewOnly && (
+              <div style={{ padding: "9px 11px", border: "1px solid #D7B46A", borderRadius: 9, background: "#FFF9EA", marginBottom: 12, fontSize: 13 }}>
+                <strong>Preview mode.</strong> Nothing in this window will save time, create tasks, or change ClockBook data.
+              </div>
+            )}
+            <div style={{ padding: "10px 12px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 14 }}>
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ fontWeight: 700 }}>Recover {niceDuration(gapMs)}</div>
+                <div className="cb-mono" style={{ fontSize: 12.5, color: overAllocated ? "#B42318" : "var(--ink-soft)" }}>
+                  Allocated {niceDuration(allocatedSeconds * 1000)} / {niceDuration(gapMs)}
+                </div>
+              </div>
+              <div className="cb-hint" style={{ marginTop: 3 }}>Every split remains a manual adjustment and is flagged as <strong>Forgotten time recovered</strong>.</div>
+            </div>
+
+            <div className="cb-hint" style={{ marginBottom: 10 }}>
+              {previewOnly ? "Add tasks in chronological order to test the split. The final row receives the exact remaining time. Preview mode will not start or change any timer." : "Add the tasks in chronological order. The final row receives the exact remaining time and will continue from now after recovery."}
+            </div>
+
+            <div style={{ display: "grid", gap: 8 }}>
+              {allocations.map((row, index) => {
+                const isLast = index === allocations.length - 1;
+                const rowSeconds = isLast ? remainingSeconds : Math.max(0, Number(row.seconds) || 0);
+                const selectedElsewhere = new Set(allocations.filter((r) => r.id !== row.id).map((r) => r.taskId).filter(Boolean));
+                const taskOptions = eligibleTasks.filter((t) => !selectedElsewhere.has(t.id) || t.id === row.taskId);
+                return (
+                  <div key={row.id} style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 145px 34px", gap: 8, alignItems: "end", padding: "10px", border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)" }}>
+                    <div className="cb-field" style={{ margin: 0 }}>
+                      <label className="cb-label">{index + 1}. Task</label>
+                      <SearchableSelect
+                        options={taskOptions}
+                        value={row.taskId}
+                        onChange={(value) => updateAllocation(row.id, { taskId: value })}
+                        placeholder="Search today's tasks..."
+                        getLabel={(t) => `${t.client_name ? `${t.client_name} - ` : ""}${taskDisplayHeading(t)}`}
+                        getSecondary={(t) => `${t.status === "paused" ? "In progress" : "To do"}${taskPeriodContext(t) ? ` · ${taskPeriodContext(t)}` : ""}`}
+                      />
+                    </div>
+                    <div className="cb-field" style={{ margin: 0 }}>
+                      <label className="cb-label">Duration</label>
+                      {isLast ? (
+                        <div className="cb-input cb-mono" style={{ background: "var(--paper-soft)", display: "flex", alignItems: "center" }}>{formatHM(rowSeconds)}</div>
+                      ) : (
+                        <div style={{ position: "relative" }}>
+                          <input
+                            type="number" min="0" step="0.5" className="cb-input" style={{ paddingRight: 42 }}
+                            value={rowSeconds ? Math.round((rowSeconds / 60) * 10) / 10 : ""}
+                            onChange={(e) => updateAllocation(row.id, { seconds: Math.max(0, Math.round((Number(e.target.value) || 0) * 60)) })}
+                            aria-label={`Minutes for allocation ${index + 1}`}
+                          />
+                          <span className="cb-hint" style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)" }}>min</span>
+                        </div>
+                      )}
+                    </div>
+                    <button type="button" className="cb-icon-btn cb-btn-danger" title="Remove allocation" disabled={allocations.length <= 1 || busy} onClick={() => removeAllocation(row.id)}><Trash2 size={14} /></button>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <button type="button" className="cb-btn cb-btn-sm" disabled={busy || allocations.length >= 20} onClick={() => addAllocation()}><Plus size={13} />Split to another task</button>
+              <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" disabled={busy} onClick={() => setShowTaskCreator(true)}><Plus size={13} />Create new task</button>
+            </div>
+
+            {overAllocated && <div className="cb-error" style={{ marginTop: 12 }}>The earlier allocations already use all available forgotten time. Reduce one of them so the final task has time remaining.</div>}
+            {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
+          </div>
+          <div className="cb-modal-foot">
+            <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            <button type="button" className="cb-btn cb-btn-primary" disabled={busy || overAllocated || remainingSeconds < 1} onClick={recover}>
+              {busy ? (previewOnly ? "Checking..." : "Recovering...") : previewOnly ? `Test ${niceDuration(gapMs)} split across ${allocations.length} task${allocations.length === 1 ? "" : "s"}` : `Recover ${niceDuration(gapMs)} across ${allocations.length} task${allocations.length === 1 ? "" : "s"}`}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {showTaskCreator && (
+        <NewTaskModal
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes} currentUser={currentUser}
+          recoveringForgottenTime={true} recoveryAllocationOnly={true}
+          onClose={() => setShowTaskCreator(false)} onCreate={createRecoveryTask} onAddClient={onAddClient}
+        />
+      )}
+    </>
+  );
+}
+
 function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm }) {
+  const [meetingKind, setMeetingKind] = useState("client");
   const [clientId, setClientId] = useState("");
   const [busy, setBusy] = useState(false);
 
@@ -8736,22 +9867,37 @@ function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm 
         </div>
         <div className="cb-modal-body">
           <div className="cb-field">
-            <label className="cb-label">Which client is this for?</label>
-            <SearchableSelect
-              options={clients} value={clientId} onChange={setClientId}
-              placeholder="Search clients..." getLabel={(c) => c.name}
-            />
+            <label className="cb-label">Meeting type</label>
+            <div className="cb-tabs" style={{ width: "fit-content" }}>
+              <button type="button" className={`cb-tab ${meetingKind === "client" ? "active" : ""}`} onClick={() => setMeetingKind("client")}>Client meeting</button>
+              <button type="button" className={`cb-tab ${meetingKind === "internal" ? "active" : ""}`} onClick={() => { setMeetingKind("internal"); setClientId(""); }}>Internal meeting</button>
+            </div>
           </div>
-          <div className="cb-hint">
-            Client is optional when the meeting starts. If you leave it blank, Clockbook will ask you to choose a client when you complete the meeting.
-            Role and task type can also be filled in later.
-          </div>
+          {meetingKind === "client" ? (
+            <>
+              <div className="cb-field">
+                <label className="cb-label">Which client is this for?</label>
+                <SearchableSelect
+                  options={clients} value={clientId} onChange={setClientId}
+                  placeholder="Search clients..." getLabel={(c) => c.name}
+                />
+              </div>
+              <div className="cb-hint">
+                Client is optional when the meeting starts. If you leave it blank, ClockBook will ask you to choose a client when you complete the meeting.
+                Role and task type can also be filled in later.
+              </div>
+            </>
+          ) : (
+            <div className="cb-hint">
+              Internal meeting — no client is required. It will be recorded as internal, non-billable meeting time.
+            </div>
+          )}
         </div>
         <div className="cb-modal-foot">
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy}
-            onClick={async () => { setBusy(true); await onConfirm(clientId || null); }}
+            onClick={async () => { setBusy(true); await onConfirm({ clientId: meetingKind === "client" ? (clientId || null) : null, internal: meetingKind === "internal" }); }}
           >
             Start tracking
           </button>
@@ -8812,7 +9958,7 @@ function savePromptedMeetingIds(set) {
 }
 
 
-function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCalendar, onRequestNotifications }) {
+function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, karbonConnected = false, onConnectCalendar, onRequestNotifications }) {
   const [notificationPermission, setNotificationPermission] = useState(() => {
     if (!("Notification" in window)) return "unsupported";
     return Notification.permission;
@@ -8888,6 +10034,18 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, onConnectCal
       body: "Use Helper when you help a colleague or receive help. That keeps collaboration time separate from normal client work.",
       target: '[data-tour="helper"]',
       placement: "below",
+    },
+    ...(karbonConnected ? [{
+      title: "Check your Karbon time",
+      body: "Karbon Check lets you compare your ClockBook time with Karbon so you can spot differences before submitting or reviewing your timesheet.",
+      target: '[data-tour-nav="reconcile"]',
+      placement: "right",
+    }] : []),
+    {
+      title: "Learning & Development",
+      body: "Use Learning & Development to record time spent learning and capture what you learned. Your entries build your personal knowledge history in ClockBook.",
+      target: '[data-tour-nav="learning"]',
+      placement: "right",
     },
     {
       title: "Review your insights",
@@ -9141,6 +10299,8 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [showForgottenRecovery, setShowForgottenRecovery] = useState(false);
+  const [showForgottenRecoveryPreview, setShowForgottenRecoveryPreview] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
   const [showQuickMeeting, setShowQuickMeeting] = useState(false);
   const [showManualHelp, setShowManualHelp] = useState(false);
@@ -9489,6 +10649,12 @@ export default function App() {
   const effectiveCurrentUser = currentUser ? { ...currentUser, role: effectiveRole } : null;
   const isAdmin = effectiveCurrentUser ? isAdminRole(effectiveCurrentUser.role) : false;
   const effectiveIsSuperAdmin = effectiveCurrentUser?.role === "super_admin";
+  const allowedReportModes = reportModesForMember(effectiveCurrentUser);
+  const canViewReports = allowedReportModes.length > 0;
+  const canSeeSuperAdmins = hasAdditionalPermission(effectiveCurrentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
+  const reportMembers = effectiveCurrentUser?.role === "admin"
+    ? members.filter((m) => (canSeeSuperAdmins || m.role !== "super_admin") && (m.role === "super_admin" || !effectiveCurrentUser?.pod_id || m.pod_id === effectiveCurrentUser.pod_id))
+    : members;
 
   function changeSuperAdminViewMode(mode) {
     if (!realIsSuperAdmin || !["member", "admin", "super_admin"].includes(mode)) return;
@@ -9755,14 +10921,17 @@ export default function App() {
     setAlertsBannerDismissed(true);
   }
 
-  // A running task can be restored from the server after a refresh/redeploy without going
-  // through startTask(), so explicitly restart OS lock detection for that restored session.
-  // If Chrome refuses an automatic start, enableIdleDetection() leaves itself retryable and
-  // the next user-initiated Start/Enable Alerts action can try again.
+  // Restore OS lock/inactivity detection after every refresh or redeploy once the user is
+  // authenticated, even when no timer is currently running. This matters because a deploy
+  // replaces the page's IdleDetector instance; tying the restore only to myRunningTask meant
+  // detection could stay off after an update until the person started another timer.
+  // enableIdleDetection() never prompts on this background path: it only restarts when the
+  // browser has already granted idle-detection permission. A later Start/Enable Alerts click
+  // can still request permission if needed.
   useEffect(() => {
-    if (!myRunningTask) return;
+    if (authState !== "ready" || !currentUser) return;
     enableIdleDetection();
-  }, [myRunningTask && myRunningTask.id]);
+  }, [authState, currentUser?.id]);
 
   // ---------------------------------------------------------------
   // "Forgot to track" nudge: entirely separate from the sleep and lock detection above, and
@@ -9773,12 +10942,34 @@ export default function App() {
   // ---------------------------------------------------------------
 
   const NO_TRACK_THRESHOLD_MS = 10 * 60 * 1000;
-  const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(null);
-  const noTrackSinceRef = useRef(Date.now());
+  const NO_TRACK_PENDING_KEY = "clockbook_pending_no_track_alert";
+  const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(() => {
+    // Keep an unanswered no-track prompt through a normal browser refresh. Session storage is
+    // intentionally used instead of permanent local storage: the prompt belongs to this tab's
+    // current work session and should disappear when the tab/session itself is closed.
+    try {
+      const saved = sessionStorage.getItem(NO_TRACK_PENDING_KEY);
+      if (!saved) return null;
+      const parsed = JSON.parse(saved);
+      return Number.isFinite(Number(parsed?.since)) ? { since: Number(parsed.since) } : null;
+    } catch (_) {
+      return null;
+    }
+  });
+  const noTrackSinceRef = useRef(idleNoTrackAlert?.since || Date.now());
   const noTrackSnoozeUntilRef = useRef(0);
   const noTrackHandledRef = useRef(false);
   const forgotToTrackGapMsRef = useRef(null);
   const noTrackBrowserNotificationRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      if (idleNoTrackAlert?.since) sessionStorage.setItem(NO_TRACK_PENDING_KEY, JSON.stringify({ since: idleNoTrackAlert.since }));
+      else sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
+    } catch (_) {
+      // Storage can be unavailable in hardened/private browser contexts; the live prompt still works.
+    }
+  }, [idleNoTrackAlert]);
 
   function showNoTrackBrowserNotification(gapMs, silent = false) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -10071,6 +11262,7 @@ export default function App() {
 
   async function changeMemberRole(memberId, role) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberRole(memberId, role, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
     } catch (err) {
@@ -10080,6 +11272,7 @@ export default function App() {
 
   async function changeMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom = null) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberCapacity(memberId, weeklyCapacityHours, capacityEffectiveFrom, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -10091,6 +11284,7 @@ export default function App() {
 
   async function changeMemberTimezone(memberId, timezoneName) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberTimezone(memberId, timezoneName, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -10102,11 +11296,23 @@ export default function App() {
 
   async function changeMemberInsightsPermission(memberId, enabled) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberInsightsPermission(memberId, enabled, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       showToast(`${enabled ? "Enabled" : "Disabled"} leave & capacity insights for ${updated.name}`);
     } catch (err) {
       showToast(err.message, true);
+    }
+  }
+
+  async function changeMemberAdditionalPermissions(memberId, permissions) {
+    try {
+      const current = members.find((m) => m.id === memberId);
+      const updated = await api.updateMemberAdditionalPermissions(memberId, permissions, current?.version || 1);
+      setMembers((prev) => prev.map((m) => m.id === memberId ? updated : m));
+      if (currentUser?.id === memberId) setCurrentUser(updated);
+    } catch (err) {
+      alert(err.message || "Could not update permissions");
     }
   }
 
@@ -10132,6 +11338,7 @@ export default function App() {
 
   async function assignMemberPod(memberId, podId) {
     try {
+      const current = members.find((m) => m.id === memberId);
       const updated = await api.updateMemberPod(memberId, podId, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
@@ -10281,6 +11488,7 @@ export default function App() {
   }
 
   async function updateClient(clientId, name, code) {
+    const current = clients.find((c) => c.id === clientId);
     const updated = await api.updateClient(clientId, name, code, current?.version || 1);
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
     setTasks((prev) => prev.map((t) => (t.client_id === updated.id ? { ...t, client_name: updated.name } : t)));
@@ -10325,6 +11533,7 @@ export default function App() {
   }
 
   async function updateTaskTypeBilling(id, isBillable) {
+    const current = taskTypes.find((t) => t.id === id);
     const updated = await api.updateTaskTypeBilling(id, isBillable, current?.version || 1);
     setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
@@ -10432,41 +11641,48 @@ export default function App() {
       created.push(task);
     }
     let finalTasks = created;
-    let startedByForgotToTrackRecovery = false;
+    let recoveredTask = null;
+    let recoveredGapMs = null;
     if (forgotToTrackGapMsRef.current != null && created.length > 0) {
       const gapMs = forgotToTrackGapMsRef.current;
+      recoveredGapMs = gapMs;
       forgotToTrackGapMsRef.current = null;
-      const backdatedIso = new Date(Date.now() - gapMs + clockOffsetRef.current).toISOString();
       try {
-        const started = await api.startTask(created[0].id, null, backdatedIso);
-        finalTasks = [started, ...created.slice(1)];
-        startedByForgotToTrackRecovery = true;
+        const recovered = await api.recoverTaskTime(created[0].id, Math.max(1, Math.round(gapMs / 1000)));
+        finalTasks = [recovered, ...created.slice(1)];
+        recoveredTask = recovered;
       } catch (err) {
-        // If backdating fails for any reason, the task still exists as a plain to-do,
-        // nothing is lost, the person can just start it themselves
+        showToast(err.message || "Could not recover the forgotten time", true);
       }
     }
     setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
-    if (startImmediately && finalTasks.length === 1 && !startedByForgotToTrackRecovery) {
+    if (recoveredTask) {
+      showToast(`${niceDuration(recoveredGapMs)} recovered and flagged as forgotten time`);
+      if (startImmediately) requestStart(recoveredTask);
+    } else if (startImmediately && finalTasks.length === 1) {
       requestStart(finalTasks[0]);
     }
   }
 
-  async function trackMeetingAsTask(clientId) {
+  async function trackMeetingAsTask({ clientId = null, internal = false } = {}) {
     const { task: existingTask, summary, meetingId } = meetingTrackPrompt;
     const client = clientId ? clients.find((c) => c.id === clientId) : null;
     try {
       await pauseTask(existingTask.id);
       const created = await api.createTask({
-        client_id: client ? client.id : "", client_name: client ? client.name : "", name: summary,
+        client_id: internal ? "" : (client ? client.id : ""),
+        client_name: internal ? "" : (client ? client.name : ""),
+        name: summary,
+        task_type: internal ? "Non-billable: Colleague Meeting" : "",
         source_calendar_event_id: meetingId || null,
       });
       setTasks((prev) => [created, ...prev]);
       await startTask(created.id, null);
-      showToast(`Now tracking "${summary}"`);
+      showToast(internal ? `Now tracking internal meeting "${summary}"` : `Now tracking "${summary}"`);
     } catch (err) {
       showToast(err.message, true);
+      throw err;
     } finally {
       setMeetingTrackPrompt(null);
     }
@@ -10517,23 +11733,23 @@ export default function App() {
   }
 
   if (authState === "loading") {
-    return <div className="cb-root"><LoadingScreen /></div>;
+    return <div className="cb-root" spellCheck={false}><LoadingScreen /></div>;
   }
   if (authState === "invite" && invitationToken) {
-    return <div className="cb-root"><InvitationAcceptScreen token={invitationToken} onAccepted={acceptInvitation} /></div>;
+    return <div className="cb-root" spellCheck={false}><InvitationAcceptScreen token={invitationToken} onAccepted={acceptInvitation} /></div>;
   }
   if (authState === "claim") {
-    return <div className="cb-root"><ClaimScreen unclaimed={unclaimedMembers} onClaim={handleClaim} /></div>;
+    return <div className="cb-root" spellCheck={false}><ClaimScreen unclaimed={unclaimedMembers} onClaim={handleClaim} /></div>;
   }
   if (authState === "login") {
-    return <div className="cb-root"><LoginScreen onLogin={handleLogin} /></div>;
+    return <div className="cb-root" spellCheck={false}><LoginScreen onLogin={handleLogin} /></div>;
   }
   if (dataLoading) {
-    return <div className="cb-root"><LoadingScreen /></div>;
+    return <div className="cb-root" spellCheck={false}><LoadingScreen /></div>;
   }
   if (loadError) {
     return (
-      <div className="cb-root">
+      <div className="cb-root" spellCheck={false}>
         <div className="cb-center-screen">
           <div className="cb-welcome">
             <div className="cb-welcome-title cb-serif">Cannot reach the server</div>
@@ -10546,9 +11762,9 @@ export default function App() {
   }
 
   return (
-    <div className="cb-root">
+    <div className="cb-root" spellCheck={false}>
       <div className="cb-shell">
-        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} alwaysShowSettings={realIsSuperAdmin} karbonConnected={integrationStatus.karbon_connected} />
+        <Sidebar view={view} setView={setView} isAdmin={isAdmin} isSuperAdmin={effectiveIsSuperAdmin} canViewReports={canViewReports} alwaysShowSettings={realIsSuperAdmin} karbonConnected={integrationStatus.karbon_connected} />
         <div className="cb-main">
           <TopBar
             currentUser={effectiveCurrentUser}
@@ -10634,7 +11850,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && effectiveIsSuperAdmin && <SuperAdminReportsView members={members} />}
+            {view === "reports" && canViewReports && <SuperAdminReportsView members={reportMembers} allowedModes={allowedReportModes} />}
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
@@ -10642,7 +11858,7 @@ export default function App() {
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
                 onAddLearningCategory={addLearningCategory} onUpdateLearningCategory={updateLearningCategory}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
-                members={members} onChangeInsightsPermission={changeMemberInsightsPermission}
+                members={members} currentUser={effectiveCurrentUser} onChangeInsightsPermission={changeMemberInsightsPermission} onChangeAdditionalPermissions={changeMemberAdditionalPermissions}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
                 effectiveIsAdmin={isAdmin}
                 workspaces={workspaces}
@@ -10652,6 +11868,7 @@ export default function App() {
                 onBrandingUpdated={loadWorkspaces}
                 integrationStatus={integrationStatus}
                 onIntegrationChanged={loadIntegrationStatus}
+                onTestForgottenRecovery={() => setShowForgottenRecoveryPreview(true)}
               />
             )}
           </div>
@@ -10663,6 +11880,7 @@ export default function App() {
           onClose={closeGuidedTour}
           onSetNewTaskOpen={setShowNewTask}
           calendarConnected={!!currentUser.google_calendar_connected}
+          karbonConnected={!!integrationStatus.karbon_connected}
           onConnectCalendar={connectGoogleCalendar}
           onRequestNotifications={requestBrowserNotifications}
         />
@@ -10695,11 +11913,74 @@ export default function App() {
           onClose={() => setShowManualHelp(false)} onConfirm={logManualHelp}
         />
       )}
+      {showForgottenRecoveryPreview && realIsSuperAdmin && superAdminViewMode === "super_admin" && (
+        <ForgottenTimeRecoveryModal
+          gapMs={30 * 60 * 1000}
+          tasks={tasks}
+          currentUser={effectiveCurrentUser}
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes}
+          previewOnly={true}
+          onClose={() => setShowForgottenRecoveryPreview(false)}
+          onAddClient={async (name, code) => ({ id: `preview-client-${Date.now()}`, name, code })}
+          onCreateRecoveryTask={async (payload) => ({
+            id: `preview-task-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            ...payload,
+            owner_id: effectiveCurrentUser.id,
+            status: "todo",
+            segments: [],
+            note: "",
+            created_at: new Date().toISOString(),
+            submitted_at: null,
+          })}
+          onRecoverSplit={async (allocations) => {
+            setShowForgottenRecoveryPreview(false);
+            showToast(`Preview complete: ${allocations.length} allocation${allocations.length === 1 ? "" : "s"}. No time was recorded.`);
+          }}
+        />
+      )}
+      {showForgottenRecovery && forgotToTrackGapMsRef.current != null && (
+        <ForgottenTimeRecoveryModal
+          gapMs={forgotToTrackGapMsRef.current}
+          tasks={tasks}
+          currentUser={effectiveCurrentUser}
+          clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
+          roles={roles} taskTypes={taskTypes} onAddClient={addClient}
+          onClose={() => { forgotToTrackGapMsRef.current = null; setShowForgottenRecovery(false); }}
+          onCreateRecoveryTask={async (payload) => {
+            const created = await api.createTask(payload);
+            setTasks((prev) => [created, ...prev]);
+            return created;
+          }}
+          onRecoverSplit={async (allocations, recoveredSeconds) => {
+            const token = getToken();
+            const response = await fetch("/api/tasks/recover-time/batch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+              body: JSON.stringify({ total_seconds: recoveredSeconds, allocations }),
+            });
+            if (!response.ok) {
+              let message = "Could not recover the forgotten time";
+              try { const body = await response.json(); message = body.detail || message; } catch (_) {}
+              throw new Error(message);
+            }
+            const updatedTasks = await response.json();
+            for (const updated of updatedTasks) mergeTask(updated);
+            const recoveredGap = forgotToTrackGapMsRef.current;
+            forgotToTrackGapMsRef.current = null;
+            setShowForgottenRecovery(false);
+            showToast(`${niceDuration(recoveredGap)} recovered across ${updatedTasks.length} task${updatedTasks.length === 1 ? "" : "s"} and flagged as forgotten time`);
+            const continueTask = updatedTasks[updatedTasks.length - 1];
+            if (continueTask) requestStart(continueTask);
+          }}
+        />
+      )}
       {showNewTask && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
-          onClose={() => setShowNewTask(false)} onCreate={createTasks} onAddClient={addClient}
+          recoveringForgottenTime={forgotToTrackGapMsRef.current != null}
+          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; }} onCreate={createTasks} onAddClient={addClient}
         />
       )}
       {startCountPrompt && (
@@ -10723,7 +12004,7 @@ export default function App() {
       {showAddMember && (
         <InviteMemberModal onClose={() => setShowAddMember(false)} onInvite={addTeammate} currentUser={effectiveCurrentUser} />
       )}
-      {showManualAddMember && effectiveCurrentUser?.role === "super_admin" && (
+      {showManualAddMember && (effectiveCurrentUser?.role === "super_admin" || hasAdditionalPermission(effectiveCurrentUser, ACCESS_PERMISSION.ADD_STAFF_MANUALLY)) && (
         <ManualAddMemberModal onClose={() => setShowManualAddMember(false)} onAdd={addStaffManually} />
       )}
       {sleepAlert && (
@@ -10761,7 +12042,8 @@ export default function App() {
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
             setIdleNoTrackAlert(null);
-            setShowNewTask(true);
+            if (includeLostTime) setShowForgottenRecovery(true);
+            else setShowNewTask(true);
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
             await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted, context);
@@ -10792,6 +12074,7 @@ export default function App() {
           onConfirm={trackMeetingAsTask}
         />
       )}
+      <LocalSpellcheckAssist />
       {toast && <div className={`cb-toast ${toast.isError ? "error" : ""}`}>{toast.msg}</div>}
     </div>
   );
