@@ -983,6 +983,7 @@ PERMISSION_MANAGE_WORKSPACE_BRANDING = "manage_workspace_branding"
 PERMISSION_MANAGE_INTEGRATIONS = "manage_integrations"
 PERMISSION_MANAGE_AUDIT_RECORDING = "manage_audit_recording"
 PERMISSION_MANAGE_SUPER_ADMINS = "manage_super_admins"
+PERMISSION_VIEW_TRACKED_TIME = "view_tracked_time"
 DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_REPORT_HELP,
     PERMISSION_REPORT_OVERRIDES,
@@ -995,6 +996,7 @@ DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_MANAGE_INTEGRATIONS,
     PERMISSION_MANAGE_AUDIT_RECORDING,
     PERMISSION_MANAGE_SUPER_ADMINS,
+    PERMISSION_VIEW_TRACKED_TIME,
 }
 ALL_DELEGATABLE_PERMISSIONS = DELEGATABLE_ADMIN_PERMISSIONS | {PERMISSION_INSIGHTS_LEAVE_CAPACITY}
 
@@ -6807,6 +6809,20 @@ def period_key(task):
     ])
 
 
+def _hide_tracked_time_for_member(rows, member):
+    """Remove original tracked-time detail unless this Admin was explicitly delegated access.
+
+    Duration remains available. Staff can still see their own export detail, and Super Admins
+    always retain tracked-time visibility. This is enforced on the API response, not only the UI.
+    """
+    if member.role != "admin" or _has_permission(member, PERMISSION_VIEW_TRACKED_TIME):
+        return rows
+    for row in rows:
+        row["tracked_seconds"] = None
+        row["tracked_hours"] = None
+    return rows
+
+
 def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None, include_owner_ids=None, submitted_pod_id=None):
     query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
     if client_id and client_id != "all":
@@ -6908,7 +6924,8 @@ def get_export(client_id: str = "all", pushed: str = "pending", date_from: str =
             if can_see_super_admins:
                 include_owner_ids = list(dict.fromkeys(include_owner_ids + super_admin_ids))
             submitted_pod_id = current_member.pod_id
-    return build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
+    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
+    return _hide_tracked_time_for_member(rows, current_member)
 
 
 def _csv_safe_text(value):
@@ -6938,23 +6955,30 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
                 include_owner_ids = list(dict.fromkeys(include_owner_ids + super_admin_ids))
             submitted_pod_id = current_member.pod_id
     rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
+    can_view_tracked_time = current_member.role != "admin" or _has_permission(current_member, PERMISSION_VIEW_TRACKED_TIME)
+    rows = _hide_tracked_time_for_member(rows, current_member)
     buffer = StringIO()
     writer = csv.writer(buffer)
-    writer.writerow([
-        "Date", "Client", "Template", "Task", "Role", "Task Type", "Period", "Hours", "Tracked Hours", "Notes", "Tracked by", "Pushed to Karbon",
-        "Bank Account", "Metric", "Start Count", "End Count", "Change",
-    ])
+    headers = ["Date", "Client", "Template", "Task", "Role", "Task Type", "Period", "Hours"]
+    if can_view_tracked_time:
+        headers.append("Tracked Hours")
+    headers += ["Notes", "Tracked by", "Pushed to Karbon", "Bank Account", "Metric", "Start Count", "End Count", "Change"]
+    writer.writerow(headers)
     for r in rows:
-        writer.writerow([
+        values = [
             r["date"], _csv_safe_text(r["client"]), _csv_safe_text(r["template_name"] or ""), _csv_safe_text(r["task"]),
-            _csv_safe_text(r["role"]), _csv_safe_text(r["task_type"]), _csv_safe_text(r["period"]),
-            r["hours"], r["tracked_hours"] if r["tracked_hours"] is not None else "",
+            _csv_safe_text(r["role"]), _csv_safe_text(r["task_type"]), _csv_safe_text(r["period"]), r["hours"],
+        ]
+        if can_view_tracked_time:
+            values.append(r["tracked_hours"] if r["tracked_hours"] is not None else "")
+        values += [
             _csv_safe_text(r["note"]), _csv_safe_text(r["tracked_by"]), "Yes" if r["pushed"] else "No",
             _csv_safe_text(r["bank_account"]), _csv_safe_text(r["metric"]),
             r["start_count"] if r["start_count"] is not None else "",
             r["end_count"] if r["end_count"] is not None else "",
             r["change"] if r["change"] is not None else "",
-        ])
+        ]
+        writer.writerow(values)
     buffer.seek(0)
     return StreamingResponse(
         iter([buffer.getvalue()]),
