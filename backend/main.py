@@ -175,6 +175,7 @@ DEFAULT_ROLES = ["Bookkeeper", "Senior Bookkeeper"]
 BUILTIN_HELPING_TASK_TYPE = "Helping/Training"
 LEGACY_BUILTIN_HELPING_TASK_TYPE = "Helping"
 BUILTIN_LEARNING_TASK_TYPE = "Learning & Development"
+INTERNAL_MEETING_TASK_TYPE = "Non-billable: Colleague Meeting"
 MIN_LEARNING_NOTE_WORDS = 5
 DEFAULT_TASK_TYPES = ["Data Entry", "Reconciliation", "Review", "Client Query", BUILTIN_HELPING_TASK_TYPE, BUILTIN_LEARNING_TASK_TYPE]
 DEFAULT_LEARNING_CATEGORIES = [
@@ -4795,18 +4796,34 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
             raise HTTPException(403, "Only an admin can assign a task to someone else")
         _require_member_in_scope(current_member, owner_id, db)
 
-    client_id = payload.client_id or _unassigned_client_id(current_member.tenant_id)
-    if client_id == _unassigned_client_id(current_member.tenant_id):
-        client_name = UNASSIGNED_CLIENT_NAME
-    else:
-        client = db.get(models.Client, client_id)
-        if not client or client.tenant_id != current_member.tenant_id:
-            raise HTTPException(404, "Client not found")
-        client_name = client.name
-
     role = (payload.role or "").strip()
     task_type = (payload.task_type or "").strip()
-    _validate_configured_role_and_task_type(db, role, task_type)
+    is_internal_calendar_meeting = (
+        task_type == INTERNAL_MEETING_TASK_TYPE
+        and bool(payload.source_calendar_event_id)
+    )
+
+    if is_internal_calendar_meeting:
+        # Calendar meetings explicitly marked Internal should never require a client.
+        # Reuse the existing tenant-scoped internal support client so reporting stays
+        # separate from real client work and completion follows the meeting flow.
+        client = get_or_create_internal_support_client(db)
+        client_id = client.id
+        client_name = client.name
+    else:
+        client_id = payload.client_id or _unassigned_client_id(current_member.tenant_id)
+        if client_id == _unassigned_client_id(current_member.tenant_id):
+            client_name = UNASSIGNED_CLIENT_NAME
+        else:
+            client = db.get(models.Client, client_id)
+            if not client or client.tenant_id != current_member.tenant_id:
+                raise HTTPException(404, "Client not found")
+            client_name = client.name
+
+    if is_internal_calendar_meeting:
+        _validate_configured_role_and_task_type(db, role, "")
+    else:
+        _validate_configured_role_and_task_type(db, role, task_type)
 
     helped_member_id = payload.helped_member_id if task_type.lower() == BUILTIN_HELPING_TASK_TYPE.lower() else None
     if task_type.lower() == BUILTIN_HELPING_TASK_TYPE.lower():

@@ -99,10 +99,8 @@ class Member(TenantScopedMixin, VersionedMixin, Base):
     capacity_effective_from = Column(Date, default=date.today)
     timezone_name = Column(String, default="Asia/Colombo")
     can_view_leave_capacity_insights = Column(Boolean, default=False)
-    # Fine-grained delegated access. Stored as a JSON list so permissions can be extended
-    # without creating a new role or schema column for every capability.
-    additional_permissions = Column(JSON, default=list, nullable=False)
     staff_tour_completed = Column(Boolean, default=False)
+    additional_permissions = Column(JSON, default=list)
 
     @property
     def google_calendar_connected(self):
