@@ -3671,7 +3671,7 @@ function SettingsLoadingBlock({ rows = 3, minHeight = 96 }) {
   );
 }
 
-function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, canManageBranding = false, onBrandingUpdated, onPlatformResolved }) {
+function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, canManageBranding = false, onBrandingUpdated, onPlatformResolved, realIsSuperAdmin = false, viewMode = "super_admin" }) {
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) || workspaces[0] || null;
   const [platformTenants, setPlatformTenants] = useState([]);
   const [isPlatformAdmin, setIsPlatformAdmin] = useState(false);
@@ -3682,6 +3682,17 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [brandingBusy, setBrandingBusy] = useState(false);
   const [brandingMessage, setBrandingMessage] = useState("");
+
+  // Demo/view mode is presentation-only. When a real Super Admin previews
+  // ClockBook as Admin or Staff, do not expose the underlying Super Admin
+  // tier in the workspace selector. The stored workspace role is unchanged.
+  const displayedWorkspaceRole = (workspace) => {
+    if (realIsSuperAdmin && workspace?.role === "super_admin") {
+      if (viewMode === "member") return "Staff";
+      if (viewMode === "admin") return "Admin";
+    }
+    return roleLabel(workspace?.role);
+  };
 
   async function refreshPlatformTenants() {
     try {
@@ -3795,7 +3806,7 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
                       style={{ width: "100%", minHeight: 36 }}
                     >
                       {workspaces.map((workspace) => (
-                        <option key={workspace.id} value={workspace.id}>{workspace.name} · {roleLabel(workspace.role)}</option>
+                        <option key={workspace.id} value={workspace.id}>{workspace.name} · {displayedWorkspaceRole(workspace)}</option>
                       ))}
                     </select>
                   </div>
@@ -4395,6 +4406,8 @@ function SettingsView({
         canManageBranding={canManageBranding}
         onBrandingUpdated={onBrandingUpdated}
         onPlatformResolved={() => setPlatformSettingsReady(true)}
+        realIsSuperAdmin={realIsSuperAdmin}
+        viewMode={viewMode}
       />
       {realIsSuperAdmin && showDemoModeControls && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
