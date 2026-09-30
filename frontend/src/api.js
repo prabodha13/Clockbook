@@ -18,7 +18,10 @@ async function request(path, options = {}) {
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
   const res = await fetch(`${BASE}${path}`, { ...options, headers });
-  if (res.status === 401 && token) {
+  if (res.status === 401 && token && getToken() === token) {
+    // Only revoke the browser session when this 401 belongs to the token that
+    // is still active. A workspace switch replaces the token; late responses
+    // from the previous workspace must not clear the newly-issued session.
     clearToken();
     window.dispatchEvent(new Event("clockbook-session-revoked"));
   }
