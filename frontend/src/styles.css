@@ -350,3 +350,39 @@ html, body, #root {
   .cb-modal-foot { flex-direction: column; align-items: stretch; }
   .cb-modal-foot .cb-btn { width: 100%; justify-content: center; }
 }
+
+/* Time Integrity Audit: compact, aligned audit filter toolbar. */
+@media (max-width: 1320px) {
+  .time-integrity-filter-grid-primary {
+    grid-template-columns: minmax(300px, 1.2fr) 145px 145px minmax(175px, 1fr) minmax(160px, .9fr) !important;
+  }
+  .time-integrity-filter-grid-primary > :last-child {
+    grid-column: span 2;
+  }
+  .time-integrity-filter-grid-secondary {
+    grid-template-columns: repeat(4, minmax(160px, 1fr)) !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .time-integrity-filter-grid-primary,
+  .time-integrity-filter-grid-secondary {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+  .time-integrity-filter-grid-primary > :first-child,
+  .time-integrity-filter-grid-primary > :last-child,
+  .time-integrity-filter-grid-secondary > :last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 560px) {
+  .time-integrity-filter-grid-primary,
+  .time-integrity-filter-grid-secondary {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+  .time-integrity-filter-grid-primary > *,
+  .time-integrity-filter-grid-secondary > * {
+    grid-column: auto !important;
+  }
+}

@@ -9211,32 +9211,76 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
     </div>
 
-    <div style={{ marginBottom: 14 }}>
-      <div className="cb-label" style={{ marginBottom: 6 }}>Quick range</div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {[['today','Today'],['yesterday','Yesterday'],['this_week','This week'],['last_week','Last week']].map(([id, label]) => <button
-          key={id} type="button"
-          className={`cb-btn cb-btn-sm ${activePreset(id) ? "cb-btn-primary" : "cb-btn-ghost"}`}
-          onClick={() => applyRangePreset(id)}
-        >{label}</button>)}
+    <div style={{
+      border: "1px solid var(--line)",
+      borderRadius: 10,
+      background: "var(--paper)",
+      padding: 12,
+      marginBottom: 16,
+    }}>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(310px, 1.15fr) 145px 145px minmax(180px, .85fr) minmax(165px, .8fr) minmax(220px, 1.15fr)",
+        gap: 10,
+        alignItems: "end",
+      }} className="time-integrity-filter-grid time-integrity-filter-grid-primary">
+        <div style={{ minWidth: 0 }}>
+          <div className="cb-label">Quick range</div>
+          <div style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+            height: 36,
+            border: "1px solid var(--line)",
+            borderRadius: 8,
+            overflow: "hidden",
+            background: "var(--paper)",
+          }}>
+            {[['today','Today'],['yesterday','Yesterday'],['this_week','This week'],['last_week','Last week']].map(([id, label], index) => {
+              const selected = activePreset(id);
+              return <button
+                key={id}
+                type="button"
+                onClick={() => applyRangePreset(id)}
+                aria-pressed={selected}
+                style={{
+                  height: 34,
+                  border: "none",
+                  borderLeft: index === 0 ? "none" : "1px solid var(--line)",
+                  borderRadius: 0,
+                  background: selected ? "var(--ink)" : "transparent",
+                  color: selected ? "var(--paper)" : "var(--ink)",
+                  fontSize: 12.5,
+                  fontWeight: selected ? 700 : 600,
+                  cursor: "pointer",
+                  whiteSpace: "nowrap",
+                  padding: "0 10px",
+                }}
+              >{label}</button>;
+            })}
+          </div>
+        </div>
+        <div style={{ minWidth: 0 }}><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: "100%", height: 36 }} /></div>
+        <div style={{ minWidth: 0 }}><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: "100%", height: 36 }} /></div>
+        <AuditMultiSelect label="Staff" options={staffOptions} values={memberIds} onChange={setMemberIds} allLabel="All staff" minWidth={0} searchable />
+        <AuditMultiSelect label="Pod" options={podOptions} values={podIds} onChange={setPodIds} allLabel="All permitted pods" minWidth={0} />
+        <AuditMultiSelect label="Client" options={clientOptions} values={clientIds} onChange={setClientIds} allLabel="All clients" minWidth={0} searchable />
       </div>
-    </div>
 
-    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
-      <div style={{ width: 145 }}><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: "100%", height: 36 }} /></div>
-      <div style={{ width: 145 }}><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: "100%", height: 36 }} /></div>
-      <AuditMultiSelect label="Staff" options={staffOptions} values={memberIds} onChange={setMemberIds} allLabel="All staff" minWidth={185} searchable />
-      <AuditMultiSelect label="Pod" options={podOptions} values={podIds} onChange={setPodIds} allLabel="All permitted pods" minWidth={165} />
-      <AuditMultiSelect label="Client" options={clientOptions} values={clientIds} onChange={setClientIds} allLabel="All clients" minWidth={210} searchable />
-      <AuditMultiSelect label="Entry source" options={sourceOptions} values={entrySources} onChange={setEntrySources} allLabel="All sources" minWidth={175} />
-    </div>
-    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
-      <AuditMultiSelect label="Selected location" options={locationOptions} values={recordedLocations} onChange={setRecordedLocations} allLabel="All locations" minWidth={190} searchable />
-      <AuditMultiSelect label="Edited" options={editedOptions} values={editedValues} onChange={setEditedValues} allLabel="All" minWidth={155} />
-      <AuditMultiSelect label="Recorded timing" options={timingOptions} values={entryTimings} onChange={setEntryTimings} allLabel="Same day + later day" minWidth={190} />
-      <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5, paddingBottom: 1 }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
-      <button className="cb-btn cb-btn-sm" onClick={load} disabled={busy} style={{ height: 36 }}><RotateCcw size={13} />{busy ? "Refreshing…" : "Refresh"}</button>
-      <div className="cb-hint" style={{ height: 36, display: "flex", alignItems: "center" }}>{busy ? "Updating…" : "Filters update automatically"}</div>
+      <div style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(175px, .9fr) minmax(185px, 1fr) minmax(145px, .75fr) minmax(190px, 1fr) auto auto minmax(145px, .72fr)",
+        gap: 10,
+        alignItems: "end",
+        marginTop: 10,
+      }} className="time-integrity-filter-grid time-integrity-filter-grid-secondary">
+        <AuditMultiSelect label="Entry source" options={sourceOptions} values={entrySources} onChange={setEntrySources} allLabel="All sources" minWidth={0} />
+        <AuditMultiSelect label="Selected location" options={locationOptions} values={recordedLocations} onChange={setRecordedLocations} allLabel="All locations" minWidth={0} searchable />
+        <AuditMultiSelect label="Edited" options={editedOptions} values={editedValues} onChange={setEditedValues} allLabel="All" minWidth={0} />
+        <AuditMultiSelect label="Recorded timing" options={timingOptions} values={entryTimings} onChange={setEntryTimings} allLabel="Same day + later day" minWidth={0} />
+        <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5, whiteSpace: "nowrap", padding: "0 2px" }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
+        <button className="cb-btn cb-btn-sm" onClick={load} disabled={busy} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{busy ? "Refreshing…" : "Refresh"}</button>
+        <div className="cb-hint" style={{ minHeight: 36, display: "flex", alignItems: "center", lineHeight: 1.25 }}>{busy ? "Updating…" : "Filters update automatically"}</div>
+      </div>
     </div>
 
     {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
