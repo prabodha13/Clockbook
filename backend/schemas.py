@@ -1,4 +1,4 @@
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from typing import Optional, List, Literal
 from pydantic import BaseModel as PydanticBaseModel, ConfigDict, Field, field_serializer
 
@@ -622,3 +622,58 @@ class AuditEventOut(BaseModel):
     entity_id: Optional[str] = None
     changes: dict
     created_at: datetime
+
+
+class TimeIntegrityAuditRow(BaseModel):
+    id: str
+    entry_group_id: str
+    task_id: Optional[str] = None
+    member_id: str
+    staff_member: str
+    pod_id: Optional[str] = None
+    work_date: date
+    client_id: Optional[str] = None
+    client: str
+    task: str
+    entry_source: Literal["Automatic", "Recovery", "Raw Manual", "Manual Adjustment"]
+    manual_duration_seconds: float = 0.0
+    recorded_at: datetime
+    net_active_presence_seconds: float = 0.0
+    automatically_tracked_seconds: float = 0.0
+    recovered_allocated_seconds: float = 0.0
+    prior_manual_allocated_seconds: float = 0.0
+    available_unallocated_active_seconds: float = 0.0
+    unreconciled_manual_seconds: float = 0.0
+    later_edited: bool = False
+    original_value_seconds: float = 0.0
+    current_value_seconds: float = 0.0
+    last_edited_at: Optional[datetime] = None
+    reason_note: str = ""
+    review_status: str
+    entry_timing: Literal["Same day", "Later day"]
+    recovery_batch_id: Optional[str] = None
+    recovery_allocation_index: Optional[int] = None
+
+    @field_serializer("recorded_at", "last_edited_at")
+    def serialize_time_integrity_utc(self, value: Optional[datetime], _info):
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+
+
+class TimeIntegrityAuditSummary(BaseModel):
+    total_manual_seconds: float = 0.0
+    total_unreconciled_manual_seconds: float = 0.0
+    flagged_entries: int = 0
+    later_edited_entries: int = 0
+    average_delay_days: float = 0.0
+    repeated_unreconciled_staff: int = 0
+    repeated_unreconciled_staff_names: List[str] = Field(default_factory=list)
+
+
+class TimeIntegrityAuditResponse(BaseModel):
+    rows: List[TimeIntegrityAuditRow] = Field(default_factory=list)
+    summary: TimeIntegrityAuditSummary
+

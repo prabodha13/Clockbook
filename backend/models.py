@@ -186,6 +186,57 @@ class ClockStartEvent(TenantScopedMixin, Base):
     started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class ActivePresenceInterval(TenantScopedMixin, Base):
+    __tablename__ = "active_presence_intervals"
+    __table_args__ = (
+        Index("ix_presence_intervals_tenant_member_date", "tenant_id", "member_id", "work_date"),
+        Index("ix_presence_intervals_tenant_member_end", "tenant_id", "member_id", "ended_at"),
+    )
+    id = Column(String, primary_key=True, default=lambda: gen_id("pint"))
+    member_id = Column(String, ForeignKey("members.id", ondelete="CASCADE"), nullable=False)
+    work_date = Column(Date, nullable=False)
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+class TimeIntegrityAuditEntry(TenantScopedMixin, Base):
+    __tablename__ = "time_integrity_audit_entries"
+    __table_args__ = (
+        Index("ix_time_integrity_tenant_member_date", "tenant_id", "member_id", "work_date"),
+        Index("ix_time_integrity_tenant_group_revision", "tenant_id", "entry_group_id", "revision"),
+        Index("ix_time_integrity_tenant_pod_date", "tenant_id", "submitted_pod_id", "work_date"),
+        Index("ix_time_integrity_tenant_recorded", "tenant_id", "recorded_at"),
+    )
+    id = Column(String, primary_key=True, default=lambda: gen_id("tia"))
+    entry_group_id = Column(String, nullable=False, index=True)
+    revision = Column(Integer, nullable=False, default=1)
+    event_kind = Column(String, nullable=False, default="recorded")
+    task_id = Column(String, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
+    member_id = Column(String, nullable=False, index=True)
+    member_name = Column(String, nullable=False, default="")
+    submitted_pod_id = Column(String, nullable=True)
+    work_date = Column(Date, nullable=False)
+    client_id = Column(String, nullable=True)
+    client_name = Column(String, nullable=False, default="")
+    task_name = Column(String, nullable=False, default="")
+    entry_source = Column(String, nullable=False)
+    recorded_at = Column(DateTime, nullable=False)
+    net_active_presence_seconds = Column(Float, nullable=False, default=0.0)
+    automatically_tracked_seconds = Column(Float, nullable=False, default=0.0)
+    recovered_allocated_seconds = Column(Float, nullable=False, default=0.0)
+    prior_manual_allocated_seconds = Column(Float, nullable=False, default=0.0)
+    available_unallocated_active_seconds = Column(Float, nullable=False, default=0.0)
+    manual_duration_seconds = Column(Float, nullable=False, default=0.0)
+    unreconciled_manual_seconds = Column(Float, nullable=False, default=0.0)
+    original_value_seconds = Column(Float, nullable=False, default=0.0)
+    current_value_seconds = Column(Float, nullable=False, default=0.0)
+    reason_note = Column(Text, nullable=False, default="")
+    recovery_batch_id = Column(String, nullable=True)
+    recovery_allocation_index = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
 class KarbonReconciliationNote(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "karbon_reconciliation_notes"
     id = Column(String, primary_key=True, default=lambda: gen_id("krn"))

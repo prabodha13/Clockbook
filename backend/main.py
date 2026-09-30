@@ -985,6 +985,7 @@ PERMISSION_MANAGE_INTEGRATIONS = "manage_integrations"
 PERMISSION_MANAGE_AUDIT_RECORDING = "manage_audit_recording"
 PERMISSION_MANAGE_SUPER_ADMINS = "manage_super_admins"
 PERMISSION_VIEW_TRACKED_TIME = "view_tracked_time"
+PERMISSION_TIME_INTEGRITY_AUDIT = "view_time_integrity_audit"
 DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_REPORT_HELP,
     PERMISSION_REPORT_OVERRIDES,
@@ -998,6 +999,7 @@ DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_MANAGE_AUDIT_RECORDING,
     PERMISSION_MANAGE_SUPER_ADMINS,
     PERMISSION_VIEW_TRACKED_TIME,
+    PERMISSION_TIME_INTEGRITY_AUDIT,
 }
 ALL_DELEGATABLE_PERMISSIONS = DELEGATABLE_ADMIN_PERMISSIONS | {PERMISSION_INSIGHTS_LEAVE_CAPACITY}
 
@@ -5012,6 +5014,13 @@ def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_me
         "source": "forgotten_time_recovery",
         "recovered_seconds": round(seconds, 1),
     }
+    _append_time_integrity_snapshot(
+        db, member=current_member, task=task, entry_source="Recovery",
+        manual_duration_seconds=seconds,
+        current_value_seconds=elapsed_seconds(task.segments) + seconds,
+        recorded_at=now, work_date=recovery_date,
+        reason_note="Forgotten time recovered",
+    )
     task.segments = [*(task.segments or []), recovered]
     if not task.owner_id:
         task.owner_id = current_member.id
@@ -5122,12 +5131,30 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
 
     batch_id = secrets.token_urlsafe(12)
     cursor = start
-    touched = []
+    planned_segments = []
+    prior_batch_recovery = 0.0
+    # Snapshot every allocation before mutating any task. This keeps the exact RecordedAt view
+    # deterministic and makes earlier allocations in this same atomic split consume the pool.
     for index, (task_id, seconds) in enumerate(allocations):
         task = tasks_by_id[task_id]
         segment_end = cursor + timedelta(seconds=seconds)
+        _append_time_integrity_snapshot(
+            db, member=current_member, task=task, entry_source="Recovery",
+            manual_duration_seconds=seconds,
+            current_value_seconds=elapsed_seconds(task.segments) + seconds,
+            recorded_at=now, work_date=recovery_date,
+            reason_note="Forgotten time recovered",
+            recovery_batch_id=batch_id, recovery_allocation_index=index,
+            additional_prior_recovery_seconds=prior_batch_recovery,
+        )
+        planned_segments.append((index, task, seconds, cursor, segment_end))
+        prior_batch_recovery += seconds
+        cursor = segment_end
+
+    touched = []
+    for index, task, seconds, segment_start, segment_end in planned_segments:
         recovered = {
-            "start": cursor.isoformat() + "Z",
+            "start": segment_start.isoformat() + "Z",
             "end": segment_end.isoformat() + "Z",
             "source": "forgotten_time_recovery",
             "recovered_seconds": round(seconds, 1),
@@ -5157,7 +5184,6 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
             },
         ))
         touched.append(task)
-        cursor = segment_end
 
     # Floating point inputs can leave sub-second drift.  The validation tolerance above is
     # intentionally tiny; close the final segment exactly at the authoritative server time.
@@ -5450,6 +5476,26 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     task.submitted_by_id = current_member.id
     task.submitted_pod_id = current_member.pod_id
     task.pushed_to_karbon = False
+
+    final_seconds_at_submit = float(task.adjusted_seconds if task.adjusted_seconds is not None else tracked_seconds)
+    if task.adjusted_seconds is None:
+        integrity_source = "Automatic"
+        integrity_manual_seconds = 0.0
+    elif tracked_seconds < 1:
+        integrity_source = "Raw Manual"
+        integrity_manual_seconds = max(final_seconds_at_submit, 0.0)
+    else:
+        integrity_source = "Manual Adjustment"
+        # Only manually-added time can create unsupported positive variance. A reduction is
+        # still preserved as a Manual Adjustment row through Original/Current value, but it
+        # does not consume active-time availability or create unreconciled time.
+        integrity_manual_seconds = max(final_seconds_at_submit - tracked_seconds, 0.0)
+    _append_time_integrity_snapshot(
+        db, member=current_member, task=task, entry_source=integrity_source,
+        manual_duration_seconds=integrity_manual_seconds,
+        current_value_seconds=final_seconds_at_submit, recorded_at=task.submitted_at,
+        reason_note=task.note or "",
+    )
 
     if is_learning_submission:
         final_seconds = float(task.adjusted_seconds if task.adjusted_seconds is not None else tracked_seconds)
@@ -5988,6 +6034,241 @@ def _utc_naive_to_local(dt, member):
     else:
         dt = dt.astimezone(timezone.utc)
     return dt.astimezone(_member_zone(member))
+
+
+PRESENCE_CONTINUITY_GAP = timedelta(minutes=10)
+
+
+def _local_workday_utc_bounds(work_date, member):
+    zone = _member_zone(member)
+    local_start = datetime.combine(work_date, datetime.min.time()).replace(tzinfo=zone)
+    local_end = local_start + timedelta(days=1)
+    return (
+        local_start.astimezone(timezone.utc).replace(tzinfo=None),
+        local_end.astimezone(timezone.utc).replace(tzinfo=None),
+    )
+
+
+def _merge_time_ranges(ranges):
+    clean = sorted((start, end) for start, end in ranges if start is not None and end is not None and end > start)
+    merged = []
+    for start, end in clean:
+        if not merged or start > merged[-1][1]:
+            merged.append([start, end])
+        elif end > merged[-1][1]:
+            merged[-1][1] = end
+    return [(start, end) for start, end in merged]
+
+
+def _record_presence_observation(db: Session, member: models.Member, observed_at: datetime):
+    """Record compact active-presence evidence without changing timer/idle behaviour.
+
+    Heartbeats/actions within ten minutes extend one observed interval. A larger gap starts a
+    new interval, so future integrity calculations do not treat browser/laptop-off gaps as active.
+    The existing DailyPresenceEvent remains intact for the existing Audit report.
+    """
+    local_now = _utc_naive_to_local(observed_at, member)
+    work_date = local_now.date()
+    daily = db.query(models.DailyPresenceEvent).filter(
+        models.DailyPresenceEvent.member_id == member.id,
+        models.DailyPresenceEvent.work_date == work_date,
+    ).first()
+    latest = db.query(models.ActivePresenceInterval).filter(
+        models.ActivePresenceInterval.member_id == member.id,
+        models.ActivePresenceInterval.work_date == work_date,
+    ).order_by(models.ActivePresenceInterval.ended_at.desc()).first()
+
+    if latest is not None and observed_at >= latest.ended_at and observed_at - latest.ended_at <= PRESENCE_CONTINUITY_GAP:
+        latest.ended_at = observed_at
+    elif latest is None:
+        # On the first deployment heartbeat, carry forward an already-continuous legacy day only
+        # when the previous five-minute heartbeat is still recent. This avoids falsely discarding
+        # the whole morning while still refusing to bridge a real browser/laptop-off gap.
+        start_at = observed_at
+        if daily and daily.first_seen_at and daily.last_seen_at and observed_at >= daily.last_seen_at and observed_at - daily.last_seen_at <= PRESENCE_CONTINUITY_GAP:
+            start_at = daily.first_seen_at
+        db.add(models.ActivePresenceInterval(
+            member_id=member.id, work_date=work_date, started_at=start_at, ended_at=observed_at,
+        ))
+    else:
+        db.add(models.ActivePresenceInterval(
+            member_id=member.id, work_date=work_date, started_at=observed_at, ended_at=observed_at,
+        ))
+
+    if daily is None:
+        daily = models.DailyPresenceEvent(
+            member_id=member.id, work_date=work_date, first_seen_at=observed_at, last_seen_at=observed_at,
+        )
+        db.add(daily)
+    else:
+        if observed_at < daily.first_seen_at:
+            daily.first_seen_at = observed_at
+        if observed_at > daily.last_seen_at:
+            daily.last_seen_at = observed_at
+    return work_date
+
+
+def _time_integrity_work_date(task: models.TaskInstance, member: models.Member, recorded_at: datetime):
+    starts = []
+    for seg in (task.segments or []):
+        if not isinstance(seg, dict) or not seg.get("start"):
+            continue
+        try:
+            starts.append(parse_utc_naive(seg.get("start")))
+        except Exception:
+            continue
+    anchor = min(starts) if starts else (task.created_at or recorded_at)
+    return _utc_naive_to_local(anchor, member).date()
+
+
+def _time_integrity_presence_seconds(db: Session, member: models.Member, work_date, recorded_at: datetime):
+    day_start, day_end = _local_workday_utc_bounds(work_date, member)
+    clip_end = min(recorded_at, day_end)
+    if clip_end <= day_start:
+        return 0.0
+
+    intervals = db.query(models.ActivePresenceInterval).filter(
+        models.ActivePresenceInterval.member_id == member.id,
+        models.ActivePresenceInterval.work_date == work_date,
+        models.ActivePresenceInterval.started_at < clip_end,
+        models.ActivePresenceInterval.ended_at >= day_start,
+    ).all()
+    active_ranges = _merge_time_ranges([
+        (max(row.started_at, day_start), min(row.ended_at, clip_end)) for row in intervals
+    ])
+    if not active_ranges:
+        # Legacy fallback for a day that predates interval capture. It still uses net active
+        # presence by subtracting away periods; it never uses login-to-shutdown totals.
+        daily = db.query(models.DailyPresenceEvent).filter(
+            models.DailyPresenceEvent.member_id == member.id,
+            models.DailyPresenceEvent.work_date == work_date,
+        ).first()
+        if daily and daily.first_seen_at and daily.last_seen_at:
+            start = max(daily.first_seen_at, day_start)
+            end = min(daily.last_seen_at, clip_end)
+            if end > start:
+                active_ranges = [(start, end)]
+    if not active_ranges:
+        return 0.0
+
+    inactivity = db.query(models.InactivityEvent).filter(
+        models.InactivityEvent.member_id == member.id,
+        models.InactivityEvent.started_at < clip_end,
+        models.InactivityEvent.ended_at > day_start,
+    ).all()
+    away_ranges = _merge_time_ranges([
+        (max(row.started_at, day_start), min(row.ended_at, clip_end)) for row in inactivity
+    ])
+    active_seconds = sum((end - start).total_seconds() for start, end in active_ranges)
+    away_overlap = 0.0
+    for a_start, a_end in active_ranges:
+        for i_start, i_end in away_ranges:
+            overlap_start = max(a_start, i_start)
+            overlap_end = min(a_end, i_end)
+            if overlap_end > overlap_start:
+                away_overlap += (overlap_end - overlap_start).total_seconds()
+    return max(active_seconds - away_overlap, 0.0)
+
+
+def _time_integrity_segment_totals(db: Session, member: models.Member, work_date, recorded_at: datetime):
+    day_start, day_end = _local_workday_utc_bounds(work_date, member)
+    clip_end = min(recorded_at, day_end)
+    automatic = 0.0
+    recovered = 0.0
+    tasks = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id == member.id).all()
+    for task in tasks:
+        for seg in (task.segments or []):
+            if not isinstance(seg, dict) or not seg.get("start"):
+                continue
+            try:
+                start = parse_utc_naive(seg.get("start"))
+                end = parse_utc_naive(seg.get("end")) if seg.get("end") else recorded_at
+            except Exception:
+                continue
+            overlap_start = max(start, day_start)
+            overlap_end = min(end, clip_end)
+            if overlap_end <= overlap_start:
+                continue
+            seconds = (overlap_end - overlap_start).total_seconds()
+            if seg.get("source") == "forgotten_time_recovery":
+                recovered += seconds
+            else:
+                automatic += seconds
+    return max(automatic, 0.0), max(recovered, 0.0)
+
+
+def _time_integrity_prior_manual_seconds(db: Session, member_id: str, work_date, recorded_at: datetime):
+    rows = db.query(models.TimeIntegrityAuditEntry).filter(
+        models.TimeIntegrityAuditEntry.member_id == member_id,
+        models.TimeIntegrityAuditEntry.work_date == work_date,
+        models.TimeIntegrityAuditEntry.recorded_at < recorded_at,
+        models.TimeIntegrityAuditEntry.entry_source.in_(["Raw Manual", "Manual Adjustment"]),
+    ).order_by(models.TimeIntegrityAuditEntry.entry_group_id, models.TimeIntegrityAuditEntry.revision).all()
+    latest = {}
+    for row in rows:
+        previous = latest.get(row.entry_group_id)
+        if previous is None or row.revision > previous.revision:
+            latest[row.entry_group_id] = row
+    return sum(max(float(row.manual_duration_seconds or 0.0), 0.0) for row in latest.values())
+
+
+def _append_time_integrity_snapshot(
+    db: Session, *, member: models.Member, task: models.TaskInstance, entry_source: str,
+    manual_duration_seconds: float, current_value_seconds: float, recorded_at: datetime,
+    work_date=None, reason_note: str = "", recovery_batch_id: str | None = None,
+    recovery_allocation_index: int | None = None, additional_prior_recovery_seconds: float = 0.0,
+    entry_group_id: str | None = None, event_kind: str = "recorded",
+):
+    """Append an immutable Time Integrity Audit snapshot. Never update older snapshots."""
+    _record_presence_observation(db, member, recorded_at)
+    # SessionLocal disables autoflush; flush the evidence row so multiple snapshots created in
+    # one atomic batch observe the same presence record instead of staging duplicates.
+    db.flush()
+    work_date = work_date or _time_integrity_work_date(task, member, recorded_at)
+    net_active = _time_integrity_presence_seconds(db, member, work_date, recorded_at)
+    automatic, recovered = _time_integrity_segment_totals(db, member, work_date, recorded_at)
+    recovered += max(float(additional_prior_recovery_seconds or 0.0), 0.0)
+    prior_manual = _time_integrity_prior_manual_seconds(db, member.id, work_date, recorded_at)
+    available = max(net_active - automatic - recovered - prior_manual, 0.0)
+    manual_duration = max(float(manual_duration_seconds or 0.0), 0.0)
+    unreconciled = max(manual_duration - available, 0.0)
+
+    group_id = entry_group_id or models.gen_id("tiag")
+    previous_versions = db.query(models.TimeIntegrityAuditEntry).filter(
+        models.TimeIntegrityAuditEntry.entry_group_id == group_id
+    ).order_by(models.TimeIntegrityAuditEntry.revision.desc()).all()
+    revision = (previous_versions[0].revision + 1) if previous_versions else 1
+    original_value = previous_versions[-1].original_value_seconds if previous_versions else float(current_value_seconds or 0.0)
+    row = models.TimeIntegrityAuditEntry(
+        entry_group_id=group_id, revision=revision, event_kind=event_kind, task_id=task.id,
+        member_id=member.id, member_name=member.name or "", submitted_pod_id=member.pod_id, work_date=work_date,
+        client_id=task.client_id, client_name=task.client_name or "", task_name=task.name or "",
+        entry_source=entry_source, recorded_at=recorded_at,
+        net_active_presence_seconds=round(net_active, 3),
+        automatically_tracked_seconds=round(automatic, 3),
+        recovered_allocated_seconds=round(recovered, 3),
+        prior_manual_allocated_seconds=round(prior_manual, 3),
+        available_unallocated_active_seconds=round(available, 3),
+        manual_duration_seconds=round(manual_duration, 3),
+        unreconciled_manual_seconds=round(unreconciled, 3),
+        original_value_seconds=round(float(original_value or 0.0), 3),
+        current_value_seconds=round(float(current_value_seconds or 0.0), 3),
+        reason_note=(reason_note or "")[:4000],
+        recovery_batch_id=recovery_batch_id, recovery_allocation_index=recovery_allocation_index,
+    )
+    db.add(row)
+    if entry_source != "Automatic":
+        db.add(models.AuditEvent(
+            actor_member_id=member.id, action="time_integrity_snapshot_recorded",
+            entity_type="TimeIntegrityAuditEntry", entity_id=row.id,
+            changes={
+                "task_id": task.id, "entry_source": entry_source,
+                "manual_duration_seconds": round(manual_duration, 1),
+                "unreconciled_manual_seconds": round(unreconciled, 1),
+                "recorded_at": recorded_at.isoformat() + "Z",
+            },
+        ))
+    return row
 
 
 def _setting_value(db: Session, key: str) -> str:
@@ -6576,6 +6857,141 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
     return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": note_text}
 
 
+@app.get("/api/reports/time-integrity-audit", response_model=schemas.TimeIntegrityAuditResponse)
+def time_integrity_audit_report(
+    date_from: str = None, date_to: str = None, member_id: str = None, pod_id: str = None,
+    client_id: str = None, entry_source: str = None, only_unreconciled: bool = False,
+    edited: str = "all", entry_timing: str = "all",
+    current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db),
+):
+    _require_delegated_admin_permission(
+        current_member, PERMISSION_TIME_INTEGRITY_AUDIT,
+        "You do not have access to the Time Integrity Audit",
+    )
+    try:
+        start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else None
+        end_date = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else None
+    except ValueError:
+        raise HTTPException(400, "Dates must be YYYY-MM-DD")
+    if start_date and end_date and end_date < start_date:
+        raise HTTPException(400, "End date must be on or after start date")
+    allowed_sources = {"Automatic", "Recovery", "Raw Manual", "Manual Adjustment"}
+    if entry_source and entry_source not in allowed_sources:
+        raise HTTPException(400, "Unknown entry source")
+    if edited not in {"all", "yes", "no"}:
+        raise HTTPException(400, "edited must be all, yes or no")
+    if entry_timing not in {"all", "same_day", "later_day"}:
+        raise HTTPException(400, "entry_timing must be all, same_day or later_day")
+
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    if member_id and current_member.role != "super_admin" and member_id not in allowed_ids:
+        raise HTTPException(403, "That staff member is outside your permitted team scope")
+
+    query = db.query(models.TimeIntegrityAuditEntry)
+    if current_member.role != "super_admin":
+        query = query.filter(models.TimeIntegrityAuditEntry.member_id.in_(allowed_ids))
+    # Historical pod scope follows the pod captured when the time entry was recorded, matching
+    # the existing submitted-work controls instead of granting retroactive visibility after moves.
+    if current_member.role == "admin" and current_member.pod_id:
+        query = query.filter(models.TimeIntegrityAuditEntry.submitted_pod_id == current_member.pod_id)
+    if start_date:
+        query = query.filter(models.TimeIntegrityAuditEntry.work_date >= start_date)
+    if end_date:
+        query = query.filter(models.TimeIntegrityAuditEntry.work_date <= end_date)
+    if member_id:
+        query = query.filter(models.TimeIntegrityAuditEntry.member_id == member_id)
+    if pod_id:
+        if current_member.role == "admin" and current_member.pod_id and pod_id != current_member.pod_id:
+            raise HTTPException(403, "That pod is outside your permitted team scope")
+        query = query.filter(models.TimeIntegrityAuditEntry.submitted_pod_id == pod_id)
+    if client_id:
+        query = query.filter(models.TimeIntegrityAuditEntry.client_id == client_id)
+    if entry_source:
+        query = query.filter(models.TimeIntegrityAuditEntry.entry_source == entry_source)
+
+    raw_rows = query.order_by(
+        models.TimeIntegrityAuditEntry.work_date.desc(),
+        models.TimeIntegrityAuditEntry.recorded_at.desc(),
+        models.TimeIntegrityAuditEntry.revision.asc(),
+    ).all()
+    grouped = {}
+    for row in raw_rows:
+        grouped.setdefault(row.entry_group_id, []).append(row)
+
+    member_rows = db.query(models.Member).all() if current_member.role == "super_admin" else db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).all()
+    members_by_id = {member.id: member for member in member_rows}
+    result_rows = []
+    repeated_flags = {}
+    manual_delays = []
+    for versions in grouped.values():
+        versions = sorted(versions, key=lambda row: row.revision)
+        original = versions[0]
+        latest = versions[-1]
+        later_edited = len(versions) > 1
+        if edited == "yes" and not later_edited:
+            continue
+        if edited == "no" and later_edited:
+            continue
+        if only_unreconciled and float(original.unreconciled_manual_seconds or 0.0) <= 0:
+            continue
+        member = members_by_id.get(original.member_id)
+        if member:
+            local_recorded = _utc_naive_to_local(original.recorded_at, member)
+            staff_name = member.name
+        else:
+            # Deleted accounts remain visible to Super Admin through immutable name/pod snapshots.
+            local_recorded = original.recorded_at.replace(tzinfo=timezone.utc)
+            staff_name = original.member_name or "Former staff member"
+        later_day = bool(local_recorded and local_recorded.date() > original.work_date)
+        if entry_timing == "same_day" and later_day:
+            continue
+        if entry_timing == "later_day" and not later_day:
+            continue
+        unreconciled = max(float(original.unreconciled_manual_seconds or 0.0), 0.0)
+        if unreconciled > 0:
+            repeated_flags[original.member_id] = repeated_flags.get(original.member_id, 0) + 1
+        manual_duration = max(float(original.manual_duration_seconds or 0.0), 0.0)
+        if original.entry_source != "Automatic" and manual_duration > 0 and local_recorded:
+            manual_delays.append(max((local_recorded.date() - original.work_date).days, 0))
+        result_rows.append(schemas.TimeIntegrityAuditRow(
+            id=original.id, entry_group_id=original.entry_group_id, task_id=original.task_id,
+            member_id=original.member_id, staff_member=staff_name, pod_id=original.submitted_pod_id,
+            work_date=original.work_date, client_id=original.client_id, client=original.client_name or "",
+            task=original.task_name or "", entry_source=original.entry_source,
+            manual_duration_seconds=manual_duration, recorded_at=original.recorded_at,
+            net_active_presence_seconds=max(float(original.net_active_presence_seconds or 0.0), 0.0),
+            automatically_tracked_seconds=max(float(original.automatically_tracked_seconds or 0.0), 0.0),
+            recovered_allocated_seconds=max(float(original.recovered_allocated_seconds or 0.0), 0.0),
+            prior_manual_allocated_seconds=max(float(original.prior_manual_allocated_seconds or 0.0), 0.0),
+            available_unallocated_active_seconds=max(float(original.available_unallocated_active_seconds or 0.0), 0.0),
+            unreconciled_manual_seconds=unreconciled, later_edited=later_edited,
+            original_value_seconds=max(float(original.original_value_seconds or 0.0), 0.0),
+            current_value_seconds=max(float(latest.current_value_seconds or 0.0), 0.0),
+            last_edited_at=latest.recorded_at if later_edited else None,
+            reason_note=latest.reason_note or original.reason_note or "",
+            review_status="Review" if unreconciled > 0 else "Reconciled",
+            entry_timing="Later day" if later_day else "Same day",
+            recovery_batch_id=original.recovery_batch_id,
+            recovery_allocation_index=original.recovery_allocation_index,
+        ))
+
+    result_rows.sort(key=lambda row: (row.work_date, row.recorded_at), reverse=True)
+    repeated_ids = {member_id for member_id, count in repeated_flags.items() if count > 1}
+    name_by_id = {row.member_id: row.staff_member for row in result_rows}
+    repeated_names = sorted(name_by_id[mid] for mid in repeated_ids if mid in name_by_id)
+    manual_rows = [row for row in result_rows if row.entry_source != "Automatic"]
+    summary = schemas.TimeIntegrityAuditSummary(
+        total_manual_seconds=round(sum(row.manual_duration_seconds for row in manual_rows), 1),
+        total_unreconciled_manual_seconds=round(sum(row.unreconciled_manual_seconds for row in result_rows), 1),
+        flagged_entries=sum(1 for row in result_rows if row.unreconciled_manual_seconds > 0),
+        later_edited_entries=sum(1 for row in result_rows if row.later_edited),
+        average_delay_days=round(sum(manual_delays) / len(manual_delays), 2) if manual_delays else 0.0,
+        repeated_unreconciled_staff=len(repeated_ids),
+        repeated_unreconciled_staff_names=repeated_names,
+    )
+    return schemas.TimeIntegrityAuditResponse(rows=result_rows, summary=summary)
+
+
 @app.get("/api/audit/changes", response_model=list[schemas.AuditEventOut])
 def audit_changes(
     limit: int = 200,
@@ -6594,37 +7010,18 @@ def audit_changes(
 
 @app.post("/api/audit/presence-heartbeat", status_code=204)
 def audit_presence_heartbeat(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    # Silent presence signal used only to infer the final laptop/browser-off time in the
-    # Daily start activity report. It does not affect timers, inactivity detection or notifications.
+    # Silent presence signal used by the existing Audit report and the Time Integrity Audit.
+    # It remains independent of timers, lock/sleep detection and notifications.
     now_utc = datetime.utcnow()
-    local_now = _utc_naive_to_local(now_utc, current_member)
-    work_date = local_now.date()
-    row = db.query(models.DailyPresenceEvent).filter(
-        models.DailyPresenceEvent.member_id == current_member.id,
-        models.DailyPresenceEvent.work_date == work_date,
-    ).first()
-    if row is None:
-        row = models.DailyPresenceEvent(
-            member_id=current_member.id,
-            work_date=work_date,
-            first_seen_at=now_utc,
-            last_seen_at=now_utc,
-        )
-        db.add(row)
-        try:
-            db.commit()
-            return None
-        except IntegrityError:
-            # Multiple tabs can send the first heartbeat for the same local day at once.
-            db.rollback()
-            row = db.query(models.DailyPresenceEvent).filter(
-                models.DailyPresenceEvent.member_id == current_member.id,
-                models.DailyPresenceEvent.work_date == work_date,
-            ).first()
-            if row is None:
-                raise
-    row.last_seen_at = now_utc
-    db.commit()
+    try:
+        _record_presence_observation(db, current_member, now_utc)
+        db.commit()
+    except IntegrityError:
+        # Multiple tabs can race on the existing one-row-per-day DailyPresenceEvent. Retry
+        # after the winner commits; ActivePresenceInterval itself is intentionally appendable.
+        db.rollback()
+        _record_presence_observation(db, current_member, now_utc)
+        db.commit()
     return None
 
 

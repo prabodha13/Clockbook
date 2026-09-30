@@ -76,7 +76,8 @@ _AUDIT_EXCLUDED_FIELDS = {
     "segments", "logo_data_url", "value", "note", "context"
 }
 _AUDIT_EXCLUDED_TYPES = {
-    "AuditEvent", "Session", "RateLimitBucket", "GoogleOAuthState", "LoginEvent", "ClockStartEvent"
+    "AuditEvent", "Session", "RateLimitBucket", "GoogleOAuthState", "LoginEvent", "ClockStartEvent",
+    "ActivePresenceInterval", "TimeIntegrityAuditEntry"
 }
 
 def _audit_safe(value):
@@ -100,7 +101,7 @@ def _immutable_audit_before_flush(session, flush_context, instances):
     actor_id = session.info.get("actor_member_id")
     if not tenant_id or not actor_id or session.info.get("suppress_audit"):
         return
-    from models import AuditEvent, TenantScopedMixin, TenantSetting
+    from models import AuditEvent, TenantScopedMixin, TenantSetting, TimeIntegrityAuditEntry
 
     # Audit records are append-only even inside application code. There is intentionally no
     # normal escape hatch for requests; maintenance scripts must opt in explicitly.
@@ -108,6 +109,8 @@ def _immutable_audit_before_flush(session, flush_context, instances):
         for audit_row in list(session.dirty) + list(session.deleted):
             if isinstance(audit_row, AuditEvent):
                 raise ValueError("Audit events are append-only")
+            if isinstance(audit_row, TimeIntegrityAuditEntry):
+                raise ValueError("Time integrity audit snapshots are append-only")
 
     pending = []
     for obj, action in [(o, "create") for o in list(session.new)] + [(o, "update") for o in list(session.dirty)] + [(o, "delete") for o in list(session.deleted)]:
