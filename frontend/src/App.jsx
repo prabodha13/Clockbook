@@ -8104,6 +8104,10 @@ function AlertsBanner({ onEnable, onDismiss }) {
   );
 }
 
+function localDateKeyFromDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function HelpReportView() {
   const [details, setDetails] = useState(null);
   const [detailsError, setDetailsError] = useState(false);
@@ -8137,9 +8141,6 @@ function HelpReportView() {
     }
   }
 
-  function localDateKeyFromDate(d) {
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }
 
   function startOfLocalWeek(d) {
     const out = new Date(d.getFullYear(), d.getMonth(), d.getDate());
