@@ -639,6 +639,20 @@ def run_startup_migrations():
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN submitted_pod_id VARCHAR"))
             if "last_heartbeat_at" not in existing_task_columns:
                 conn.execute(text("ALTER TABLE tasks ADD COLUMN last_heartbeat_at TIMESTAMP"))
+
+    if "time_integrity_audit_entries" in inspector.get_table_names():
+        existing_integrity_columns = {c["name"] for c in inspect(engine).get_columns("time_integrity_audit_entries")}
+        with engine.begin() as conn:
+            if "recorded_timezone_name" not in existing_integrity_columns:
+                conn.execute(text("ALTER TABLE time_integrity_audit_entries ADD COLUMN recorded_timezone_name VARCHAR"))
+                # Existing snapshots pre-date immutable timezone capture. Seed them from the
+                # member profile available at deployment; all future rows capture it at RecordedAt.
+                conn.execute(text(
+                    "UPDATE time_integrity_audit_entries SET recorded_timezone_name = COALESCE("
+                    "(SELECT NULLIF(m.timezone_name, '') FROM members m WHERE m.id = time_integrity_audit_entries.member_id), 'UTC') "
+                    "WHERE recorded_timezone_name IS NULL OR recorded_timezone_name = ''"
+                ))
+
     # Normalize the old payroll-only requirement into the generic Work period model.
     # Existing generic period configurations were already mandatory at completion, so preserve
     # that behavior. The legacy columns remain in place so historical rows/exports still work.
@@ -6244,6 +6258,7 @@ def _append_time_integrity_snapshot(
         member_id=member.id, member_name=member.name or "", submitted_pod_id=member.pod_id, work_date=work_date,
         client_id=task.client_id, client_name=task.client_name or "", task_name=task.name or "",
         entry_source=entry_source, recorded_at=recorded_at,
+        recorded_timezone_name=(member.timezone_name or "UTC").strip() or "UTC",
         net_active_presence_seconds=round(net_active, 3),
         automatically_tracked_seconds=round(automatic, 3),
         recovered_allocated_seconds=round(recovered, 3),
@@ -6266,6 +6281,7 @@ def _append_time_integrity_snapshot(
                 "manual_duration_seconds": round(manual_duration, 1),
                 "unreconciled_manual_seconds": round(unreconciled, 1),
                 "recorded_at": recorded_at.isoformat() + "Z",
+                "recorded_timezone_name": (member.timezone_name or "UTC").strip() or "UTC",
             },
         ))
     return row
@@ -6861,13 +6877,26 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
 def time_integrity_audit_report(
     date_from: str = None, date_to: str = None, member_id: str = None, pod_id: str = None,
     client_id: str = None, entry_source: str = None, only_unreconciled: bool = False,
-    edited: str = "all", entry_timing: str = "all",
+    edited: str = "all", entry_timing: str = "all", recorded_location: str = None,
     current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db),
 ):
     _require_delegated_admin_permission(
         current_member, PERMISSION_TIME_INTEGRITY_AUDIT,
         "You do not have access to the Time Integrity Audit",
     )
+
+    def _csv_values(raw: str | None):
+        if not raw:
+            return []
+        values = []
+        seen = set()
+        for value in str(raw).split(","):
+            value = value.strip()
+            if value and value not in seen:
+                seen.add(value)
+                values.append(value)
+        return values
+
     try:
         start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else None
         end_date = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else None
@@ -6875,17 +6904,28 @@ def time_integrity_audit_report(
         raise HTTPException(400, "Dates must be YYYY-MM-DD")
     if start_date and end_date and end_date < start_date:
         raise HTTPException(400, "End date must be on or after start date")
+
+    member_ids = _csv_values(member_id)
+    pod_ids = _csv_values(pod_id)
+    client_ids = _csv_values(client_id)
+    source_values = _csv_values(entry_source)
+    edited_values = _csv_values(edited) if edited and edited != "all" else []
+    timing_values = _csv_values(entry_timing) if entry_timing and entry_timing != "all" else []
+    location_values = _csv_values(recorded_location)
+
     allowed_sources = {"Automatic", "Recovery", "Raw Manual", "Manual Adjustment"}
-    if entry_source and entry_source not in allowed_sources:
+    if any(value not in allowed_sources for value in source_values):
         raise HTTPException(400, "Unknown entry source")
-    if edited not in {"all", "yes", "no"}:
-        raise HTTPException(400, "edited must be all, yes or no")
-    if entry_timing not in {"all", "same_day", "later_day"}:
-        raise HTTPException(400, "entry_timing must be all, same_day or later_day")
+    if any(value not in {"yes", "no"} for value in edited_values):
+        raise HTTPException(400, "edited must contain only yes or no")
+    if any(value not in {"same_day", "later_day"} for value in timing_values):
+        raise HTTPException(400, "entry_timing must contain only same_day or later_day")
 
     allowed_ids = _insights_allowed_member_ids(current_member, db)
-    if member_id and current_member.role != "super_admin" and member_id not in allowed_ids:
-        raise HTTPException(403, "That staff member is outside your permitted team scope")
+    if current_member.role != "super_admin":
+        disallowed_members = [value for value in member_ids if value not in allowed_ids]
+        if disallowed_members:
+            raise HTTPException(403, "A selected staff member is outside your permitted team scope")
 
     query = db.query(models.TimeIntegrityAuditEntry)
     if current_member.role != "super_admin":
@@ -6898,16 +6938,16 @@ def time_integrity_audit_report(
         query = query.filter(models.TimeIntegrityAuditEntry.work_date >= start_date)
     if end_date:
         query = query.filter(models.TimeIntegrityAuditEntry.work_date <= end_date)
-    if member_id:
-        query = query.filter(models.TimeIntegrityAuditEntry.member_id == member_id)
-    if pod_id:
-        if current_member.role == "admin" and current_member.pod_id and pod_id != current_member.pod_id:
-            raise HTTPException(403, "That pod is outside your permitted team scope")
-        query = query.filter(models.TimeIntegrityAuditEntry.submitted_pod_id == pod_id)
-    if client_id:
-        query = query.filter(models.TimeIntegrityAuditEntry.client_id == client_id)
-    if entry_source:
-        query = query.filter(models.TimeIntegrityAuditEntry.entry_source == entry_source)
+    if member_ids:
+        query = query.filter(models.TimeIntegrityAuditEntry.member_id.in_(member_ids))
+    if pod_ids:
+        if current_member.role == "admin" and current_member.pod_id and any(value != current_member.pod_id for value in pod_ids):
+            raise HTTPException(403, "A selected pod is outside your permitted team scope")
+        query = query.filter(models.TimeIntegrityAuditEntry.submitted_pod_id.in_(pod_ids))
+    if client_ids:
+        query = query.filter(models.TimeIntegrityAuditEntry.client_id.in_(client_ids))
+    if source_values:
+        query = query.filter(models.TimeIntegrityAuditEntry.entry_source.in_(source_values))
 
     raw_rows = query.order_by(
         models.TimeIntegrityAuditEntry.work_date.desc(),
@@ -6928,30 +6968,35 @@ def time_integrity_audit_report(
         original = versions[0]
         latest = versions[-1]
         later_edited = len(versions) > 1
-        if edited == "yes" and not later_edited:
-            continue
-        if edited == "no" and later_edited:
-            continue
+        if edited_values:
+            edited_key = "yes" if later_edited else "no"
+            if edited_key not in edited_values:
+                continue
         if only_unreconciled and float(original.unreconciled_manual_seconds or 0.0) <= 0:
             continue
+
         member = members_by_id.get(original.member_id)
-        if member:
-            local_recorded = _utc_naive_to_local(original.recorded_at, member)
-            staff_name = member.name
-        else:
-            # Deleted accounts remain visible to Super Admin through immutable name/pod snapshots.
-            local_recorded = original.recorded_at.replace(tzinfo=timezone.utc)
-            staff_name = original.member_name or "Former staff member"
-        later_day = bool(local_recorded and local_recorded.date() > original.work_date)
-        if entry_timing == "same_day" and later_day:
+        recorded_timezone_name = (getattr(original, "recorded_timezone_name", None) or (member.timezone_name if member else None) or "UTC").strip() or "UTC"
+        try:
+            recorded_zone = ZoneInfo(recorded_timezone_name)
+        except ZoneInfoNotFoundError:
+            recorded_timezone_name = "UTC"
+            recorded_zone = timezone.utc
+        local_recorded = original.recorded_at.replace(tzinfo=timezone.utc).astimezone(recorded_zone)
+        staff_name = member.name if member else (original.member_name or "Former staff member")
+
+        if location_values and recorded_timezone_name not in location_values:
             continue
-        if entry_timing == "later_day" and not later_day:
+        later_day = bool(local_recorded.date() > original.work_date)
+        timing_key = "later_day" if later_day else "same_day"
+        if timing_values and timing_key not in timing_values:
             continue
+
         unreconciled = max(float(original.unreconciled_manual_seconds or 0.0), 0.0)
         if unreconciled > 0:
             repeated_flags[original.member_id] = repeated_flags.get(original.member_id, 0) + 1
         manual_duration = max(float(original.manual_duration_seconds or 0.0), 0.0)
-        if original.entry_source != "Automatic" and manual_duration > 0 and local_recorded:
+        if original.entry_source != "Automatic" and manual_duration > 0:
             manual_delays.append(max((local_recorded.date() - original.work_date).days, 0))
         result_rows.append(schemas.TimeIntegrityAuditRow(
             id=original.id, entry_group_id=original.entry_group_id, task_id=original.task_id,
@@ -6959,6 +7004,7 @@ def time_integrity_audit_report(
             work_date=original.work_date, client_id=original.client_id, client=original.client_name or "",
             task=original.task_name or "", entry_source=original.entry_source,
             manual_duration_seconds=manual_duration, recorded_at=original.recorded_at,
+            recorded_timezone_name=recorded_timezone_name,
             net_active_presence_seconds=max(float(original.net_active_presence_seconds or 0.0), 0.0),
             automatically_tracked_seconds=max(float(original.automatically_tracked_seconds or 0.0), 0.0),
             recovered_allocated_seconds=max(float(original.recovered_allocated_seconds or 0.0), 0.0),

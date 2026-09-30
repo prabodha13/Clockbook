@@ -222,6 +222,9 @@ class TimeIntegrityAuditEntry(TenantScopedMixin, Base):
     task_name = Column(String, nullable=False, default="")
     entry_source = Column(String, nullable=False)
     recorded_at = Column(DateTime, nullable=False)
+    # Immutable snapshot of the staff-selected timezone/location at RecordedAt.
+    # This prevents historical audit timestamps from shifting if the member changes location later.
+    recorded_timezone_name = Column(String, nullable=True)
     net_active_presence_seconds = Column(Float, nullable=False, default=0.0)
     automatically_tracked_seconds = Column(Float, nullable=False, default=0.0)
     recovered_allocated_seconds = Column(Float, nullable=False, default=0.0)

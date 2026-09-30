@@ -638,6 +638,7 @@ class TimeIntegrityAuditRow(BaseModel):
     entry_source: Literal["Automatic", "Recovery", "Raw Manual", "Manual Adjustment"]
     manual_duration_seconds: float = 0.0
     recorded_at: datetime
+    recorded_timezone_name: str = "UTC"
     net_active_presence_seconds: float = 0.0
     automatically_tracked_seconds: float = 0.0
     recovered_allocated_seconds: float = 0.0
