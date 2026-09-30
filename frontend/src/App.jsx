@@ -9007,40 +9007,201 @@ function InactivityAuditView({ members }) {
   );
 }
 
+function AuditMultiSelect({ label, options = [], values = [], onChange, allLabel = "All", minWidth = 170, searchable = false }) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    function onOutside(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", onOutside);
+    return () => document.removeEventListener("mousedown", onOutside);
+  }, []);
+
+  const selected = new Set(values);
+  const selectedLabels = options.filter((o) => selected.has(o.id)).map((o) => o.label);
+  const buttonLabel = selectedLabels.length === 0
+    ? allLabel
+    : selectedLabels.length === 1
+      ? selectedLabels[0]
+      : `${selectedLabels.length} selected`;
+  const filtered = query.trim()
+    ? options.filter((o) => o.label.toLowerCase().includes(query.trim().toLowerCase()))
+    : options;
+
+  function toggle(id) {
+    if (selected.has(id)) onChange(values.filter((value) => value !== id));
+    else onChange([...values, id]);
+  }
+
+  return <div ref={wrapRef} style={{ position: "relative", minWidth }}>
+    <div className="cb-label">{label}</div>
+    <button
+      type="button"
+      className="cb-input"
+      onClick={() => setOpen((value) => !value)}
+      aria-expanded={open}
+      style={{ width: "100%", height: 36, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, textAlign: "left", cursor: "pointer" }}
+    >
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{buttonLabel}</span>
+      <ChevronDown size={14} style={{ flex: "0 0 auto", transform: open ? "rotate(180deg)" : "none" }} />
+    </button>
+    {open && <div style={{ position: "absolute", left: 0, top: "calc(100% + 4px)", zIndex: 40, width: "max(100%, 230px)", maxWidth: 340, background: "var(--paper)", border: "1px solid var(--line)", borderRadius: 9, boxShadow: "0 12px 26px rgba(18,28,45,.14)", padding: 7 }}>
+      {searchable && options.length > 6 && <input
+        className="cb-input"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={`Search ${label.toLowerCase()}...`}
+        autoFocus
+        style={{ width: "100%", marginBottom: 6 }}
+      />}
+      <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => onChange([])} style={{ width: "100%", justifyContent: "flex-start", marginBottom: 4 }}>
+        {allLabel}
+      </button>
+      <div style={{ maxHeight: 230, overflowY: "auto", overflowX: "hidden" }}>
+        {filtered.map((option) => <label key={option.id} style={{ display: "flex", alignItems: "center", gap: 8, minHeight: 34, padding: "6px 7px", borderRadius: 6, cursor: "pointer", fontSize: 12.5 }}>
+          <input type="checkbox" checked={selected.has(option.id)} onChange={() => toggle(option.id)} />
+          <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{option.label}</span>
+        </label>)}
+        {filtered.length === 0 && <div className="cb-hint" style={{ padding: "8px 7px" }}>No matches</div>}
+      </div>
+    </div>}
+  </div>;
+}
+
 function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const today = localDateKeyFromDate(new Date());
   const monthStart = (() => { const d = new Date(); d.setDate(1); return localDateKeyFromDate(d); })();
   const [dateFrom, setDateFrom] = useState(monthStart);
   const [dateTo, setDateTo] = useState(today);
-  const [memberId, setMemberId] = useState("");
-  const [podId, setPodId] = useState("");
-  const [clientId, setClientId] = useState("");
-  const [entrySource, setEntrySource] = useState("");
+  const [memberIds, setMemberIds] = useState([]);
+  const [podIds, setPodIds] = useState([]);
+  const [clientIds, setClientIds] = useState([]);
+  const [entrySources, setEntrySources] = useState([]);
+  const [recordedLocations, setRecordedLocations] = useState([]);
   const [onlyUnreconciled, setOnlyUnreconciled] = useState(false);
-  const [edited, setEdited] = useState("all");
-  const [entryTiming, setEntryTiming] = useState("all");
+  const [editedValues, setEditedValues] = useState([]);
+  const [entryTimings, setEntryTimings] = useState([]);
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const requestSeq = useRef(0);
 
-  async function load() {
-    setBusy(true); setError("");
+  const visiblePodIds = new Set((members || []).map((m) => m.pod_id).filter(Boolean));
+  const visiblePods = (pods || []).filter((p) => visiblePodIds.has(p.id));
+  const sourceOptions = ["Automatic", "Recovery", "Raw Manual", "Manual Adjustment"].map((value) => ({ id: value, label: value }));
+  const staffOptions = [...members].sort((a,b) => a.name.localeCompare(b.name)).map((m) => ({ id: m.id, label: m.name }));
+  const podOptions = [...visiblePods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => ({ id: p.id, label: p.name }));
+  const clientOptions = [...clients].sort((a,b) => a.name.localeCompare(b.name)).map((c) => ({ id: c.id, label: c.name }));
+  const locationOptions = [...new Set([
+    ...(members || []).map((m) => (m.timezone_name || "UTC").trim() || "UTC"),
+    ...((data?.rows || []).map((r) => (r.recorded_timezone_name || "UTC").trim() || "UTC")),
+    ...recordedLocations,
+  ])]
+    .sort((a,b) => a.localeCompare(b))
+    .map((value) => ({ id: value, label: value.replace(/_/g, " ") }));
+  const editedOptions = [{ id: "yes", label: "Edited entries" }, { id: "no", label: "Not edited" }];
+  const timingOptions = [{ id: "same_day", label: "Same day" }, { id: "later_day", label: "Later day" }];
+
+  const load = useCallback(async () => {
+    if (!dateFrom || !dateTo) return;
+    if (dateFrom > dateTo) {
+      setError("End date must be on or after start date");
+      return;
+    }
+    const seq = ++requestSeq.current;
+    setBusy(true);
+    setError("");
     try {
-      const result = await api.getTimeIntegrityAudit({ dateFrom, dateTo, memberId, podId, clientId, entrySource, onlyUnreconciled, edited, entryTiming });
-      setData(result);
+      const result = await api.getTimeIntegrityAudit({
+        dateFrom, dateTo, memberIds, podIds, clientIds, entrySources, recordedLocations,
+        onlyUnreconciled, editedValues, entryTimings,
+      });
+      if (seq === requestSeq.current) setData(result);
     } catch (err) {
-      setError(err.message || "Could not load Time Integrity Audit");
-    } finally { setBusy(false); }
+      if (seq === requestSeq.current) setError(err.message || "Could not load Time Integrity Audit");
+    } finally {
+      if (seq === requestSeq.current) setBusy(false);
+    }
+  }, [
+    dateFrom, dateTo, memberIds.join("|"), podIds.join("|"), clientIds.join("|"),
+    entrySources.join("|"), recordedLocations.join("|"), onlyUnreconciled,
+    editedValues.join("|"), entryTimings.join("|"),
+  ]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { load(); }, 140);
+    return () => window.clearTimeout(timer);
+  }, [load]);
+
+  function applyRangePreset(kind) {
+    const now = new Date();
+    const startOfWeek = (date) => {
+      const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const day = d.getDay();
+      d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+      return d;
+    };
+    if (kind === "today") {
+      const key = localDateKeyFromDate(now); setDateFrom(key); setDateTo(key); return;
+    }
+    if (kind === "yesterday") {
+      const d = new Date(now); d.setDate(d.getDate() - 1);
+      const key = localDateKeyFromDate(d); setDateFrom(key); setDateTo(key); return;
+    }
+    if (kind === "this_week") {
+      setDateFrom(localDateKeyFromDate(startOfWeek(now))); setDateTo(localDateKeyFromDate(now)); return;
+    }
+    if (kind === "last_week") {
+      const currentStart = startOfWeek(now);
+      const start = new Date(currentStart); start.setDate(start.getDate() - 7);
+      const end = new Date(currentStart); end.setDate(end.getDate() - 1);
+      setDateFrom(localDateKeyFromDate(start)); setDateTo(localDateKeyFromDate(end));
+    }
   }
-  useEffect(() => { load(); }, []);
+
+  function activePreset(kind) {
+    const now = new Date();
+    const startOfWeek = (date) => {
+      const d = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+      const day = d.getDay(); d.setDate(d.getDate() - (day === 0 ? 6 : day - 1)); return d;
+    };
+    let from = "", to = "";
+    if (kind === "today") from = to = localDateKeyFromDate(now);
+    if (kind === "yesterday") { const d = new Date(now); d.setDate(d.getDate() - 1); from = to = localDateKeyFromDate(d); }
+    if (kind === "this_week") { from = localDateKeyFromDate(startOfWeek(now)); to = localDateKeyFromDate(now); }
+    if (kind === "last_week") {
+      const currentStart = startOfWeek(now); const start = new Date(currentStart); start.setDate(start.getDate() - 7); const end = new Date(currentStart); end.setDate(end.getDate() - 1);
+      from = localDateKeyFromDate(start); to = localDateKeyFromDate(end);
+    }
+    return dateFrom === from && dateTo === to;
+  }
 
   const rows = data?.rows || [];
   const summary = data?.summary || {};
-  const visiblePodIds = new Set((members || []).map((m) => m.pod_id).filter(Boolean));
-  const visiblePods = (pods || []).filter((p) => visiblePodIds.has(p.id));
-  const sourceOptions = ["Automatic", "Recovery", "Raw Manual", "Manual Adjustment"];
   const fmt = (seconds) => formatHM(Math.max(0, Number(seconds || 0)));
   const yesNo = (value) => value ? "Yes" : "No";
+  const formatInZone = (value, zone, withDate = true) => {
+    if (!value) return "—";
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return "—";
+    try {
+      return new Intl.DateTimeFormat(undefined, withDate
+        ? { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: zone || "UTC" }
+        : { hour: "numeric", minute: "2-digit", timeZone: zone || "UTC" }
+      ).format(d);
+    } catch (_) {
+      return new Intl.DateTimeFormat(undefined, withDate
+        ? { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: "UTC" }
+        : { hour: "numeric", minute: "2-digit", timeZone: "UTC" }
+      ).format(d);
+    }
+  };
 
   return <div>
     <div className="cb-page-head">
@@ -9050,17 +9211,32 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
     </div>
 
+    <div style={{ marginBottom: 14 }}>
+      <div className="cb-label" style={{ marginBottom: 6 }}>Quick range</div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {[['today','Today'],['yesterday','Yesterday'],['this_week','This week'],['last_week','Last week']].map(([id, label]) => <button
+          key={id} type="button"
+          className={`cb-btn cb-btn-sm ${activePreset(id) ? "cb-btn-primary" : "cb-btn-ghost"}`}
+          onClick={() => applyRangePreset(id)}
+        >{label}</button>)}
+      </div>
+    </div>
+
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 10 }}>
+      <div style={{ width: 145 }}><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: "100%", height: 36 }} /></div>
+      <div style={{ width: 145 }}><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: "100%", height: 36 }} /></div>
+      <AuditMultiSelect label="Staff" options={staffOptions} values={memberIds} onChange={setMemberIds} allLabel="All staff" minWidth={185} searchable />
+      <AuditMultiSelect label="Pod" options={podOptions} values={podIds} onChange={setPodIds} allLabel="All permitted pods" minWidth={165} />
+      <AuditMultiSelect label="Client" options={clientOptions} values={clientIds} onChange={setClientIds} allLabel="All clients" minWidth={210} searchable />
+      <AuditMultiSelect label="Entry source" options={sourceOptions} values={entrySources} onChange={setEntrySources} allLabel="All sources" minWidth={175} />
+    </div>
     <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
-      <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 145 }} /></div>
-      <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
-      <div style={{ minWidth: 190 }}><div className="cb-label">Staff</div><select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)}><option value="">All staff</option>{[...members].sort((a,b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
-      <div style={{ minWidth: 160 }}><div className="cb-label">Pod</div><select className="cb-select" value={podId} onChange={(e) => setPodId(e.target.value)}><option value="">All permitted pods</option>{[...visiblePods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-      <div style={{ minWidth: 190 }}><div className="cb-label">Client</div><select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}><option value="">All clients</option>{[...clients].sort((a,b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
-      <div style={{ minWidth: 170 }}><div className="cb-label">Entry source</div><select className="cb-select" value={entrySource} onChange={(e) => setEntrySource(e.target.value)}><option value="">All sources</option>{sourceOptions.map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
-      <div style={{ minWidth: 150 }}><div className="cb-label">Edited</div><select className="cb-select" value={edited} onChange={(e) => setEdited(e.target.value)}><option value="all">All</option><option value="yes">Edited entries</option><option value="no">Not edited</option></select></div>
-      <div style={{ minWidth: 175 }}><div className="cb-label">Recorded timing</div><select className="cb-select" value={entryTiming} onChange={(e) => setEntryTiming(e.target.value)}><option value="all">Same day + later day</option><option value="same_day">Same day</option><option value="later_day">Later day</option></select></div>
-      <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5 }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
+      <AuditMultiSelect label="Selected location" options={locationOptions} values={recordedLocations} onChange={setRecordedLocations} allLabel="All locations" minWidth={190} searchable />
+      <AuditMultiSelect label="Edited" options={editedOptions} values={editedValues} onChange={setEditedValues} allLabel="All" minWidth={155} />
+      <AuditMultiSelect label="Recorded timing" options={timingOptions} values={entryTimings} onChange={setEntryTimings} allLabel="Same day + later day" minWidth={190} />
+      <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5, paddingBottom: 1 }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
       <button className="cb-btn cb-btn-sm" onClick={load} disabled={busy} style={{ height: 36 }}><RotateCcw size={13} />{busy ? "Refreshing…" : "Refresh"}</button>
+      <div className="cb-hint" style={{ height: 36, display: "flex", alignItems: "center" }}>{busy ? "Updating…" : "Filters update automatically"}</div>
     </div>
 
     {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
@@ -9077,19 +9253,38 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <div className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
-        <table className="cb-table" style={{ width: 2615, minWidth: 2615, tableLayout: "fixed" }}>
-          <colgroup>{[150,110,170,190,120,110,130,140,140,150,150,150,150,90,110,110,130,180,135].map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+        <table className="cb-table" style={{ width: 2765, minWidth: 2765, tableLayout: "fixed" }}>
+          <colgroup>{[150,110,170,190,120,110,145,155,140,140,150,150,150,150,90,110,110,140,180,135].map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
           <thead><tr>
             {[
               ["Staff member", false], ["Work date", false], ["Client", false], ["Task", false], ["Entry source", false],
-              ["Manual duration", true], ["RecordedAt", false], ["Net active presence", true], ["Automatically tracked", true],
+              ["Manual duration", true], ["RecordedAt", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
               ["Recovery already allocated", true], ["Prior manual allocated", true], ["Available unallocated active", true],
               ["Unreconciled manual time", true], ["Later edited?", false], ["Original value", true], ["Current value", true],
               ["Last edited", false], ["Reason / note", false], ["Review status", false],
             ].map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom", position: "sticky", top: 0, zIndex: 2 }}>{label}</th>)}
           </tr></thead>
           <tbody>{rows.map((r) => <tr key={r.id} style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
-            <td>{r.staff_member}</td><td>{r.work_date}<div className="cb-hint">{r.entry_timing}</div></td><td>{r.client || "—"}</td><td>{r.task || "—"}</td><td>{r.entry_source}</td><td className="num cb-mono">{fmt(r.manual_duration_seconds)}</td><td>{formatDate(r.recorded_at)}<div className="cb-hint">{new Date(r.recorded_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"})}</div></td><td className="num cb-mono">{fmt(r.net_active_presence_seconds)}</td><td className="num cb-mono">{fmt(r.automatically_tracked_seconds)}</td><td className="num cb-mono">{fmt(r.recovered_allocated_seconds)}</td><td className="num cb-mono">{fmt(r.prior_manual_allocated_seconds)}</td><td className="num cb-mono">{fmt(r.available_unallocated_active_seconds)}</td><td className="num cb-mono" style={{ fontWeight: Number(r.unreconciled_manual_seconds || 0) > 0 ? 800 : 500 }}>{fmt(r.unreconciled_manual_seconds)}</td><td>{yesNo(r.later_edited)}</td><td className="num cb-mono">{fmt(r.original_value_seconds)}</td><td className="num cb-mono">{fmt(r.current_value_seconds)}</td><td>{r.last_edited_at ? formatDate(r.last_edited_at) : "—"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.reason_note || "—"}</td><td>{r.review_status}</td>
+            <td>{r.staff_member}</td>
+            <td>{r.work_date}<div className="cb-hint">{r.entry_timing}</div></td>
+            <td>{r.client || "—"}</td>
+            <td>{r.task || "—"}</td>
+            <td>{r.entry_source}</td>
+            <td className="num cb-mono">{fmt(r.manual_duration_seconds)}</td>
+            <td>{formatInZone(r.recorded_at, r.recorded_timezone_name, true)}</td>
+            <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{(r.recorded_timezone_name || "UTC").replace(/_/g, " ")}</td>
+            <td className="num cb-mono">{fmt(r.net_active_presence_seconds)}</td>
+            <td className="num cb-mono">{fmt(r.automatically_tracked_seconds)}</td>
+            <td className="num cb-mono">{fmt(r.recovered_allocated_seconds)}</td>
+            <td className="num cb-mono">{fmt(r.prior_manual_allocated_seconds)}</td>
+            <td className="num cb-mono">{fmt(r.available_unallocated_active_seconds)}</td>
+            <td className="num cb-mono" style={{ fontWeight: Number(r.unreconciled_manual_seconds || 0) > 0 ? 800 : 500 }}>{fmt(r.unreconciled_manual_seconds)}</td>
+            <td>{yesNo(r.later_edited)}</td>
+            <td className="num cb-mono">{fmt(r.original_value_seconds)}</td>
+            <td className="num cb-mono">{fmt(r.current_value_seconds)}</td>
+            <td>{r.last_edited_at ? formatInZone(r.last_edited_at, r.recorded_timezone_name, true) : "—"}</td>
+            <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.reason_note || "—"}</td>
+            <td>{r.review_status}</td>
           </tr>)}</tbody>
         </table>
       </div>}
