@@ -258,3 +258,70 @@ def test_time_integrity_tenant_isolation_and_append_only_edit_history():
         assert all(r.member_id == staff.id for r in report_after.rows)
     finally:
         s.close()
+
+
+def test_time_integrity_snapshots_selected_timezone_and_supports_multi_filters():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_time_integrity_timezone")
+        super_admin = _member(s, tenant.id, "timezone-super@example.com", "super_admin", timezone_name="Asia/Colombo")
+        staff_a = _member(s, tenant.id, "timezone-a@example.com", timezone_name="Asia/Colombo")
+        staff_b = _member(s, tenant.id, "timezone-b@example.com", timezone_name="Europe/Dublin")
+        s.info["actor_member_id"] = super_admin.id
+        client = _client(s, "Timezone Client")
+        day = datetime(2026, 9, 30)
+
+        for staff, hour, source in [(staff_a, 9, "Raw Manual"), (staff_b, 10, "Recovery")]:
+            s.add(models.ActivePresenceInterval(
+                member_id=staff.id,
+                work_date=day.date(),
+                started_at=day.replace(hour=8),
+                ended_at=day.replace(hour=12),
+            ))
+            task = models.TaskInstance(
+                client_id=client.id,
+                client_name=client.name,
+                name=f"Task {staff.name}",
+                owner_id=staff.id,
+                status="todo",
+                segments=[],
+                created_at=day.replace(hour=8),
+            )
+            s.add(task)
+            s.flush()
+            main._append_time_integrity_snapshot(
+                s,
+                member=staff,
+                task=task,
+                entry_source=source,
+                manual_duration_seconds=600,
+                current_value_seconds=600,
+                recorded_at=day.replace(hour=hour),
+                work_date=day.date(),
+            )
+        s.commit()
+
+        first = s.query(models.TimeIntegrityAuditEntry).filter(models.TimeIntegrityAuditEntry.member_id == staff_a.id).first()
+        assert first.recorded_timezone_name == "Asia/Colombo"
+
+        # Changing the member profile later must not rewrite the location/timezone captured at RecordedAt.
+        staff_a.timezone_name = "America/Toronto"
+        s.commit()
+        s.refresh(first)
+        assert first.recorded_timezone_name == "Asia/Colombo"
+
+        report = main.time_integrity_audit_report(
+            member_id=f"{staff_a.id},{staff_b.id}",
+            entry_source="Raw Manual,Recovery",
+            recorded_location="Asia/Colombo,Europe/Dublin",
+            edited="yes,no",
+            entry_timing="same_day,later_day",
+            current_member=super_admin,
+            db=s,
+        )
+        assert {row.member_id for row in report.rows} == {staff_a.id, staff_b.id}
+        by_member = {row.member_id: row for row in report.rows}
+        assert by_member[staff_a.id].recorded_timezone_name == "Asia/Colombo"
+        assert by_member[staff_b.id].recorded_timezone_name == "Europe/Dublin"
+    finally:
+        s.close()
