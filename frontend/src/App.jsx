@@ -7701,6 +7701,14 @@ function roleLabel(role) {
   return "Member";
 }
 
+function staffRoleLabel(role, viewerRole) {
+  // The Super Admin tier is intentionally a management-only distinction.
+  // Normal Admins, and Super Admins previewing ClockBook in Admin mode,
+  // see Super Admin members labelled simply as Admin on the Staff page.
+  if (role === "super_admin" && viewerRole !== "super_admin") return "Admin";
+  return roleLabel(role);
+}
+
 function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, onChangeChannel }) {
   const [slackEmail, setSlackEmail] = useState(member.slack_email || member.email || "");
   const [busy, setBusy] = useState(false);
@@ -7943,7 +7951,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
               <div key={invitation.id} className="cb-row" style={{ paddingLeft: 0, paddingRight: 0 }}>
                 <div className="cb-row-main">
                   <div className="cb-row-task">{invitation.name}</div>
-                  <div className="cb-row-meta">{invitation.email} · {roleLabel(invitation.role)} · expires {formatDate(invitation.expires_at)}</div>
+                  <div className="cb-row-meta">{invitation.email} · {staffRoleLabel(invitation.role, currentUser?.role)} · expires {formatDate(invitation.expires_at)}</div>
                 </div>
                 <div style={{ display: "flex", gap: 6 }}>
                   <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => regenerateInvitation(invitation)}>Resend email</button>
@@ -7963,8 +7971,8 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                 <div className="cb-row-task">{m.name}{m.id === currentUser.id ? " (you)" : ""}</div>
                 <div className="cb-row-meta">
                   {m.id === currentUser.id
-                    ? (currentUser.role === "member" ? "Staff" : roleLabel(currentUser.role))
-                    : roleLabel(m.role)}
+                    ? (currentUser.role === "member" ? "Staff" : staffRoleLabel(currentUser.role, currentUser.role))
+                    : staffRoleLabel(m.role, currentUser.role)}
                   {!m.email && " \u00b7 No login set up yet"}
                   {m.google_calendar_connected && " \u00b7 Calendar connected"}
                   {m.pod_id && ` \u00b7 ${(pods.find((p) => p.id === m.pod_id) || {}).name || "Unknown pod"}`}
