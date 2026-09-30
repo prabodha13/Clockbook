@@ -9076,8 +9076,7 @@ function AuditMultiSelect({ label, options = [], values = [], onChange, allLabel
 
 function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const today = localDateKeyFromDate(new Date());
-  const monthStart = (() => { const d = new Date(); d.setDate(1); return localDateKeyFromDate(d); })();
-  const [dateFrom, setDateFrom] = useState(monthStart);
+  const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
   const [memberIds, setMemberIds] = useState([]);
   const [podIds, setPodIds] = useState([]);
@@ -9268,7 +9267,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
 
       <div style={{
         display: "grid",
-        gridTemplateColumns: "minmax(175px, .9fr) minmax(185px, 1fr) minmax(145px, .75fr) minmax(190px, 1fr) auto auto minmax(145px, .72fr)",
+        gridTemplateColumns: "minmax(175px, .9fr) minmax(185px, 1fr) minmax(145px, .75fr) minmax(190px, 1fr) 132px 104px minmax(170px, .78fr)",
         gap: 10,
         alignItems: "end",
         marginTop: 10,
@@ -9277,9 +9276,9 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
         <AuditMultiSelect label="Selected location" options={locationOptions} values={recordedLocations} onChange={setRecordedLocations} allLabel="All locations" minWidth={0} searchable />
         <AuditMultiSelect label="Edited" options={editedOptions} values={editedValues} onChange={setEditedValues} allLabel="All" minWidth={0} />
         <AuditMultiSelect label="Recorded timing" options={timingOptions} values={entryTimings} onChange={setEntryTimings} allLabel="Same day + later day" minWidth={0} />
-        <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5, whiteSpace: "nowrap", padding: "0 2px" }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
-        <button className="cb-btn cb-btn-sm" onClick={load} disabled={busy} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{busy ? "Refreshing…" : "Refresh"}</button>
-        <div className="cb-hint" style={{ minHeight: 36, display: "flex", alignItems: "center", lineHeight: 1.25 }}>{busy ? "Updating…" : "Filters update automatically"}</div>
+        <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5, whiteSpace: "nowrap", padding: "0 2px", minWidth: 0 }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
+        <button className="cb-btn cb-btn-sm" onClick={load} disabled={busy} aria-busy={busy} style={{ height: 36, width: 104, minWidth: 104, justifyContent: "center", whiteSpace: "nowrap" }}><RotateCcw size={13} />Refresh</button>
+        <div className="cb-hint" style={{ minHeight: 36, display: "flex", alignItems: "center", lineHeight: 1.25, minWidth: 0 }}>Filters update automatically</div>
       </div>
     </div>
 
