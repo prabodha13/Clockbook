@@ -1142,7 +1142,7 @@ function WorkspaceLogo({ workspace, size = 22 }) {
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, realIsSuperAdmin = false, showDemoModeControls = true, onToggleDemoModeControls }) {
   const isAdmin = isAdminRole(currentUser.role);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useRef(null);
@@ -1216,11 +1216,26 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
             <HelpCircle size={13} />Tour
           </button>
         )}
-        <div className="cb-user-btn" style={{ cursor: "default" }}>
-          <Avatar member={currentUser} />
-          {currentUser.name}
-          {isAdmin && <span className="cb-role-badge">{currentUser.role === "super_admin" ? "Super Admin" : "Admin"}</span>}
-        </div>
+        {realIsSuperAdmin ? (
+          <button
+            type="button"
+            className="cb-user-btn"
+            onClick={onToggleDemoModeControls}
+            aria-pressed={showDemoModeControls}
+            title={showDemoModeControls ? "Hide Demo/View Mode controls in Settings" : "Show Demo/View Mode controls in Settings"}
+            style={{ font: "inherit" }}
+          >
+            <Avatar member={currentUser} />
+            {currentUser.name}
+            {isAdmin && <span className="cb-role-badge">{currentUser.role === "super_admin" ? "Super Admin" : "Admin"}</span>}
+          </button>
+        ) : (
+          <div className="cb-user-btn" style={{ cursor: "default" }}>
+            <Avatar member={currentUser} />
+            {currentUser.name}
+            {isAdmin && <span className="cb-role-badge">{currentUser.role === "super_admin" ? "Super Admin" : "Admin"}</span>}
+          </div>
+        )}
         <button className="cb-btn cb-btn-sm cb-btn-ghost" onClick={onLogout} title="Log out">
           <LogOut size={13} />Log out
         </button>
@@ -4006,7 +4021,7 @@ function SettingsView({
   roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onUpdateLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], currentUser = null, onChangeInsightsPermission, onChangeAdditionalPermissions,
-  realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false,
+  realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false, showDemoModeControls = true,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
   onTestForgottenRecovery = null,
 }) {
@@ -4381,7 +4396,7 @@ function SettingsView({
         onBrandingUpdated={onBrandingUpdated}
         onPlatformResolved={() => setPlatformSettingsReady(true)}
       />
-      {realIsSuperAdmin && (
+      {realIsSuperAdmin && showDemoModeControls && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
             <div>
@@ -10638,6 +10653,13 @@ export default function App() {
       return "super_admin";
     }
   });
+  const [showDemoModeControls, setShowDemoModeControls] = useState(() => {
+    try {
+      return localStorage.getItem("clockbook_super_admin_demo_controls_visible") !== "false";
+    } catch (err) {
+      return true;
+    }
+  });
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
@@ -11003,6 +11025,15 @@ export default function App() {
     setSuperAdminViewMode(mode);
     try { localStorage.setItem("clockbook_super_admin_view_mode", mode); } catch (err) {}
     if (mode !== "super_admin" && view === "reports") setView("dashboard");
+  }
+
+  function toggleSuperAdminDemoControls() {
+    if (!realIsSuperAdmin) return;
+    setShowDemoModeControls((visible) => {
+      const next = !visible;
+      try { localStorage.setItem("clockbook_super_admin_demo_controls_visible", next ? "true" : "false"); } catch (err) {}
+      return next;
+    });
   }
 
   // Watches for this computer actually going to sleep or having its screen locked, and
@@ -12121,6 +12152,9 @@ export default function App() {
             workspaces={workspaces}
             activeWorkspaceId={activeWorkspaceId}
             onSwitchWorkspace={switchWorkspace}
+            realIsSuperAdmin={realIsSuperAdmin}
+            showDemoModeControls={showDemoModeControls}
+            onToggleDemoModeControls={toggleSuperAdminDemoControls}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -12202,7 +12236,7 @@ export default function App() {
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
                 members={members} currentUser={effectiveCurrentUser} onChangeInsightsPermission={changeMemberInsightsPermission} onChangeAdditionalPermissions={changeMemberAdditionalPermissions}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
-                effectiveIsAdmin={isAdmin}
+                effectiveIsAdmin={isAdmin} showDemoModeControls={showDemoModeControls}
                 workspaces={workspaces}
                 activeWorkspaceId={activeWorkspaceId}
                 onSwitchWorkspace={switchWorkspace}
