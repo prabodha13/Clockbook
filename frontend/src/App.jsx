@@ -1076,6 +1076,7 @@ const ACCESS_PERMISSION = {
   MANAGE_AUDIT_RECORDING: "manage_audit_recording",
   MANAGE_SUPER_ADMINS: "manage_super_admins",
   VIEW_TRACKED_TIME: "view_tracked_time",
+  TIME_INTEGRITY_AUDIT: "view_time_integrity_audit",
 };
 
 function hasAdditionalPermission(member, permission) {
@@ -1087,12 +1088,13 @@ function hasAdditionalPermission(member, permission) {
 
 function reportModesForMember(member) {
   if (!member) return [];
-  if (member.role === "super_admin") return ["help", "overrides", "inactivity"];
+  if (member.role === "super_admin") return ["help", "overrides", "inactivity", "integrity"];
   if (member.role !== "admin") return [];
   const modes = [];
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_HELP)) modes.push("help");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_OVERRIDES)) modes.push("overrides");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_AUDIT)) modes.push("inactivity");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.TIME_INTEGRITY_AUDIT)) modes.push("integrity");
   return modes;
 }
 
@@ -4506,6 +4508,7 @@ function SettingsView({
                   {checkbox(ACCESS_PERMISSION.REPORT_HELP, "Help activity", "View the Help activity report for the Admin's permitted team scope.", true)}
                   {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
                   {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
+                  {checkbox(ACCESS_PERMISSION.TIME_INTEGRITY_AUDIT, "View Time Integrity Audit", "View the Time Integrity Audit for the Admin's permitted team scope. The calculation and flags remain management-only and are enforced by the backend.", true)}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Always Super Admin only</div>
                   <div className="cb-hint" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>Additional Admin Permissions, Super Admin promotion/demotion, emergency workspace session revocation, Platform Admin controls, cross-pod Super Admin reporting, and Demo/View Mode cannot be delegated.</div>
                 </div>
@@ -9003,11 +9006,97 @@ function InactivityAuditView({ members }) {
   );
 }
 
-function SuperAdminReportsView({ members, allowedModes = ["help", "overrides", "inactivity"] }) {
+function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
+  const today = localDateKeyFromDate(new Date());
+  const monthStart = (() => { const d = new Date(); d.setDate(1); return localDateKeyFromDate(d); })();
+  const [dateFrom, setDateFrom] = useState(monthStart);
+  const [dateTo, setDateTo] = useState(today);
+  const [memberId, setMemberId] = useState("");
+  const [podId, setPodId] = useState("");
+  const [clientId, setClientId] = useState("");
+  const [entrySource, setEntrySource] = useState("");
+  const [onlyUnreconciled, setOnlyUnreconciled] = useState(false);
+  const [edited, setEdited] = useState("all");
+  const [entryTiming, setEntryTiming] = useState("all");
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function load() {
+    setBusy(true); setError("");
+    try {
+      const result = await api.getTimeIntegrityAudit({ dateFrom, dateTo, memberId, podId, clientId, entrySource, onlyUnreconciled, edited, entryTiming });
+      setData(result);
+    } catch (err) {
+      setError(err.message || "Could not load Time Integrity Audit");
+    } finally { setBusy(false); }
+  }
+  useEffect(() => { load(); }, []);
+
+  const rows = data?.rows || [];
+  const summary = data?.summary || {};
+  const visiblePodIds = new Set((members || []).map((m) => m.pod_id).filter(Boolean));
+  const visiblePods = (pods || []).filter((p) => visiblePodIds.has(p.id));
+  const sourceOptions = ["Automatic", "Recovery", "Raw Manual", "Manual Adjustment"];
+  const fmt = (seconds) => formatHM(Math.max(0, Number(seconds || 0)));
+  const yesNo = (value) => value ? "Yes" : "No";
+
+  return <div>
+    <div className="cb-page-head">
+      <div>
+        <div className="cb-page-title cb-serif">Time Integrity Audit</div>
+        <div className="cb-page-sub">Management-only audit of manual time against the system-observed active working timeline at the exact server-recorded entry time. Original snapshots are append-only.</div>
+      </div>
+    </div>
+
+    <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap", marginBottom: 16 }}>
+      <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} style={{ width: 145 }} /></div>
+      <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} style={{ width: 145 }} /></div>
+      <div style={{ minWidth: 190 }}><div className="cb-label">Staff</div><select className="cb-select" value={memberId} onChange={(e) => setMemberId(e.target.value)}><option value="">All staff</option>{[...members].sort((a,b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
+      <div style={{ minWidth: 160 }}><div className="cb-label">Pod</div><select className="cb-select" value={podId} onChange={(e) => setPodId(e.target.value)}><option value="">All permitted pods</option>{[...visiblePods].sort((a,b) => a.name.localeCompare(b.name)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+      <div style={{ minWidth: 190 }}><div className="cb-label">Client</div><select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}><option value="">All clients</option>{[...clients].sort((a,b) => a.name.localeCompare(b.name)).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+      <div style={{ minWidth: 170 }}><div className="cb-label">Entry source</div><select className="cb-select" value={entrySource} onChange={(e) => setEntrySource(e.target.value)}><option value="">All sources</option>{sourceOptions.map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
+      <div style={{ minWidth: 150 }}><div className="cb-label">Edited</div><select className="cb-select" value={edited} onChange={(e) => setEdited(e.target.value)}><option value="all">All</option><option value="yes">Edited entries</option><option value="no">Not edited</option></select></div>
+      <div style={{ minWidth: 175 }}><div className="cb-label">Recorded timing</div><select className="cb-select" value={entryTiming} onChange={(e) => setEntryTiming(e.target.value)}><option value="all">Same day + later day</option><option value="same_day">Same day</option><option value="later_day">Later day</option></select></div>
+      <label style={{ display: "flex", alignItems: "center", gap: 7, height: 36, fontSize: 12.5 }}><input type="checkbox" checked={onlyUnreconciled} onChange={(e) => setOnlyUnreconciled(e.target.checked)} />Only unreconciled</label>
+      <button className="cb-btn cb-btn-sm" onClick={load} disabled={busy} style={{ height: 36 }}><RotateCcw size={13} />{busy ? "Refreshing…" : "Refresh"}</button>
+    </div>
+
+    {error && <div className="cb-error" style={{ marginBottom: 14 }}>{error}</div>}
+    {!error && data && <>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, minmax(0, 1fr))", gap: 12, marginBottom: 18 }}>
+        {[
+          ["Total manual time", fmt(summary.total_manual_seconds)],
+          ["Total unreconciled manual time", fmt(summary.total_unreconciled_manual_seconds)],
+          ["Flagged entries", summary.flagged_entries || 0],
+          ["Later-edited entries", summary.later_edited_entries || 0],
+          ["Average delay WorkDate → RecordedAt", `${Number(summary.average_delay_days || 0).toFixed(2)} days`],
+          ["Staff with repeated unreconciled time", summary.repeated_unreconciled_staff || 0],
+        ].map(([label, value]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "13px 15px" }}><div className="cb-hint">{label}</div><div style={{ fontSize: 22, fontWeight: 750, marginTop: 4 }}>{value}</div>{label.startsWith("Staff with") && (summary.repeated_unreconciled_staff_names || []).length > 0 && <div className="cb-hint" style={{ marginTop: 4 }}>{summary.repeated_unreconciled_staff_names.join(", ")}</div>}</div>)}
+      </div>
+
+      {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <div className="cb-table-wrap" style={{ overflowX: "auto" }}>
+        <table className="cb-table" style={{ minWidth: 2350, tableLayout: "fixed" }}>
+          <colgroup>{[150,105,160,180,130,105,155,150,145,145,145,155,135,90,110,110,155,210,110].map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+          <thead><tr>
+            <th>Staff member</th><th>Work date</th><th>Client</th><th>Task</th><th>Entry source</th><th className="num">Manual duration</th><th>RecordedAt</th><th className="num">Net active presence</th><th className="num">Automatically tracked</th><th className="num">Recovery already allocated</th><th className="num">Prior manual allocated</th><th className="num">Available unallocated active</th><th className="num">Unreconciled manual</th><th>Later edited?</th><th className="num">Original value</th><th className="num">Current value</th><th>Last edited</th><th>Reason / note</th><th>Review status</th>
+          </tr></thead>
+          <tbody>{rows.map((r) => <tr key={r.id} style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
+            <td>{r.staff_member}</td><td>{r.work_date}<div className="cb-hint">{r.entry_timing}</div></td><td>{r.client || "—"}</td><td>{r.task || "—"}</td><td>{r.entry_source}</td><td className="num cb-mono">{fmt(r.manual_duration_seconds)}</td><td>{formatDate(r.recorded_at)}<div className="cb-hint">{new Date(r.recorded_at).toLocaleTimeString(undefined,{hour:"numeric",minute:"2-digit"})}</div></td><td className="num cb-mono">{fmt(r.net_active_presence_seconds)}</td><td className="num cb-mono">{fmt(r.automatically_tracked_seconds)}</td><td className="num cb-mono">{fmt(r.recovered_allocated_seconds)}</td><td className="num cb-mono">{fmt(r.prior_manual_allocated_seconds)}</td><td className="num cb-mono">{fmt(r.available_unallocated_active_seconds)}</td><td className="num cb-mono" style={{ fontWeight: Number(r.unreconciled_manual_seconds || 0) > 0 ? 800 : 500 }}>{fmt(r.unreconciled_manual_seconds)}</td><td>{yesNo(r.later_edited)}</td><td className="num cb-mono">{fmt(r.original_value_seconds)}</td><td className="num cb-mono">{fmt(r.current_value_seconds)}</td><td>{r.last_edited_at ? formatDate(r.last_edited_at) : "—"}</td><td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.reason_note || "—"}</td><td>{r.review_status}</td>
+          </tr>)}</tbody>
+        </table>
+      </div>}
+    </>}
+    {!error && data === null && <TableSkeleton rows={5} />}
+  </div>;
+}
+
+function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes = ["help", "overrides", "inactivity", "integrity"] }) {
   const available = [
     { value: "help", label: "Help activity" },
     { value: "overrides", label: "Manual overrides" },
     { value: "inactivity", label: "Audit" },
+    { value: "integrity", label: "Time Integrity Audit" },
   ].filter((item) => allowedModes.includes(item.value));
   const [mode, setMode] = useState(available[0]?.value || "");
   useEffect(() => {
@@ -9019,7 +9108,7 @@ function SuperAdminReportsView({ members, allowedModes = ["help", "overrides", "
       {available.length > 1 && <div style={{ marginBottom: 16 }}>
         <StableSaaSTabs value={mode} onChange={setMode} ariaLabel="Reports view" options={available} />
       </div>}
-      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : <InactivityAuditView members={members} />}
+      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : <TimeIntegrityAuditView members={members} pods={pods} clients={clients} />}
     </div>
   );
 }
@@ -11850,7 +11939,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && canViewReports && <SuperAdminReportsView members={reportMembers} allowedModes={allowedReportModes} />}
+            {view === "reports" && canViewReports && <SuperAdminReportsView members={reportMembers} pods={pods} clients={clients} allowedModes={allowedReportModes} />}
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
