@@ -9201,6 +9201,12 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const requestSeq = useRef(0);
+  const integrityTopScrollRef = useRef(null);
+  const integrityTableScrollRef = useRef(null);
+  const integrityTableRef = useRef(null);
+  const integrityHeaderRef = useRef(null);
+  const integrityScrollSyncRef = useRef(false);
+  const [floatingIntegrityHeader, setFloatingIntegrityHeader] = useState({ visible: false, left: 0, width: 0, top: 0, scrollLeft: 0 });
 
   const visiblePodIds = new Set((members || []).map((m) => m.pod_id).filter(Boolean));
   const visiblePods = (pods || []).filter((p) => visiblePodIds.has(p.id));
@@ -9294,6 +9300,15 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
 
   const rows = data?.rows || [];
   const summary = data?.summary || {};
+  const integrityColumnWidths = [150,110,170,190,120,110,145,155,140,140,150,150,150,150,90,110,110,140,180,135];
+  const integrityTableWidth = integrityColumnWidths.reduce((total, width) => total + width, 0);
+  const integrityHeaders = [
+    ["Staff member", false], ["Work date", false], ["Client", false], ["Task", false], ["Entry source", false],
+    ["Manual duration", true], ["RecordedAt", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
+    ["Recovery already allocated", true], ["Prior manual allocated", true], ["Available unallocated active", true],
+    ["Unreconciled manual time", true], ["Later edited?", false], ["Original value", true], ["Current value", true],
+    ["Last edited", false], ["Reason / note", false], ["Review status", false],
+  ];
   const fmt = (seconds) => formatHM(Math.max(0, Number(seconds || 0)));
   const yesNo = (value) => value ? "Yes" : "No";
   const formatInZone = (value, zone, withDate = true) => {
@@ -9312,6 +9327,58 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       ).format(d);
     }
   };
+
+  const syncIntegrityHorizontalScroll = useCallback((source) => {
+    if (integrityScrollSyncRef.current) return;
+    const top = integrityTopScrollRef.current;
+    const body = integrityTableScrollRef.current;
+    if (!top || !body) return;
+    integrityScrollSyncRef.current = true;
+    const next = source === "top" ? top.scrollLeft : body.scrollLeft;
+    if (source === "top") body.scrollLeft = next; else top.scrollLeft = next;
+    setFloatingIntegrityHeader((prev) => prev.scrollLeft === next ? prev : { ...prev, scrollLeft: next });
+    window.requestAnimationFrame(() => { integrityScrollSyncRef.current = false; });
+  }, []);
+
+  // Time Integrity keeps its wide audit columns, but the headings remain visible while
+  // reading down the page. The floating copy follows the same horizontal scroll offset.
+  useLayoutEffect(() => {
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const table = integrityTableRef.current;
+      const header = integrityHeaderRef.current;
+      const scroller = integrityTableScrollRef.current;
+      if (!table || !header || !scroller) {
+        setFloatingIntegrityHeader((prev) => prev.visible ? { ...prev, visible: false } : prev);
+        return;
+      }
+      const tableRect = table.getBoundingClientRect();
+      const headerRect = header.getBoundingClientRect();
+      const scrollerRect = scroller.getBoundingClientRect();
+      const topbar = document.querySelector(".cb-topbar");
+      const topbarRect = topbar?.getBoundingClientRect?.();
+      const top = Math.max(0, topbarRect && topbarRect.bottom > 0 ? topbarRect.bottom : 0);
+      const visible = headerRect.top < top && tableRect.bottom > top + headerRect.height;
+      const next = { visible, left: scrollerRect.left, width: scrollerRect.width, top, scrollLeft: scroller.scrollLeft };
+      setFloatingIntegrityHeader((prev) => (
+        prev.visible === next.visible && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 &&
+        Math.abs(prev.top - next.top) < 0.5 && prev.scrollLeft === next.scrollLeft
+      ) ? prev : next);
+    };
+    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(measure); };
+    measure();
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    const scroller = integrityTableScrollRef.current;
+    scroller?.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      scroller?.removeEventListener("scroll", schedule);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [rows.length]);
 
   return <div>
     <div className="cb-page-head">
@@ -9406,17 +9473,35 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
         ].map(([label, value]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "13px 15px" }}><div className="cb-hint">{label}</div><div style={{ fontSize: 22, fontWeight: 750, marginTop: 4 }}>{value}</div>{label.startsWith("Staff with") && (summary.repeated_unreconciled_staff_names || []).length > 0 && <div className="cb-hint" style={{ marginTop: 4 }}>{summary.repeated_unreconciled_staff_names.join(", ")}</div>}</div>)}
       </div>
 
-      {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <div className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
-        <table className="cb-table" style={{ width: 2765, minWidth: 2765, tableLayout: "fixed" }}>
-          <colgroup>{[150,110,170,190,120,110,145,155,140,140,150,150,150,150,90,110,110,140,180,135].map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-          <thead><tr>
-            {[
-              ["Staff member", false], ["Work date", false], ["Client", false], ["Task", false], ["Entry source", false],
-              ["Manual duration", true], ["RecordedAt", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
-              ["Recovery already allocated", true], ["Prior manual allocated", true], ["Available unallocated active", true],
-              ["Unreconciled manual time", true], ["Later edited?", false], ["Original value", true], ["Current value", true],
-              ["Last edited", false], ["Reason / note", false], ["Review status", false],
-            ].map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom", position: "sticky", top: 0, zIndex: 2 }}>{label}</th>)}
+      {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
+        <div
+          ref={integrityTopScrollRef}
+          onScroll={() => syncIntegrityHorizontalScroll("top")}
+          aria-label="Time Integrity horizontal scroll"
+          style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, marginBottom: 6 }}
+        >
+          <div style={{ width: integrityTableWidth, height: 1 }} />
+        </div>
+        {floatingIntegrityHeader.visible && createPortal(
+          <div aria-hidden="true" style={{
+            position: "fixed", left: floatingIntegrityHeader.left, top: floatingIntegrityHeader.top, width: floatingIntegrityHeader.width,
+            zIndex: 250, pointerEvents: "none", overflow: "hidden", background: "#ffffff",
+            boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)", borderBottom: "1px solid var(--line)",
+          }}>
+            <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "#ffffff", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
+              <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+              <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff" }}>
+                {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom", background: "#ffffff" }}>{label}</th>)}
+              </tr></thead>
+            </table>
+          </div>,
+          document.body
+        )}
+        <div ref={integrityTableScrollRef} onScroll={() => syncIntegrityHorizontalScroll("body")} className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
+        <table ref={integrityTableRef} className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed" }}>
+          <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+          <thead ref={integrityHeaderRef}><tr>
+            {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
           </tr></thead>
           <tbody>{rows.map((r) => <tr key={r.id} style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
             <td>{r.staff_member}</td>
@@ -9441,7 +9526,8 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
             <td>{r.review_status}</td>
           </tr>)}</tbody>
         </table>
-      </div>}
+      </div>
+      </>}
     </>}
     {!error && data === null && <TableSkeleton rows={5} />}
   </div>;
