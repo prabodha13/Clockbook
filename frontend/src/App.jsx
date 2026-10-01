@@ -3905,13 +3905,13 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
 function LearningTextBlock({ text, compact = false }) {
   const [expanded, setExpanded] = useState(false);
   const value = String(text || "");
-  const isLong = value.length > (compact ? 360 : 520) || value.split(/\r?\n/).length > (compact ? 6 : 9);
-  const lineClamp = compact ? 6 : 9;
+  const isLong = value.length > (compact ? 360 : 240) || value.split(/\r?\n/).length > (compact ? 6 : 4);
+  const lineClamp = compact ? 6 : 4;
   return (
     <div style={{ minWidth: 0 }}>
       <div
         style={{
-          lineHeight: 1.55,
+          lineHeight: compact ? 1.55 : 1.45,
           whiteSpace: "pre-wrap",
           overflowWrap: "anywhere",
           wordBreak: "break-word",
@@ -3929,7 +3929,7 @@ function LearningTextBlock({ text, compact = false }) {
         <button
           type="button"
           className="cb-btn cb-btn-sm"
-          style={{ marginTop: 7, padding: "4px 8px" }}
+          style={{ marginTop: compact ? 7 : 5, padding: "4px 8px" }}
           onClick={() => setExpanded((v) => !v)}
         >
           {expanded ? "Show less" : "Show more"}
