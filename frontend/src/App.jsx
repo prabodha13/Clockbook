@@ -3902,6 +3902,43 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
   );
 }
 
+function LearningTextBlock({ text, compact = false }) {
+  const [expanded, setExpanded] = useState(false);
+  const value = String(text || "");
+  const isLong = value.length > (compact ? 360 : 520) || value.split(/\r?\n/).length > (compact ? 6 : 9);
+  const lineClamp = compact ? 6 : 9;
+  return (
+    <div style={{ minWidth: 0 }}>
+      <div
+        style={{
+          lineHeight: 1.55,
+          whiteSpace: "pre-wrap",
+          overflowWrap: "anywhere",
+          wordBreak: "break-word",
+          ...(isLong && !expanded ? {
+            display: "-webkit-box",
+            WebkitBoxOrient: "vertical",
+            WebkitLineClamp: lineClamp,
+            overflow: "hidden",
+          } : {}),
+        }}
+      >
+        {value}
+      </div>
+      {isLong && (
+        <button
+          type="button"
+          className="cb-btn cb-btn-sm"
+          style={{ marginTop: 7, padding: "4px 8px" }}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function LearningDevelopmentView({ currentUser, members, categories }) {
   const isManager = isAdminRole(currentUser.role);
   const [mode, setMode] = useState("library");
@@ -3964,7 +4001,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 
   function ReferenceLinks({ items }) {
     if (!items?.length) return <span style={{ color: "var(--ink-faint)" }}>—</span>;
-    return <div style={{ display: "grid", gap: 3 }}>{items.map((ref, i) => <a key={`${ref.url}-${i}`} href={ref.url} target="_blank" rel="noreferrer" style={{ color: "var(--green)", textDecoration: "none", display: "inline-flex", gap: 4, alignItems: "center" }}><ExternalLink size={11} />{ref.title || ref.url}</a>)}</div>;
+    return <div style={{ display: "grid", gap: 3 }}>{items.map((ref, i) => <a key={`${ref.url}-${i}`} href={ref.url} target="_blank" rel="noreferrer" style={{ color: "var(--green)", textDecoration: "none", display: "inline-flex", gap: 4, alignItems: "flex-start", maxWidth: "100%", overflowWrap: "anywhere", wordBreak: "break-word" }}><ExternalLink size={11} />{ref.title || ref.url}</a>)}</div>;
   }
 
   return (
@@ -4011,7 +4048,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
             </div>
             <div>{person.records.map((record, i) => <div key={`${record.topic}-${record.learned_at}-${i}`} style={{ padding: "13px 14px", borderBottom: i < person.records.length - 1 ? "1px solid var(--line)" : "none" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}><div style={{ fontWeight: 750, fontSize: 15 }}>{record.topic}</div><span style={{ fontSize: 11, padding: "2px 7px", border: "1px solid var(--line)", borderRadius: 999, color: "var(--ink-soft)" }}>{record.category}</span></div>
-              <div style={{ marginTop: 6, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{record.what_i_learned}</div>
+              <div style={{ marginTop: 6, maxWidth: 980, minWidth: 0 }}><LearningTextBlock text={record.what_i_learned} /></div>
             </div>)}</div>
           </div>)}</div>}
       </>}
@@ -4034,7 +4071,31 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
             <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, background: "var(--paper)" }}><div className="cb-group-title" style={{ marginBottom: 10 }}>L&D hours by person</div>{byPerson.map((r) => <div key={r.name} style={{ display: "grid", gridTemplateColumns: "minmax(120px,.8fr) 1.5fr 72px", gap: 8, alignItems: "center", marginBottom: 8 }}><span>{r.name}</span><div style={{ height: 8, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, r.seconds / maxPerson * 100)}%`, height: "100%", background: "var(--green)" }} /></div><span className="cb-mono" style={{ textAlign: "right" }}>{formatHM(r.seconds)}</span></div>)}</div>
             <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, background: "var(--paper)" }}><div className="cb-group-title" style={{ marginBottom: 10 }}>L&D hours by category</div>{byCategory.map((r) => <div key={r.name} style={{ display: "grid", gridTemplateColumns: "minmax(140px,1fr) 1.4fr 72px", gap: 8, alignItems: "center", marginBottom: 8 }}><span>{r.name}</span><div style={{ height: 8, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, r.seconds / maxCategory * 100)}%`, height: "100%", background: "var(--green)" }} /></div><span className="cb-mono" style={{ textAlign: "right" }}>{formatHM(r.seconds)}</span></div>)}</div>
           </div>}
-          <div className="cb-table-wrap"><table className="cb-table"><thead><tr><th>Person</th><th>Date</th><th className="num">Duration</th><th>Category</th><th>Topic</th><th>What I Learned</th><th>TDM references</th><th>Article references</th></tr></thead><tbody>{reportRows.length === 0 ? <tr><td colSpan={8}><div className="cb-empty">No L&D records match these filters.</div></td></tr> : reportRows.map((r) => <tr key={r.id}><td style={{ fontWeight: 650 }}>{r.member_name}</td><td>{formatDate(r.learned_at)}</td><td className="num cb-mono">{formatHM(r.duration_seconds)}</td><td>{r.category}</td><td>{r.topic}</td><td style={{ minWidth: 260, whiteSpace: "pre-wrap" }}>{r.what_i_learned}</td><td><ReferenceLinks items={r.tdm_references} /></td><td><ReferenceLinks items={r.article_references} /></td></tr>)}</tbody></table></div>
+          <div className="cb-table-wrap">
+            <table className="cb-table" style={{ tableLayout: "fixed", minWidth: 1180, width: "100%" }}>
+              <colgroup>
+                <col style={{ width: 120 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 90 }} />
+                <col style={{ width: 150 }} />
+                <col style={{ width: 140 }} />
+                <col style={{ width: 430 }} />
+                <col style={{ width: 160 }} />
+                <col style={{ width: 180 }} />
+              </colgroup>
+              <thead><tr><th>Person</th><th>Date</th><th className="num">Duration</th><th>Category</th><th>Topic</th><th>What I Learned</th><th>TDM references</th><th>Article references</th></tr></thead>
+              <tbody>{reportRows.length === 0 ? <tr><td colSpan={8}><div className="cb-empty">No L&D records match these filters.</div></td></tr> : reportRows.map((r) => <tr key={r.id}>
+                <td style={{ fontWeight: 650, overflowWrap: "anywhere" }}>{r.member_name}</td>
+                <td>{formatDate(r.learned_at)}</td>
+                <td className="num cb-mono">{formatHM(r.duration_seconds)}</td>
+                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.category}</td>
+                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.topic}</td>
+                <td style={{ verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere" }}><LearningTextBlock text={r.what_i_learned} compact /></td>
+                <td style={{ verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere" }}><ReferenceLinks items={r.tdm_references} /></td>
+                <td style={{ verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere" }}><ReferenceLinks items={r.article_references} /></td>
+              </tr>)}</tbody>
+            </table>
+          </div>
         </>}
       </>}
     </div>
