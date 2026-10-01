@@ -9227,6 +9227,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const integrityTableScrollRef = useRef(null);
   const integrityTableRef = useRef(null);
   const integrityHeaderRef = useRef(null);
+  const integrityStaticHeaderBlockRef = useRef(null);
   const integrityScrollSyncRef = useRef(false);
   const [floatingIntegrityHeader, setFloatingIntegrityHeader] = useState({ visible: false, left: 0, width: 0, top: 0, scrollLeft: 0 });
 
@@ -9374,18 +9375,24 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       frame = 0;
       const table = integrityTableRef.current;
       const header = integrityHeaderRef.current;
+      const headerBlock = integrityStaticHeaderBlockRef.current;
       const scroller = integrityTableScrollRef.current;
-      if (!table || !header || !scroller) {
+      if (!table || !header || !headerBlock || !scroller) {
         setFloatingIntegrityHeader((prev) => prev.visible ? { ...prev, visible: false } : prev);
         return;
       }
       const tableRect = table.getBoundingClientRect();
       const headerRect = header.getBoundingClientRect();
+      const headerBlockRect = headerBlock.getBoundingClientRect();
       const scrollerRect = scroller.getBoundingClientRect();
       const topbar = document.querySelector(".cb-topbar");
       const topbarRect = topbar?.getBoundingClientRect?.();
       const top = Math.max(0, topbarRect && topbarRect.bottom > 0 ? topbarRect.bottom : 0);
-      const visible = headerRect.top < top && tableRect.bottom > top + headerRect.height;
+      // Do not show the floating copy until the complete static header block
+      // (column headings + the synchronized top scrollbar) has left the viewport.
+      // Showing it as soon as only the heading row crosses the top causes the
+      // floating copy to sit over the still-visible static scrollbar/first row.
+      const visible = headerBlockRect.bottom <= top + 0.5 && tableRect.bottom > top + headerBlockRect.height;
       const next = { visible, left: scrollerRect.left, width: scrollerRect.width, top, scrollLeft: scroller.scrollLeft };
       setFloatingIntegrityHeader((prev) => (
         prev.visible === next.visible && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 &&
@@ -9509,7 +9516,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
-        <div style={{ maxWidth: "100%", overflow: "hidden", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "8px 8px 0 0" }}>
+        <div ref={integrityStaticHeaderBlockRef} style={{ maxWidth: "100%", overflow: "hidden", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "8px 8px 0 0" }}>
           <div style={{ overflow: "hidden", background: "var(--paper)" }}>
             <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
               <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
