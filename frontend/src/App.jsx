@@ -2246,7 +2246,7 @@ function taskPeriodContext(task) {
   return "Period: Select later";
 }
 
-function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSecondary, viewportAware = false }) {
+function SearchableSelect({ options, value, onChange, placeholder, getLabel, getSecondary, viewportAware = false, allowClear = false, clearLabel = "All" }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [menuStyle, setMenuStyle] = useState(null);
@@ -2308,6 +2308,15 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
 
   const menuContents = (
     <>
+      {allowClear && (
+        <div
+          className="cb-searchable-item"
+          onMouseDown={(e) => { e.preventDefault(); onChange(""); setOpen(false); setQuery(""); }}
+          style={{ fontWeight: value ? 500 : 650 }}
+        >
+          {clearLabel}
+        </div>
+      )}
       {filtered.length === 0 && <div className="cb-searchable-empty">No matches</div>}
       {filtered.map((o) => (
         <div
@@ -2350,6 +2359,18 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
           }}
         >
           <div role="listbox" style={{ width: "100%", maxHeight: menuStyle.maxHeight, overflowY: "auto", overflowX: "hidden", background: "#FFFFFF", padding: 6, boxSizing: "border-box", scrollbarGutter: "stable" }}>
+            {allowClear && (
+              <div
+                role="option"
+                aria-selected={!value}
+                onMouseDown={(e) => { e.preventDefault(); onChange(""); setOpen(false); setQuery(""); }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "#F3F6F3"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = !value ? "#EEF5F0" : "#FFFFFF"; }}
+                style={{ display: "block", minHeight: 34, padding: "8px 10px", borderRadius: 7, background: !value ? "#EEF5F0" : "#FFFFFF", color: "#17201A", fontSize: 13, lineHeight: "18px", whiteSpace: "normal", overflowWrap: "anywhere", cursor: "pointer", boxSizing: "border-box", fontWeight: !value ? 650 : 500 }}
+              >
+                {clearLabel}
+              </div>
+            )}
             {filtered.length === 0 && <div style={{ padding: "9px 10px", fontSize: 13, color: "#6B746E" }}>No matches</div>}
             {filtered.map((o) => (
               <div
@@ -4058,7 +4079,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(140px,1fr))", gap: 9, alignItems: "end" }}>
             <div><div className="cb-label">From</div><input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></div>
             <div><div className="cb-label">To</div><input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></div>
-            <div><div className="cb-label">Person</div><SearchableSelect options={managerMembers} value={personId} onChange={setPersonId} placeholder="All people" getLabel={(m) => m.name} /></div>
+            <div><div className="cb-label">Person</div><SearchableSelect options={managerMembers} value={personId} onChange={setPersonId} placeholder="All people" getLabel={(m) => m.name} allowClear clearLabel="All people" /></div>
             <div><div className="cb-label">Category</div><select className="cb-select" value={reportCategory} onChange={(e) => setReportCategory(e.target.value)}><option value="">All categories</option>{categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
             <div><div className="cb-label">Keyword</div><input spellCheck={false} lang="en" className="cb-input" value={reportKeyword} onChange={(e) => setReportKeyword(e.target.value)} placeholder="Topic or learning..." /></div>
           </div>
@@ -9488,33 +9509,36 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
-        <div style={{ maxWidth: "100%", overflow: "hidden", background: "var(--paper)" }}>
-          <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
-            <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-            <thead ref={integrityHeaderRef}><tr>
-              {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
-            </tr></thead>
-          </table>
-        </div>
-        <div
-          ref={integrityTopScrollRef}
-          onScroll={() => syncIntegrityHorizontalScroll("top")}
-          aria-label="Time Integrity horizontal scroll"
-          style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, marginBottom: 6, borderTop: "1px solid var(--line)" }}
-        >
-          <div style={{ width: integrityTableWidth, height: 1 }} />
+        <div style={{ maxWidth: "100%", overflow: "hidden", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "8px 8px 0 0" }}>
+          <div style={{ overflow: "hidden", background: "var(--paper)" }}>
+            <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
+              <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+              <thead ref={integrityHeaderRef}><tr>
+                {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
+              </tr></thead>
+            </table>
+          </div>
+          <div
+            ref={integrityTopScrollRef}
+            onScroll={() => syncIntegrityHorizontalScroll("top")}
+            aria-label="Time Integrity horizontal scroll"
+            style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, background: "var(--paper)", borderTop: "1px solid var(--line)" }}
+          >
+            <div style={{ width: integrityTableWidth, height: 1 }} />
+          </div>
         </div>
         {floatingIntegrityHeader.visible && createPortal(
           <div style={{
             position: "fixed", left: floatingIntegrityHeader.left, top: floatingIntegrityHeader.top, width: floatingIntegrityHeader.width,
-            zIndex: 250, overflow: "hidden", background: "#ffffff",
-            boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)", borderBottom: "1px solid var(--line)",
+            zIndex: 250, overflow: "hidden", background: "var(--surface)",
+            border: "1px solid var(--line)", borderRadius: "8px 8px 0 0", boxSizing: "border-box",
+            boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)",
           }}>
-            <div aria-hidden="true" style={{ overflow: "hidden", width: "100%", background: "#ffffff" }}>
-              <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "#ffffff", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
+            <div aria-hidden="true" style={{ overflow: "hidden", width: "100%", background: "var(--paper)" }}>
+              <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
                 <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-                <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff" }}>
-                  {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom", background: "#ffffff" }}>{label}</th>)}
+                <thead><tr>
+                  {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
                 </tr></thead>
               </table>
             </div>
@@ -9522,14 +9546,14 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
               ref={integrityFloatingScrollRef}
               onScroll={() => syncIntegrityHorizontalScroll("floating")}
               aria-label="Time Integrity horizontal scroll"
-              style={{ overflowX: "auto", overflowY: "hidden", width: "100%", height: 18, background: "#ffffff", pointerEvents: "auto", borderTop: "1px solid var(--line)" }}
+              style={{ overflowX: "auto", overflowY: "hidden", width: "100%", height: 18, background: "var(--paper)", pointerEvents: "auto", borderTop: "1px solid var(--line)" }}
             >
               <div style={{ width: integrityTableWidth, height: 1 }} />
             </div>
           </div>,
           document.body
         )}
-        <div ref={integrityTableScrollRef} onScroll={() => syncIntegrityHorizontalScroll("body")} className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
+        <div ref={integrityTableScrollRef} onScroll={() => syncIntegrityHorizontalScroll("body")} className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%", borderTop: 0, borderRadius: "0 0 8px 8px" }}>
         <table ref={integrityTableRef} className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed" }}>
           <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
           <tbody>{rows.map((r) => <tr key={r.id} style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
