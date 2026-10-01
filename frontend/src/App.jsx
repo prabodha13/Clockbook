@@ -1142,7 +1142,7 @@ function WorkspaceLogo({ workspace, size = 22 }) {
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, realIsSuperAdmin = false, showDemoModeControls = true, onToggleDemoModeControls }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, realIsSuperAdmin = false, showDemoModeControls = true, onToggleDemoModeControls, timerActionPending = null }) {
   const isAdmin = isAdminRole(currentUser.role);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useRef(null);
@@ -1167,11 +1167,15 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
           <div className="cb-tracking-time cb-mono" style={{ fontSize: 14, fontWeight: 750, padding: "0 4px" }}>{formatHMS(elapsed)}</div>
           <div className="cb-tracking-actions" style={{ gap: 6 }}>
             {isPaused ? (
-              <button className="cb-btn cb-btn-sm" onClick={onResume}><Play size={13} />Resume</button>
+              <button className="cb-btn cb-btn-sm" onClick={onResume} disabled={timerActionPending?.taskId === pinnedTask.id} style={{ minWidth: 94, justifyContent: "center" }}>
+                <Play size={13} />{timerActionPending?.taskId === pinnedTask.id && timerActionPending?.action === "start" ? "Resuming…" : "Resume"}
+              </button>
             ) : (
-              <button className="cb-btn cb-btn-sm" onClick={onPause}><Pause size={13} />Pause</button>
+              <button className="cb-btn cb-btn-sm" onClick={onPause} disabled={timerActionPending?.taskId === pinnedTask.id} style={{ minWidth: 94, justifyContent: "center" }}>
+                <Pause size={13} />{timerActionPending?.taskId === pinnedTask.id && timerActionPending?.action === "pause" ? "Pausing…" : "Pause"}
+              </button>
             )}
-            <button className="cb-btn cb-btn-sm cb-btn-primary cb-btn-complete" onClick={onComplete}><CheckCircle2 size={13} />Complete</button>
+            <button className="cb-btn cb-btn-sm cb-btn-primary cb-btn-complete" onClick={onComplete} disabled={timerActionPending?.taskId === pinnedTask.id}><CheckCircle2 size={13} />Complete</button>
           </div>
         </div>
       ) : (
@@ -1244,7 +1248,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
   );
 }
 
-function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onReset, hideClient }) {
+function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete, onDelete, onReassign, onReset, hideClient, timerActionPending = null }) {
   const isMine = task.owner_id === currentUser.id;
   const isAdmin = isAdminRole(currentUser.role);
   const canReset = isMine || isAdmin;
@@ -1299,12 +1303,22 @@ function TaskRow({ task, now, currentUser, members, onStart, onPause, onComplete
       <div className="cb-row-time cb-mono">{elapsed > 0 ? formatHM(elapsed) : "0m"}</div>
       <div className="cb-row-actions">
         {(task.status === "todo" || task.status === "paused") && (
-          <button className="cb-icon-btn" title={isMine ? "Start" : `Owned by ${owner ? owner.name : "someone else"}`} disabled={!isMine} onClick={() => onStart(task)}>
+          <button
+            className="cb-icon-btn"
+            title={timerActionPending ? (timerActionPending.taskId === task.id && timerActionPending.action === "start" ? "Starting…" : "Timer update in progress…") : (isMine ? "Start" : `Owned by ${owner ? owner.name : "someone else"}`)}
+            disabled={!isMine || Boolean(timerActionPending)}
+            onClick={() => onStart(task)}
+          >
             <Play size={14} />
           </button>
         )}
         {task.status === "running" && (
-          <button className="cb-icon-btn" title="Pause" disabled={!isMine} onClick={() => onPause(task.id)}>
+          <button
+            className="cb-icon-btn"
+            title={timerActionPending ? (timerActionPending.taskId === task.id && timerActionPending.action === "pause" ? "Pausing…" : "Timer update in progress…") : "Pause"}
+            disabled={!isMine || Boolean(timerActionPending)}
+            onClick={() => onPause(task.id)}
+          >
             <Pause size={14} />
           </button>
         )}
@@ -1744,7 +1758,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -1846,7 +1860,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
                   <div className="cb-client-subgroup-head"><Building2 size={12} />{name}</div>
                   {byOwner[name].map((t) => (
                     <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
-                      onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset} />
+                      onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset} timerActionPending={timerActionPending} />
                   ))}
                 </Fragment>
               ))
@@ -1870,7 +1884,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
           ) : (
             items.map((t) => (
               <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
-                onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset} />
+                onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset} timerActionPending={timerActionPending} />
             ))
           )}
         </div>
@@ -2039,7 +2053,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
                 {group.items.map((t) => (
                   <TaskRow key={t.id} task={t} now={now} currentUser={currentUser} members={members}
                     onStart={onStart} onPause={onPause} onComplete={onComplete} onDelete={onDelete} onReassign={onReassign} onReset={onReset}
-                    hideClient />
+                    timerActionPending={timerActionPending} hideClient />
                 ))}
               </Fragment>
             ))
@@ -10657,6 +10671,8 @@ export default function App() {
   const [pods, setPods] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const [timerActionPending, setTimerActionPending] = useState(null);
+  const timerActionPendingRef = useRef(null);
   const [view, setView] = useState("dashboard");
   const [superAdminViewMode, setSuperAdminViewMode] = useState(() => {
     try {
@@ -11742,15 +11758,29 @@ export default function App() {
     setTasks((prev) => prev.map((t) => (t.id === updated.id ? updated : t)));
   }
 
+  async function reconcileTimerAfterUncertainRequest(originalError) {
+    showToast("Could not confirm timer update. Checking status…", true);
+    try {
+      const freshTasks = await api.getTasksForTimerReconcile();
+      setTasks(freshTasks);
+      showToast("Timer status refreshed");
+    } catch (reconcileError) {
+      const detail = originalError?.message || reconcileError?.message || "Network error";
+      showToast(`Could not confirm timer status (${detail}). Check your connection and try again.`, true);
+    }
+  }
+
   async function startTask(taskId, startCount) {
-    if (!currentUser) return;
+    if (!currentUser || timerActionPendingRef.current) return;
     if ("Notification" in window && Notification.permission === "default") {
       // Tied to this click so the browser treats it as a genuine user request, not spam
       Notification.requestPermission();
     }
     enableIdleDetection({ allowPermissionPrompt: true });
+    timerActionPendingRef.current = { taskId, action: "start" };
+    setTimerActionPending(timerActionPendingRef.current);
     try {
-      const updated = await api.startTask(taskId, startCount != null ? startCount : null);
+      const updated = await api.startTaskInteractive(taskId, startCount != null ? startCount : null);
       console.log("[timer-diagnostic] start response", {
         id: updated.id, status: updated.status,
         lastSegmentStart: updated.segments?.length ? updated.segments[updated.segments.length - 1].start : null,
@@ -11781,7 +11811,12 @@ export default function App() {
         showToast(`Paused "${pausedPreviousTask.client_name}: ${pausedPreviousTask.name}" to start this task`);
       }
     } catch (err) {
-      showToast(err.message, true);
+      await reconcileTimerAfterUncertainRequest(err);
+    } finally {
+      if (timerActionPendingRef.current?.taskId === taskId && timerActionPendingRef.current?.action === "start") {
+        timerActionPendingRef.current = null;
+        setTimerActionPending(null);
+      }
     }
   }
 
@@ -11796,8 +11831,11 @@ export default function App() {
   }
 
   async function pauseTask(taskId, endAt) {
+    if (timerActionPendingRef.current) return;
+    timerActionPendingRef.current = { taskId, action: "pause" };
+    setTimerActionPending(timerActionPendingRef.current);
     try {
-      const updated = await api.pauseTask(taskId, endAt);
+      const updated = await api.pauseTaskInteractive(taskId, endAt);
       console.log("[timer-diagnostic] pause response", {
         id: updated.id, status: updated.status,
         lastSegmentStart: updated.segments?.length ? updated.segments[updated.segments.length - 1].start : null,
@@ -11806,7 +11844,12 @@ export default function App() {
       });
       mergeTask(updated);
     } catch (err) {
-      showToast(err.message, true);
+      await reconcileTimerAfterUncertainRequest(err);
+    } finally {
+      if (timerActionPendingRef.current?.taskId === taskId && timerActionPendingRef.current?.action === "pause") {
+        timerActionPendingRef.current = null;
+        setTimerActionPending(null);
+      }
     }
   }
 
@@ -12168,6 +12211,7 @@ export default function App() {
             realIsSuperAdmin={realIsSuperAdmin}
             showDemoModeControls={showDemoModeControls}
             onToggleDemoModeControls={toggleSuperAdminDemoControls}
+            timerActionPending={timerActionPending}
           />
           {"Notification" in window && Notification.permission === "default" && !alertsBannerDismissed && (
             <AlertsBanner onEnable={handleEnableAlerts} onDismiss={() => setAlertsBannerDismissed(true)} />
@@ -12182,6 +12226,7 @@ export default function App() {
                 onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)} onLearningDevelopment={() => setShowLearningDevelopmentTask(true)}
                 clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
                 onCreateTasks={createTasks}
+                timerActionPending={timerActionPending}
               />
             )}
             {view === "templates" && (

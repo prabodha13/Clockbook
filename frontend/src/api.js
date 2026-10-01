@@ -13,11 +13,26 @@ export function clearToken() {
   sessionStorage.removeItem(TOKEN_KEY);
 }
 
-async function request(path, options = {}) {
+async function request(path, options = {}, timeoutMs = 0) {
   const token = getToken();
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
+
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  let res;
+  try {
+    res = await fetch(`${BASE}${path}`, { ...options, headers, ...(controller ? { signal: controller.signal } : {}) });
+  } catch (err) {
+    if (err?.name === "AbortError" && timeoutMs > 0) {
+      const timeoutError = new Error("Request timed out");
+      timeoutError.code = "REQUEST_TIMEOUT";
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
   if (res.status === 401 && token && getToken() === token) {
     // Only revoke the browser session when this 401 belongs to the token that
     // is still active. A workspace switch replaces the token; late responses
@@ -171,12 +186,19 @@ export const api = {
     return request(`/learning/report${q.toString() ? `?${q.toString()}` : ""}`);
   },
   getTasks: () => request("/tasks"),
+  getTasksForTimerReconcile: () => request("/tasks", {}, 6000),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),
   startTask: (id, startCount, startAt) => {
     const body = {};
     if (startCount != null) body.start_count = startCount;
     if (startAt) body.start_at = startAt;
     return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) });
+  },
+  startTaskInteractive: (id, startCount, startAt) => {
+    const body = {};
+    if (startCount != null) body.start_count = startCount;
+    if (startAt) body.start_at = startAt;
+    return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) }, 8000);
   },
   recoverTaskTime: (id, seconds) =>
     request(`/tasks/${id}/recover-time`, { method: "POST", body: JSON.stringify({ seconds }) }),
@@ -232,6 +254,7 @@ export const api = {
   },
   sendHeartbeat: (id) => request(`/tasks/${id}/heartbeat`, { method: "POST" }),
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
+  pauseTaskInteractive: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }, 8000),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
   getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>
     request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`),
