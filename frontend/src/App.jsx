@@ -9202,6 +9202,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const [error, setError] = useState("");
   const requestSeq = useRef(0);
   const integrityTopScrollRef = useRef(null);
+  const integrityFloatingScrollRef = useRef(null);
   const integrityTableScrollRef = useRef(null);
   const integrityTableRef = useRef(null);
   const integrityHeaderRef = useRef(null);
@@ -9331,11 +9332,15 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const syncIntegrityHorizontalScroll = useCallback((source) => {
     if (integrityScrollSyncRef.current) return;
     const top = integrityTopScrollRef.current;
+    const floating = integrityFloatingScrollRef.current;
     const body = integrityTableScrollRef.current;
-    if (!top || !body) return;
+    if (!body) return;
     integrityScrollSyncRef.current = true;
-    const next = source === "top" ? top.scrollLeft : body.scrollLeft;
-    if (source === "top") body.scrollLeft = next; else top.scrollLeft = next;
+    const sourceEl = source === "top" ? top : source === "floating" ? floating : body;
+    const next = sourceEl ? sourceEl.scrollLeft : body.scrollLeft;
+    if (top && source !== "top") top.scrollLeft = next;
+    if (floating && source !== "floating") floating.scrollLeft = next;
+    if (source !== "body") body.scrollLeft = next;
     setFloatingIntegrityHeader((prev) => prev.scrollLeft === next ? prev : { ...prev, scrollLeft: next });
     window.requestAnimationFrame(() => { integrityScrollSyncRef.current = false; });
   }, []);
@@ -9379,6 +9384,15 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       if (frame) window.cancelAnimationFrame(frame);
     };
   }, [rows.length]);
+
+  // When the floating header appears, place its scrollbar at the same horizontal
+  // position as the table/body scrollbar immediately (before the user touches it).
+  useLayoutEffect(() => {
+    const floating = integrityFloatingScrollRef.current;
+    if (floating && floatingIntegrityHeader.visible) {
+      floating.scrollLeft = floatingIntegrityHeader.scrollLeft;
+    }
+  }, [floatingIntegrityHeader.visible]);
 
   return <div>
     <div className="cb-page-head">
@@ -9474,35 +9488,50 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
+        <div style={{ maxWidth: "100%", overflow: "hidden", background: "var(--paper)" }}>
+          <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
+            <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+            <thead ref={integrityHeaderRef}><tr>
+              {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
+            </tr></thead>
+          </table>
+        </div>
         <div
           ref={integrityTopScrollRef}
           onScroll={() => syncIntegrityHorizontalScroll("top")}
           aria-label="Time Integrity horizontal scroll"
-          style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, marginBottom: 6 }}
+          style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, marginBottom: 6, borderTop: "1px solid var(--line)" }}
         >
           <div style={{ width: integrityTableWidth, height: 1 }} />
         </div>
         {floatingIntegrityHeader.visible && createPortal(
-          <div aria-hidden="true" style={{
+          <div style={{
             position: "fixed", left: floatingIntegrityHeader.left, top: floatingIntegrityHeader.top, width: floatingIntegrityHeader.width,
-            zIndex: 250, pointerEvents: "none", overflow: "hidden", background: "#ffffff",
+            zIndex: 250, overflow: "hidden", background: "#ffffff",
             boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)", borderBottom: "1px solid var(--line)",
           }}>
-            <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "#ffffff", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
-              <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-              <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff" }}>
-                {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom", background: "#ffffff" }}>{label}</th>)}
-              </tr></thead>
-            </table>
+            <div aria-hidden="true" style={{ overflow: "hidden", width: "100%", background: "#ffffff" }}>
+              <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "#ffffff", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
+                <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
+                <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff" }}>
+                  {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom", background: "#ffffff" }}>{label}</th>)}
+                </tr></thead>
+              </table>
+            </div>
+            <div
+              ref={integrityFloatingScrollRef}
+              onScroll={() => syncIntegrityHorizontalScroll("floating")}
+              aria-label="Time Integrity horizontal scroll"
+              style={{ overflowX: "auto", overflowY: "hidden", width: "100%", height: 18, background: "#ffffff", pointerEvents: "auto", borderTop: "1px solid var(--line)" }}
+            >
+              <div style={{ width: integrityTableWidth, height: 1 }} />
+            </div>
           </div>,
           document.body
         )}
         <div ref={integrityTableScrollRef} onScroll={() => syncIntegrityHorizontalScroll("body")} className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%" }}>
         <table ref={integrityTableRef} className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed" }}>
           <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-          <thead ref={integrityHeaderRef}><tr>
-            {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
-          </tr></thead>
           <tbody>{rows.map((r) => <tr key={r.id} style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
             <td>{r.staff_member}</td>
             <td>{r.work_date}<div className="cb-hint">{r.entry_timing}</div></td>
