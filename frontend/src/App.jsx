@@ -8596,7 +8596,6 @@ function HelpReportView() {
             </tr>)}</tbody>
           </table>
         </div>
-        </div>
       </>}
     </div>
   );
