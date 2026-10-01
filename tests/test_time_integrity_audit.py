@@ -325,3 +325,97 @@ def test_time_integrity_snapshots_selected_timezone_and_supports_multi_filters()
         assert by_member[staff_b.id].recorded_timezone_name == "Europe/Dublin"
     finally:
         s.close()
+
+
+def test_time_integrity_presence_deducts_only_unexplained_inactivity_after_linked_help():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_time_integrity_help_adjustment")
+        member = _member(s, tenant.id, "integrity-help@example.com")
+        colleague = _member(s, tenant.id, "integrity-help-colleague@example.com")
+        s.info["actor_member_id"] = member.id
+        day = datetime(2026, 9, 30)
+
+        s.add(models.ActivePresenceInterval(
+            member_id=member.id,
+            work_date=day.date(),
+            started_at=day.replace(hour=9),
+            ended_at=day.replace(hour=11),
+        ))
+        inactivity = models.InactivityEvent(
+            member_id=member.id,
+            kind="screen_locked",
+            started_at=day.replace(hour=10),
+            ended_at=day.replace(hour=10, minute=20),
+            seconds=20 * 60,
+        )
+        s.add(inactivity)
+        s.flush()
+        s.add(models.HelpEvent(
+            member_id=member.id,
+            colleague_id=colleague.id,
+            direction="helped",
+            seconds=12 * 60,
+            source="sleep_alert",
+            inactivity_event_id=inactivity.id,
+            created_at=day.replace(hour=10, minute=21),
+        ))
+        s.commit()
+
+        # 2h observed presence - (20m away - 12m explained help) = 1h52m.
+        net_active = main._time_integrity_presence_seconds(
+            s, member, day.date(), day.replace(hour=11)
+        )
+        assert net_active == pytest.approx((2 * 60 * 60) - (8 * 60))
+    finally:
+        s.close()
+
+
+def test_time_integrity_presence_does_not_use_help_recorded_after_snapshot_time():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_time_integrity_help_recorded_at")
+        member = _member(s, tenant.id, "integrity-help-time@example.com")
+        colleague = _member(s, tenant.id, "integrity-help-time-colleague@example.com")
+        s.info["actor_member_id"] = member.id
+        day = datetime(2026, 9, 30)
+
+        s.add(models.ActivePresenceInterval(
+            member_id=member.id,
+            work_date=day.date(),
+            started_at=day.replace(hour=9),
+            ended_at=day.replace(hour=12),
+        ))
+        inactivity = models.InactivityEvent(
+            member_id=member.id,
+            kind="screen_locked",
+            started_at=day.replace(hour=10),
+            ended_at=day.replace(hour=10, minute=20),
+            seconds=20 * 60,
+        )
+        s.add(inactivity)
+        s.flush()
+        s.add(models.HelpEvent(
+            member_id=member.id,
+            colleague_id=colleague.id,
+            direction="received",
+            seconds=20 * 60,
+            source="sleep_alert",
+            inactivity_event_id=inactivity.id,
+            created_at=day.replace(hour=11, minute=30),
+        ))
+        s.commit()
+
+        # At 11:00 the help classification did not yet exist, so the full 20m stays inactivity.
+        at_11 = main._time_integrity_presence_seconds(
+            s, member, day.date(), day.replace(hour=11)
+        )
+        assert at_11 == pytest.approx((2 * 60 * 60) - (20 * 60))
+
+        # At 12:00 the linked help exists and explains the full away period.
+        at_12 = main._time_integrity_presence_seconds(
+            s, member, day.date(), day.replace(hour=12)
+        )
+        assert at_12 == pytest.approx(3 * 60 * 60)
+    finally:
+        s.close()
