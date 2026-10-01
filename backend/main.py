@@ -6170,18 +6170,45 @@ def _time_integrity_presence_seconds(db: Session, member: models.Member, work_da
         models.InactivityEvent.started_at < clip_end,
         models.InactivityEvent.ended_at > day_start,
     ).all()
-    away_ranges = _merge_time_ranges([
-        (max(row.started_at, day_start), min(row.ended_at, clip_end)) for row in inactivity
-    ])
+
+    # Keep Time Integrity consistent with the inactivity/audit reports: a sleep/lock period
+    # that has been explicitly classified as Helping/Receiving Help is explained work, not
+    # unexplained inactivity. Only help evidence that existed at this snapshot's RecordedAt
+    # can affect the calculation; later classifications must not rewrite historical evidence.
+    linked_help_seconds = {}
+    inactivity_ids = [row.id for row in inactivity]
+    if inactivity_ids:
+        help_query = db.query(models.HelpEvent.inactivity_event_id, models.HelpEvent.seconds).filter(
+            models.HelpEvent.source == "sleep_alert",
+            models.HelpEvent.inactivity_event_id.in_(inactivity_ids),
+        )
+        if recorded_at is not None:
+            help_query = help_query.filter(models.HelpEvent.created_at <= recorded_at)
+        for inactivity_event_id, help_seconds in help_query.all():
+            if inactivity_event_id:
+                linked_help_seconds[inactivity_event_id] = linked_help_seconds.get(inactivity_event_id, 0.0) + max(float(help_seconds or 0), 0.0)
+
     active_seconds = sum((end - start).total_seconds() for start, end in active_ranges)
-    away_overlap = 0.0
-    for a_start, a_end in active_ranges:
-        for i_start, i_end in away_ranges:
-            overlap_start = max(a_start, i_start)
-            overlap_end = min(a_end, i_end)
+    unexplained_away_overlap = 0.0
+    for row in inactivity:
+        event_start = max(row.started_at, day_start)
+        event_end = min(row.ended_at, clip_end)
+        if event_end <= event_start:
+            continue
+        event_overlap = 0.0
+        for a_start, a_end in active_ranges:
+            overlap_start = max(a_start, event_start)
+            overlap_end = min(a_end, event_end)
             if overlap_end > overlap_start:
-                away_overlap += (overlap_end - overlap_start).total_seconds()
-    return max(active_seconds - away_overlap, 0.0)
+                event_overlap += (overlap_end - overlap_start).total_seconds()
+        explained_help = min(event_overlap, linked_help_seconds.get(row.id, 0.0))
+        unexplained_away_overlap += max(event_overlap - explained_help, 0.0)
+
+    # Inactivity events should not overlap in normal operation, but cap the reporting-only
+    # deduction defensively so inconsistent legacy rows can never make Net Active Presence
+    # negative or deduct more than the observed active range itself.
+    unexplained_away_overlap = min(unexplained_away_overlap, active_seconds)
+    return max(active_seconds - unexplained_away_overlap, 0.0)
 
 
 def _time_integrity_segment_totals(db: Session, member: models.Member, work_date, recorded_at: datetime):
