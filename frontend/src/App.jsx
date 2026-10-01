@@ -8596,6 +8596,7 @@ function HelpReportView() {
             </tr>)}</tbody>
           </table>
         </div>
+        </div>
       </>}
     </div>
   );
@@ -9223,13 +9224,10 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const [error, setError] = useState("");
   const requestSeq = useRef(0);
   const integrityTopScrollRef = useRef(null);
-  const integrityFloatingScrollRef = useRef(null);
   const integrityTableScrollRef = useRef(null);
   const integrityTableRef = useRef(null);
-  const integrityHeaderRef = useRef(null);
-  const integrityStaticHeaderBlockRef = useRef(null);
   const integrityScrollSyncRef = useRef(false);
-  const [floatingIntegrityHeader, setFloatingIntegrityHeader] = useState({ visible: false, left: 0, width: 0, top: 0, scrollLeft: 0 });
+  const [integrityScrollLeft, setIntegrityScrollLeft] = useState(0);
 
   const visiblePodIds = new Set((members || []).map((m) => m.pod_id).filter(Boolean));
   const visiblePods = (pods || []).filter((p) => visiblePodIds.has(p.id));
@@ -9354,73 +9352,16 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const syncIntegrityHorizontalScroll = useCallback((source) => {
     if (integrityScrollSyncRef.current) return;
     const top = integrityTopScrollRef.current;
-    const floating = integrityFloatingScrollRef.current;
     const body = integrityTableScrollRef.current;
     if (!body) return;
     integrityScrollSyncRef.current = true;
-    const sourceEl = source === "top" ? top : source === "floating" ? floating : body;
+    const sourceEl = source === "top" ? top : body;
     const next = sourceEl ? sourceEl.scrollLeft : body.scrollLeft;
     if (top && source !== "top") top.scrollLeft = next;
-    if (floating && source !== "floating") floating.scrollLeft = next;
     if (source !== "body") body.scrollLeft = next;
-    setFloatingIntegrityHeader((prev) => prev.scrollLeft === next ? prev : { ...prev, scrollLeft: next });
+    setIntegrityScrollLeft(next);
     window.requestAnimationFrame(() => { integrityScrollSyncRef.current = false; });
   }, []);
-
-  // Time Integrity keeps its wide audit columns, but the headings remain visible while
-  // reading down the page. The floating copy follows the same horizontal scroll offset.
-  useLayoutEffect(() => {
-    let frame = 0;
-    const measure = () => {
-      frame = 0;
-      const table = integrityTableRef.current;
-      const header = integrityHeaderRef.current;
-      const headerBlock = integrityStaticHeaderBlockRef.current;
-      const scroller = integrityTableScrollRef.current;
-      if (!table || !header || !headerBlock || !scroller) {
-        setFloatingIntegrityHeader((prev) => prev.visible ? { ...prev, visible: false } : prev);
-        return;
-      }
-      const tableRect = table.getBoundingClientRect();
-      const headerRect = header.getBoundingClientRect();
-      const headerBlockRect = headerBlock.getBoundingClientRect();
-      const scrollerRect = scroller.getBoundingClientRect();
-      const topbar = document.querySelector(".cb-topbar");
-      const topbarRect = topbar?.getBoundingClientRect?.();
-      const top = Math.max(0, topbarRect && topbarRect.bottom > 0 ? topbarRect.bottom : 0);
-      // Do not show the floating copy until the complete static header block
-      // (column headings + the synchronized top scrollbar) has left the viewport.
-      // Showing it as soon as only the heading row crosses the top causes the
-      // floating copy to sit over the still-visible static scrollbar/first row.
-      const visible = headerBlockRect.bottom <= top + 0.5 && tableRect.bottom > top + headerBlockRect.height;
-      const next = { visible, left: scrollerRect.left, width: scrollerRect.width, top, scrollLeft: scroller.scrollLeft };
-      setFloatingIntegrityHeader((prev) => (
-        prev.visible === next.visible && Math.abs(prev.left - next.left) < 0.5 && Math.abs(prev.width - next.width) < 0.5 &&
-        Math.abs(prev.top - next.top) < 0.5 && prev.scrollLeft === next.scrollLeft
-      ) ? prev : next);
-    };
-    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(measure); };
-    measure();
-    window.addEventListener("scroll", schedule, true);
-    window.addEventListener("resize", schedule);
-    const scroller = integrityTableScrollRef.current;
-    scroller?.addEventListener("scroll", schedule, { passive: true });
-    return () => {
-      window.removeEventListener("scroll", schedule, true);
-      window.removeEventListener("resize", schedule);
-      scroller?.removeEventListener("scroll", schedule);
-      if (frame) window.cancelAnimationFrame(frame);
-    };
-  }, [rows.length]);
-
-  // When the floating header appears, place its scrollbar at the same horizontal
-  // position as the table/body scrollbar immediately (before the user touches it).
-  useLayoutEffect(() => {
-    const floating = integrityFloatingScrollRef.current;
-    if (floating && floatingIntegrityHeader.visible) {
-      floating.scrollLeft = floatingIntegrityHeader.scrollLeft;
-    }
-  }, [floatingIntegrityHeader.visible]);
 
   return <div>
     <div className="cb-page-head">
@@ -9516,33 +9457,14 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
-        <div ref={integrityStaticHeaderBlockRef} style={{ maxWidth: "100%", overflow: "hidden", background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "8px 8px 0 0" }}>
-          <div style={{ overflow: "hidden", background: "var(--paper)" }}>
-            <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
-              <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-              <thead ref={integrityHeaderRef}><tr>
-                {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
-              </tr></thead>
-            </table>
-          </div>
-          <div
-            ref={integrityTopScrollRef}
-            onScroll={() => syncIntegrityHorizontalScroll("top")}
-            aria-label="Time Integrity horizontal scroll"
-            style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, background: "var(--paper)", borderTop: "1px solid var(--line)" }}
-          >
-            <div style={{ width: integrityTableWidth, height: 1 }} />
-          </div>
-        </div>
-        {floatingIntegrityHeader.visible && createPortal(
+        <div style={{ position: "relative", maxWidth: "100%" }}>
           <div style={{
-            position: "fixed", left: floatingIntegrityHeader.left, top: floatingIntegrityHeader.top, width: floatingIntegrityHeader.width,
-            zIndex: 250, overflow: "hidden", background: "var(--surface)",
-            border: "1px solid var(--line)", borderRadius: "8px 8px 0 0", boxSizing: "border-box",
-            boxShadow: "0 4px 10px rgba(24, 38, 30, 0.14)",
+            position: "sticky", top: 0, zIndex: 120, maxWidth: "100%", overflow: "hidden",
+            background: "var(--surface)", border: "1px solid var(--line)", borderRadius: "8px 8px 0 0",
+            boxShadow: "0 2px 7px rgba(24, 38, 30, 0.10)",
           }}>
-            <div aria-hidden="true" style={{ overflow: "hidden", width: "100%", background: "var(--paper)" }}>
-              <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${floatingIntegrityHeader.scrollLeft}px)` }}>
+            <div style={{ overflow: "hidden", background: "var(--paper)" }}>
+              <table className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed", margin: 0, background: "var(--paper)", transform: `translateX(-${integrityScrollLeft}px)` }}>
                 <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
                 <thead><tr>
                   {integrityHeaders.map(([label, numeric]) => <th key={label} className={numeric ? "num" : undefined} style={{ whiteSpace: "normal", lineHeight: 1.2, verticalAlign: "bottom" }}>{label}</th>)}
@@ -9550,16 +9472,14 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
               </table>
             </div>
             <div
-              ref={integrityFloatingScrollRef}
-              onScroll={() => syncIntegrityHorizontalScroll("floating")}
+              ref={integrityTopScrollRef}
+              onScroll={() => syncIntegrityHorizontalScroll("top")}
               aria-label="Time Integrity horizontal scroll"
-              style={{ overflowX: "auto", overflowY: "hidden", width: "100%", height: 18, background: "var(--paper)", pointerEvents: "auto", borderTop: "1px solid var(--line)" }}
+              style={{ overflowX: "auto", overflowY: "hidden", maxWidth: "100%", height: 18, background: "var(--paper)", borderTop: "1px solid var(--line)" }}
             >
               <div style={{ width: integrityTableWidth, height: 1 }} />
             </div>
-          </div>,
-          document.body
-        )}
+          </div>
         <div ref={integrityTableScrollRef} onScroll={() => syncIntegrityHorizontalScroll("body")} className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%", borderTop: 0, borderRadius: "0 0 8px 8px" }}>
         <table ref={integrityTableRef} className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed" }}>
           <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
@@ -9587,6 +9507,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
           </tr>)}</tbody>
         </table>
       </div>
+        </div>
       </>}
     </>}
     {!error && data === null && <TableSkeleton rows={5} />}
