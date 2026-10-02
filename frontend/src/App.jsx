@@ -10051,6 +10051,28 @@ function ColleaguePickerModal({ title, members, currentUser, initialSeconds, onC
   );
 }
 
+// Build the exact active/no-timer slices represented by a recovery reminder. Completed
+// slices are kept when the screen locks; the current slice resumes from unlock without
+// ever counting the away interval in between.
+function noTrackAlertWindows(alert, endMs = Date.now()) {
+  if (!alert) return [];
+  const completed = Array.isArray(alert.windows)
+    ? alert.windows
+        .map((w) => ({ start: Number(w?.start), end: Number(w?.end) }))
+        .filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+    : [];
+  const since = Number(alert.since);
+  const currentEnd = Number(alert.until || endMs);
+  if (Number.isFinite(since) && Number.isFinite(currentEnd) && currentEnd > since) {
+    completed.push({ start: since, end: currentEnd });
+  }
+  return completed;
+}
+
+function noTrackAlertGapMs(alert, endMs = Date.now()) {
+  return noTrackAlertWindows(alert, endMs).reduce((sum, w) => sum + Math.max(0, w.end - w.start), 0);
+}
+
 // The "no clock running for a while" nudge, entirely separate from the sleep/lock alert
 // above, this fires when the computer has been genuinely active with nothing tracked.
 function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, onHelp }) {
@@ -10063,11 +10085,15 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
   // to first trigger this popup, so this recomputes live rather than using a frozen value
   // from the moment it first appeared.
   const [liveNow, setLiveNow] = useState(Date.now());
+  const [forgotDecisionAt, setForgotDecisionAt] = useState(null);
   useEffect(() => {
     const iv = setInterval(() => setLiveNow(Date.now()), 1000);
     return () => clearInterval(iv);
   }, []);
-  const gapMs = liveNow - alert.since;
+  // Clicking "Yes, I forgot" freezes the amount the person is deciding how to allocate.
+  // Going Back resumes the live view.
+  const effectiveNow = mode === "forgot" && forgotDecisionAt ? forgotDecisionAt : liveNow;
+  const gapMs = noTrackAlertGapMs(alert, effectiveNow);
 
   if (mode === "helped" || mode === "received") {
     return (
@@ -10145,18 +10171,21 @@ function IdleNoTrackModal({ alert, members, currentUser, onSnooze, onStartNew, o
               <button className="cb-btn" disabled={busy} onClick={() => setMode("snooze")}>No</button>
               <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
               <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
-              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={() => setMode("forgot")}>
+              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={() => { setForgotDecisionAt(Date.now()); setMode("forgot"); }}>
                 Yes, I forgot
               </button>
             </>
           )}
           {mode === "forgot" && (
             <>
-              <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={() => setMode("main")}>Back</button>
-              <button className="cb-btn" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs, false); }}>
+              <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={() => { setForgotDecisionAt(null); setMode("main"); }}>Back</button>
+              <button className="cb-btn" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs, false, effectiveNow, []); }}>
                 Start fresh
               </button>
-              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onStartNew(gapMs, true); }}>
+              <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => {
+                setBusy(true);
+                await onStartNew(gapMs, true, effectiveNow, noTrackAlertWindows(alert, effectiveNow));
+              }}>
                 Include {niceDuration(gapMs)}
               </button>
             </>
@@ -11265,15 +11294,46 @@ export default function App() {
     }, 2000);
   }
 
+  function freezeNoTrackWindow(atMs) {
+    const currentAlert = idleNoTrackAlertRef.current;
+    if (!currentAlert?.since || currentAlert.until) return;
+    const freezeAt = Math.max(currentAlert.since, atMs);
+    const completed = noTrackAlertWindows(currentAlert, freezeAt);
+    // Store completed active/no-timer slices separately, then park the live slice at the
+    // freeze instant. This means the lock/away interval itself can never enter the recovery pot.
+    const frozen = { since: freezeAt, until: freezeAt, ...(completed.length ? { windows: completed } : {}) };
+    idleNoTrackAlertRef.current = frozen;
+    setIdleNoTrackAlert(frozen);
+    noTrackHandledRef.current = true;
+  }
+
+  function resumeNoTrackWindow(atMs) {
+    const currentAlert = idleNoTrackAlertRef.current;
+    if (!currentAlert?.since || !currentAlert.until) return;
+    const resumeAt = Math.max(Number(atMs) || Date.now(), currentAlert.until);
+    const resumed = {
+      since: resumeAt,
+      ...(Array.isArray(currentAlert.windows) && currentAlert.windows.length ? { windows: currentAlert.windows } : {}),
+    };
+    idleNoTrackAlertRef.current = resumed;
+    setIdleNoTrackAlert(resumed);
+    noTrackSinceRef.current = resumeAt;
+    noTrackHandledRef.current = true;
+  }
+
   async function reportGap(gapMs, sleepStartMs) {
     if (gapMs < SLEEP_THRESHOLD_MS) return;
     if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
     lastAlertRef.current = Date.now();
     const task = runningTaskRef.current;
+    freezeNoTrackWindow(sleepStartMs);
     const inactivityEventPromise = recordInactivity("sleep_gap", sleepStartMs, sleepStartMs + gapMs, task);
     // If a task was running, cut it off exactly when the machine went away. If no task was
     // running, still preserve the same away period so it can be classified as help or ignored.
     if (task) await pauseTaskAt(task, sleepStartMs);
+    // The heartbeat fallback has now reached the end of the away interval. If a recovery
+    // reminder was active before the gap, resume it here without adding the away duration.
+    resumeNoTrackWindow(sleepStartMs + gapMs);
     showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise);
   }
 
@@ -11388,6 +11448,7 @@ export default function App() {
           // looking at it during a long lock, and nothing is lost if this computer never
           // comes back before someone eventually submits the task.
           lockedSince = Date.now();
+          freezeNoTrackWindow(lockedSince);
           lockedTask = runningTaskRef.current;
           if (lockedTask && Date.now() - lastAlertRef.current >= 5000) {
             lastAlertRef.current = Date.now();
@@ -11401,6 +11462,10 @@ export default function App() {
           lockedTask = null;
           lastAlertRef.current = Date.now();
           const inactivityEventPromise = recordInactivity("screen_locked", sleepStart, sleepStart + gap, task);
+          // The previously-earned recovery amount survives the lock. Resume the same recovery
+          // pot from the moment the screen becomes active again; the lock interval itself stays
+          // exclusively in away/inactivity handling.
+          resumeNoTrackWindow(Date.now());
           showAwayAlert(task, gap, sleepStart, inactivityEventPromise);
         }
       });
@@ -11480,20 +11545,38 @@ export default function App() {
       const saved = sessionStorage.getItem(NO_TRACK_PENDING_KEY);
       if (!saved) return null;
       const parsed = JSON.parse(saved);
-      return Number.isFinite(Number(parsed?.since)) ? { since: Number(parsed.since) } : null;
+      if (!Number.isFinite(Number(parsed?.since))) return null;
+      const windows = Array.isArray(parsed?.windows)
+        ? parsed.windows
+            .map((w) => ({ start: Number(w?.start), end: Number(w?.end) }))
+            .filter((w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start)
+        : [];
+      return {
+        since: Number(parsed.since),
+        ...(Number.isFinite(Number(parsed?.until)) ? { until: Number(parsed.until) } : {}),
+        ...(windows.length ? { windows } : {}),
+      };
     } catch (_) {
       return null;
     }
   });
   const noTrackSinceRef = useRef(idleNoTrackAlert?.since || Date.now());
   const noTrackSnoozeUntilRef = useRef(0);
-  const noTrackHandledRef = useRef(false);
+  const noTrackHandledRef = useRef(!!idleNoTrackAlert);
+  const idleNoTrackAlertRef = useRef(idleNoTrackAlert);
   const forgotToTrackGapMsRef = useRef(null);
+  const forgotToTrackWindowEndMsRef = useRef(null);
+  const forgotToTrackWindowsRef = useRef(null);
   const noTrackBrowserNotificationRef = useRef(null);
 
   useEffect(() => {
+    idleNoTrackAlertRef.current = idleNoTrackAlert;
     try {
-      if (idleNoTrackAlert?.since) sessionStorage.setItem(NO_TRACK_PENDING_KEY, JSON.stringify({ since: idleNoTrackAlert.since }));
+      if (idleNoTrackAlert?.since) sessionStorage.setItem(NO_TRACK_PENDING_KEY, JSON.stringify({
+        since: idleNoTrackAlert.since,
+        ...(idleNoTrackAlert.until ? { until: idleNoTrackAlert.until } : {}),
+        ...(Array.isArray(idleNoTrackAlert.windows) && idleNoTrackAlert.windows.length ? { windows: idleNoTrackAlert.windows } : {}),
+      }));
       else sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
     } catch (_) {
       // Storage can be unavailable in hardened/private browser contexts; the live prompt still works.
@@ -11545,7 +11628,7 @@ export default function App() {
     }
 
     function refreshBrowserNotification() {
-      showNoTrackBrowserNotification(Date.now() - idleNoTrackAlert.since, true);
+      showNoTrackBrowserNotification(noTrackAlertGapMs(idleNoTrackAlert, Date.now()), true);
     }
 
     // The initial 10-minute notification is sent by sendNoTrackNotification above. Start
@@ -11580,17 +11663,34 @@ export default function App() {
         ? isScreenLockedRef.current
         : gap > GAP_TOLERANCE_MS;
       const hasRunningTask = !!runningTaskRef.current;
-      if (hasRunningTask || awayJustNow) {
+      if (hasRunningTask) {
         noTrackSinceRef.current = nowTick;
         noTrackHandledRef.current = false;
         return;
       }
+      if (awayJustNow) {
+        // With the timing-gap fallback, the away period began at the previous successful
+        // check, not when this delayed callback finally woke up. Freeze there so the sleep
+        // gap itself can never leak into the recovery pot. IdleDetector locks are already
+        // frozen by the real lock event above.
+        const awayStartedAt = idleDetectorActiveRef.current ? nowTick : Math.max(0, nowTick - gap);
+        freezeNoTrackWindow(awayStartedAt);
+        noTrackSinceRef.current = nowTick;
+        if (!idleNoTrackAlertRef.current) noTrackHandledRef.current = false;
+        return;
+      }
+      // A recovery reminder that was already visible before a genuine lock/away period remains
+      // frozen at the exact moment the away period began. Do not silently extend that same
+      // recovery window across the away period or create a second reminder behind it.
+      if (idleNoTrackAlertRef.current) return;
       if (nowTick < noTrackSnoozeUntilRef.current) return;
       if (noTrackHandledRef.current) return;
       if (nowTick - noTrackSinceRef.current < NO_TRACK_THRESHOLD_MS) return;
       noTrackHandledRef.current = true;
       const gapMs = nowTick - noTrackSinceRef.current;
-      setIdleNoTrackAlert({ since: noTrackSinceRef.current });
+      const alert = { since: noTrackSinceRef.current };
+      idleNoTrackAlertRef.current = alert;
+      setIdleNoTrackAlert(alert);
       sendNoTrackNotification(gapMs);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, CHECK_MS);
@@ -12204,13 +12304,20 @@ export default function App() {
       recoveredGapMs = gapMs;
       forgotToTrackGapMsRef.current = null;
       try {
-        const recovered = await api.recoverTaskTime(created[0].id, Math.max(1, Math.round(gapMs / 1000)));
+        const windowEndMs = forgotToTrackWindowEndMsRef.current || Date.now();
+        const recovered = await api.recoverTaskTime(
+          created[0].id,
+          Math.max(1, Math.round(gapMs / 1000)),
+          new Date(windowEndMs + clockOffsetRef.current).toISOString(),
+        );
         finalTasks = [recovered, ...created.slice(1)];
         recoveredTask = recovered;
       } catch (err) {
         showToast(err.message || "Could not recover the forgotten time", true);
       }
     }
+    forgotToTrackWindowEndMsRef.current = null;
+    forgotToTrackWindowsRef.current = null;
     setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
     if (recoveredTask) {
@@ -12507,7 +12614,7 @@ export default function App() {
           currentUser={effectiveCurrentUser}
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} onAddClient={addClient}
-          onClose={() => { forgotToTrackGapMsRef.current = null; setShowForgottenRecovery(false); }}
+          onClose={() => { forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; setShowForgottenRecovery(false); }}
           onCreateRecoveryTask={async (payload) => {
             const created = await api.createTask(payload);
             setTasks((prev) => [created, ...prev]);
@@ -12518,7 +12625,17 @@ export default function App() {
             const response = await fetch("/api/tasks/recover-time/batch", {
               method: "POST",
               headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-              body: JSON.stringify({ total_seconds: recoveredSeconds, allocations }),
+              body: JSON.stringify({
+                total_seconds: recoveredSeconds,
+                allocations,
+                window_end_at: new Date((forgotToTrackWindowEndMsRef.current || Date.now()) + clockOffsetRef.current).toISOString(),
+                recovery_windows: Array.isArray(forgotToTrackWindowsRef.current)
+                  ? forgotToTrackWindowsRef.current.map((w) => ({
+                      start: new Date(w.start + clockOffsetRef.current).toISOString(),
+                      end: new Date(w.end + clockOffsetRef.current).toISOString(),
+                    }))
+                  : undefined,
+              }),
             });
             if (!response.ok) {
               let message = "Could not recover the forgotten time";
@@ -12529,6 +12646,8 @@ export default function App() {
             for (const updated of updatedTasks) mergeTask(updated);
             const recoveredGap = forgotToTrackGapMsRef.current;
             forgotToTrackGapMsRef.current = null;
+            forgotToTrackWindowEndMsRef.current = null;
+            forgotToTrackWindowsRef.current = null;
             setShowForgottenRecovery(false);
             showToast(`${niceDuration(recoveredGap)} recovered across ${updatedTasks.length} task${updatedTasks.length === 1 ? "" : "s"} and flagged as forgotten time`);
             const continueTask = updatedTasks[updatedTasks.length - 1];
@@ -12541,7 +12660,7 @@ export default function App() {
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
           recoveringForgottenTime={forgotToTrackGapMsRef.current != null}
-          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; }} onCreate={createTasks} onAddClient={addClient}
+          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; }} onCreate={createTasks} onAddClient={addClient}
         />
       )}
       {startCountPrompt && (
@@ -12587,7 +12706,7 @@ export default function App() {
           }}
         />
       )}
-      {idleNoTrackAlert && (
+      {idleNoTrackAlert && !sleepAlert && (
         <IdleNoTrackModal
           alert={idleNoTrackAlert}
           members={members}
@@ -12596,12 +12715,16 @@ export default function App() {
             noTrackSnoozeUntilRef.current = Date.now() + snoozeMs;
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
+            idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
           }}
-          onStartNew={async (liveGapMs, includeLostTime = true) => {
+          onStartNew={async (liveGapMs, includeLostTime = true, windowEndMs = Date.now(), recoveryWindows = []) => {
             forgotToTrackGapMsRef.current = includeLostTime ? liveGapMs : null;
+            forgotToTrackWindowEndMsRef.current = includeLostTime ? windowEndMs : null;
+            forgotToTrackWindowsRef.current = includeLostTime ? recoveryWindows : null;
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
+            idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
             if (includeLostTime) setShowForgottenRecovery(true);
             else setShowNewTask(true);
@@ -12610,6 +12733,7 @@ export default function App() {
             await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted, context);
             noTrackSinceRef.current = Date.now();
             noTrackHandledRef.current = false;
+            idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
           }}
         />
