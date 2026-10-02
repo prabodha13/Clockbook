@@ -4141,6 +4141,7 @@ function SettingsView({
   onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onUpdateLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], currentUser = null, onChangeInsightsPermission, onChangeAdditionalPermissions,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false, showDemoModeControls = true,
+  demoAdminPermissions = [], onChangeDemoAdminPermissions = null,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
   onTestForgottenRecovery = null,
 }) {
@@ -4549,8 +4550,18 @@ function SettingsView({
         </div>
       )}
 
-      {realIsSuperAdmin && viewMode === "super_admin" && (() => {
-        const eligibleMembers = members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
+      {realIsSuperAdmin && (viewMode === "super_admin" || viewMode === "admin") && (() => {
+        const isDemoAdminProfile = viewMode === "admin";
+        const demoMember = isDemoAdminProfile && currentUser ? {
+          ...currentUser,
+          role: "admin",
+          additional_permissions: demoAdminPermissions,
+          can_view_leave_capacity_insights: demoAdminPermissions.includes(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY),
+          __demo_admin_profile: true,
+        } : null;
+        const eligibleMembers = isDemoAdminProfile
+          ? (demoMember ? [demoMember] : [])
+          : members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
         const normalizedSearch = permissionSearch.trim().toLowerCase();
         const visibleMembers = normalizedSearch
           ? eligibleMembers.filter((m) => `${m.name} ${roleLabel(m.role)}`.toLowerCase().includes(normalizedSearch))
@@ -4559,9 +4570,14 @@ function SettingsView({
         const selectedPermissions = new Set(selected?.additional_permissions || []);
         if (selected?.can_view_leave_capacity_insights) selectedPermissions.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
         const togglePermission = async (permission, enabled) => {
-          if (!selected || !onChangeAdditionalPermissions) return;
+          if (!selected) return;
           const next = new Set(selectedPermissions);
           if (enabled) next.add(permission); else next.delete(permission);
+          if (isDemoAdminProfile) {
+            if (onChangeDemoAdminPermissions) onChangeDemoAdminPermissions(Array.from(next));
+            return;
+          }
+          if (!onChangeAdditionalPermissions) return;
           await onChangeAdditionalPermissions(selected.id, Array.from(next));
         };
         const checkbox = (permission, label, description, adminOnly = false) => {
@@ -4583,10 +4599,12 @@ function SettingsView({
             </div>
             <div style={SETTINGS_BODY_STYLE}>
               <div className="cb-hint" style={{ marginBottom: 10 }}>
-                Grant selected access without changing someone's role. Only Super Admins can change these permissions. Admin report access always stays within that Admin's normal pod/team scope.
+                {isDemoAdminProfile
+                  ? "Choose the additional permissions your own Admin demo profile should have. These choices are preview-only and do not change your real Super Admin account."
+                  : "Grant selected access without changing someone's role. Only Super Admins can change these permissions. Admin report access always stays within that Admin's normal pod/team scope."}
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", maxWidth: 760 }}>
-                <div className="cb-hint">{eligibleMembers.length} staff/admin account{eligibleMembers.length === 1 ? "" : "s"}</div>
+                <div className="cb-hint">{isDemoAdminProfile ? "Your Admin demo profile" : `${eligibleMembers.length} staff/admin account${eligibleMembers.length === 1 ? "" : "s"}`}</div>
                 <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionListOpen((open) => !open)}>
                   {permissionListOpen ? "Hide staff" : "Show staff"}
                 </button>
@@ -4601,7 +4619,7 @@ function SettingsView({
                     return <div key={member.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 12px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)" }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
-                        <div className="cb-hint">{roleLabel(member.role)} · {count ? `${count} additional permission${count === 1 ? "" : "s"}` : "No additional access"}</div>
+                        <div className="cb-hint">{isDemoAdminProfile ? "Admin demo" : roleLabel(member.role)} · {count ? `${count} additional permission${count === 1 ? "" : "s"}` : "No additional access"}</div>
                       </div>
                       <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionMemberId(member.id)}>Edit permissions</button>
                     </div>;
@@ -4617,13 +4635,15 @@ function SettingsView({
                 <div className="cb-modal-head">
                   <div>
                     <div className="cb-modal-title">Edit permissions</div>
-                    <div className="cb-hint" style={{ marginTop: 2 }}>{selected.name} · {roleLabel(selected.role)}</div>
+                    <div className="cb-hint" style={{ marginTop: 2 }}>{selected.name} · {isDemoAdminProfile ? "Admin demo" : roleLabel(selected.role)}</div>
                   </div>
                   <button type="button" className="cb-icon-btn" onClick={() => setPermissionMemberId("")}><X size={16} /></button>
                 </div>
                 <div className="cb-modal-body">
                   <div className="cb-hint" style={{ marginBottom: 12 }}>
-                    These permissions add specific access without changing the person's main role. Report access for Admins remains restricted to their normal pod/team scope.
+                    {isDemoAdminProfile
+                      ? "Demo only: use these switches to preview the same delegated access a normal Admin can receive. Your real Super Admin permissions are unchanged."
+                      : "These permissions add specific access without changing the person's main role. Report access for Admins remains restricted to their normal pod/team scope."}
                   </div>
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "4px 0 6px" }}>Insights</div>
                   {checkbox(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY, integrationStatus.calamari_connected ? "Leave & capacity insights" : "Capacity insights", integrationStatus.calamari_connected ? "View Leave Trends and Capacity & Utilisation in Insights." : "View Capacity & Utilisation in Insights. Leave Trends will appear when Calamari is connected.")}
@@ -10859,6 +10879,14 @@ export default function App() {
       return true;
     }
   });
+  const [demoAdminPermissionsByWorkspace, setDemoAdminPermissionsByWorkspace] = useState(() => {
+    try {
+      const parsed = JSON.parse(localStorage.getItem("clockbook_super_admin_demo_permissions") || "{}");
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch (err) {
+      return {};
+    }
+  });
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
@@ -11209,7 +11237,18 @@ export default function App() {
   const myPinnedTask = myRunningTask || myMostRecentPaused;
   const realIsSuperAdmin = currentUser?.role === "super_admin";
   const effectiveRole = realIsSuperAdmin ? superAdminViewMode : currentUser?.role;
-  const effectiveCurrentUser = currentUser ? { ...currentUser, role: effectiveRole } : null;
+  const demoPermissionWorkspaceKey = activeWorkspaceId || "__default__";
+  const demoAdminPermissions = Array.isArray(demoAdminPermissionsByWorkspace[demoPermissionWorkspaceKey])
+    ? demoAdminPermissionsByWorkspace[demoPermissionWorkspaceKey]
+    : [];
+  const effectiveCurrentUser = currentUser ? {
+    ...currentUser,
+    role: effectiveRole,
+    ...(realIsSuperAdmin && effectiveRole === "admin" ? {
+      additional_permissions: demoAdminPermissions,
+      can_view_leave_capacity_insights: demoAdminPermissions.includes(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY),
+    } : {}),
+  } : null;
   const isAdmin = effectiveCurrentUser ? isAdminRole(effectiveCurrentUser.role) : false;
   const effectiveIsSuperAdmin = effectiveCurrentUser?.role === "super_admin";
   const allowedReportModes = reportModesForMember(effectiveCurrentUser);
@@ -11224,6 +11263,16 @@ export default function App() {
     setSuperAdminViewMode(mode);
     try { localStorage.setItem("clockbook_super_admin_view_mode", mode); } catch (err) {}
     if (mode !== "super_admin" && view === "reports") setView("dashboard");
+  }
+
+  function changeDemoAdminPermissions(permissions) {
+    if (!realIsSuperAdmin) return;
+    const unique = Array.from(new Set((Array.isArray(permissions) ? permissions : []).filter(Boolean)));
+    setDemoAdminPermissionsByWorkspace((current) => {
+      const next = { ...current, [demoPermissionWorkspaceKey]: unique };
+      try { localStorage.setItem("clockbook_super_admin_demo_permissions", JSON.stringify(next)); } catch (err) {}
+      return next;
+    });
   }
 
   function toggleSuperAdminDemoControls() {
@@ -12543,6 +12592,7 @@ export default function App() {
                 members={members} currentUser={effectiveCurrentUser} onChangeInsightsPermission={changeMemberInsightsPermission} onChangeAdditionalPermissions={changeMemberAdditionalPermissions}
                 realIsSuperAdmin={realIsSuperAdmin} viewMode={superAdminViewMode} onViewModeChange={changeSuperAdminViewMode}
                 effectiveIsAdmin={isAdmin} showDemoModeControls={showDemoModeControls}
+                demoAdminPermissions={demoAdminPermissions} onChangeDemoAdminPermissions={changeDemoAdminPermissions}
                 workspaces={workspaces}
                 activeWorkspaceId={activeWorkspaceId}
                 onSwitchWorkspace={switchWorkspace}
