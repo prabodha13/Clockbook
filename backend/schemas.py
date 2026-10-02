@@ -124,6 +124,10 @@ class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=1, max_length=256)
     tenant_id: Optional[str] = Field(default=None, max_length=128)
+    # Browser/device instance is used only to keep one active ClockBook instance per user.
+    # takeover is explicit so a second browser cannot silently kick out the first one.
+    instance_id: Optional[str] = Field(default=None, max_length=128)
+    takeover: bool = False
 
 
 class LoginResponse(BaseModel):

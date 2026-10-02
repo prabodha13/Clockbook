@@ -157,6 +157,10 @@ class Session(TenantScopedMixin, Base):
     token = Column(String, primary_key=True)
     user_id = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     member_id = Column(String, ForeignKey("members.id"), nullable=False)
+    # A browser/device instance identifier lets ClockBook keep one active app instance
+    # per user without tying the account to one device for the whole day.
+    instance_id = Column(String, nullable=True, index=True)
+    last_seen_at = Column(DateTime, default=datetime.utcnow, nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 

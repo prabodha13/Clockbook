@@ -358,6 +358,11 @@ def run_multitenant_migration():
             session_columns = {c["name"] for c in inspect(conn).get_columns("sessions")}
             if "user_id" not in session_columns:
                 conn.execute(text("ALTER TABLE sessions ADD COLUMN user_id VARCHAR"))
+            if "instance_id" not in session_columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN instance_id VARCHAR"))
+            if "last_seen_at" not in session_columns:
+                conn.execute(text("ALTER TABLE sessions ADD COLUMN last_seen_at TIMESTAMP"))
+                conn.execute(text("UPDATE sessions SET last_seen_at = created_at WHERE last_seen_at IS NULL"))
 
         # Promote each legacy login identity to a global User. The Member row remains the
         # tenant-specific profile/role/capacity record, so all existing IDs and UI references stay valid.
@@ -455,6 +460,8 @@ def run_multitenant_migration():
             conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_members_tenant_user_idx ON members (tenant_id, user_id) WHERE user_id IS NOT NULL"))
         if "sessions" in tables:
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_tenant_member ON sessions (tenant_id, member_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_instance_id ON sessions (instance_id)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_sessions_last_seen_at ON sessions (last_seen_at)"))
 
     _log_event("multitenant_migration_ready", default_tenant=AROUND_TENANT_ID)
 
@@ -948,7 +955,11 @@ def verify_password(password, password_hash):
         return False
 
 
-def get_current_member(authorization: str = Header(None), db: Session = Depends(get_db)):
+def get_current_member(
+    authorization: str = Header(None),
+    x_clockbook_instance: str = Header(None, alias="X-ClockBook-Instance"),
+    db: Session = Depends(get_db),
+):
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(401, "Not logged in")
     token = authorization[len("Bearer "):]
@@ -956,7 +967,13 @@ def get_current_member(authorization: str = Header(None), db: Session = Depends(
     session = db.get(models.Session, token)
     if not session or not session.tenant_id:
         raise HTTPException(401, "Session no longer valid, please log in again")
+    # New browser sessions are bound to the instance that created them. Older sessions created
+    # before this feature remain backwards-compatible until their first instance heartbeat.
+    if session.instance_id and x_clockbook_instance and session.instance_id != x_clockbook_instance:
+        raise HTTPException(401, "This ClockBook session is active in another browser instance")
     db.info["tenant_id"] = session.tenant_id
+    db.info["session_token"] = token
+    db.info["clockbook_instance_id"] = x_clockbook_instance
     member = db.query(models.Member).filter(
         models.Member.id == session.member_id,
         models.Member.tenant_id == session.tenant_id,
@@ -1189,6 +1206,33 @@ def elapsed_seconds(segments):
 # Auth
 # ---------------------------------------------------------------
 
+ACTIVE_INSTANCE_WINDOW_SECONDS = 180
+
+def _sessions_for_user(db: Session, user_id: str):
+    return db.query(models.Session).filter(
+        models.Session.user_id == user_id
+    ).execution_options(skip_tenant_scope=True)
+
+def _active_sessions_for_user(db: Session, user_id: str):
+    cutoff = datetime.utcnow() - timedelta(seconds=ACTIVE_INSTANCE_WINDOW_SECONDS)
+    return _sessions_for_user(db, user_id).filter(
+        func.coalesce(models.Session.last_seen_at, models.Session.created_at) >= cutoff
+    ).all()
+
+def _create_single_user_session(db: Session, user_id: str, member_id: str, tenant_id: str, instance_id: str | None, takeover: bool = False):
+    active = _active_sessions_for_user(db, user_id)
+    if active and not takeover:
+        raise HTTPException(409, "ClockBook is already active in another browser or device. Use the existing ClockBook, or choose 'Use ClockBook here instead'.")
+    # One user identity gets one live ClockBook session across every workspace. Stale sessions
+    # are removed automatically; an explicit takeover also revokes a still-active session.
+    _sessions_for_user(db, user_id).delete(synchronize_session=False)
+    token = secrets.token_urlsafe(32)
+    db.add(models.Session(
+        token=token, user_id=user_id, member_id=member_id, tenant_id=tenant_id, instance_id=(instance_id or None),
+        last_seen_at=datetime.utcnow(),
+    ))
+    return token
+
 @app.get("/api/auth/status")
 def auth_status(db: Session = Depends(get_db)):
     any_secured = db.query(models.User).filter(models.User.password_hash.isnot(None), models.User.status == "active").count()
@@ -1229,8 +1273,7 @@ def claim_account(payload: schemas.ClaimAccountRequest, request: Request, db: Se
         db.add(member)
     db.commit()
     db.refresh(member)
-    token = secrets.token_urlsafe(32)
-    db.add(models.Session(token=token, user_id=user.id, member_id=member.id))
+    token = _create_single_user_session(db, user.id, member.id, member.tenant_id, getattr(payload, "instance_id", None), takeover=True)
     db.add(models.LoginEvent(member_id=member.id))
     db.commit()
     return schemas.LoginResponse(token=token, member=member)
@@ -1258,8 +1301,9 @@ def login(payload: schemas.LoginRequest, request: Request, db: Session = Depends
     if member is None:
         raise HTTPException(409, "Choose a workspace before signing in")
     db.info["tenant_id"] = tenant_id
-    token = secrets.token_urlsafe(32)
-    db.add(models.Session(token=token, user_id=user.id, member_id=member.id))
+    token = _create_single_user_session(
+        db, user.id, member.id, member.tenant_id, getattr(payload, "instance_id", None), takeover=bool(getattr(payload, "takeover", False))
+    )
     db.add(models.LoginEvent(member_id=member.id))
     db.commit()
     return schemas.LoginResponse(token=token, member=member)
@@ -1292,6 +1336,22 @@ def logout(authorization: str = Header(None), db: Session = Depends(get_db)):
 @app.get("/api/auth/me", response_model=schemas.MemberOut)
 def get_me(current_member: models.Member = Depends(get_current_member)):
     return current_member
+
+
+@app.post("/api/auth/instance-heartbeat")
+def instance_heartbeat(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    token = db.info.get("session_token")
+    session = db.get(models.Session, token) if token else None
+    if not session:
+        raise HTTPException(401, "Session no longer valid, please log in again")
+    instance_id = db.info.get("clockbook_instance_id")
+    if session.instance_id and instance_id and session.instance_id != instance_id:
+        raise HTTPException(401, "This ClockBook session is active in another browser instance")
+    if not session.instance_id and instance_id:
+        session.instance_id = instance_id
+    session.last_seen_at = datetime.utcnow()
+    db.commit()
+    return {"ok": True}
 
 
 @app.get("/api/auth/workspaces")
@@ -1375,12 +1435,15 @@ def switch_workspace(tenant_id: str, authorization: str = Header(None), current_
         raise HTTPException(401, "Not logged in")
     old_token = authorization[len("Bearer "):]
     old_session = db.get(models.Session, old_token)
-    if old_session:
-        db.delete(old_session)
-        db.flush()
+    instance_id = old_session.instance_id if old_session else db.info.get("clockbook_instance_id")
+    _sessions_for_user(db, current_member.user_id).delete(synchronize_session=False)
+    db.flush()
     db.info["tenant_id"] = tenant_id
     new_token = secrets.token_urlsafe(32)
-    db.add(models.Session(token=new_token, user_id=current_member.user_id, member_id=target.id))
+    db.add(models.Session(
+        token=new_token, user_id=current_member.user_id, member_id=target.id,
+        instance_id=instance_id, last_seen_at=datetime.utcnow(),
+    ))
     db.add(models.LoginEvent(member_id=target.id))
     db.commit()
     return schemas.LoginResponse(token=new_token, member=target)
