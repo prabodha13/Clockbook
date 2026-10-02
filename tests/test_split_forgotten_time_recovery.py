@@ -89,3 +89,192 @@ def test_split_forgotten_time_recovery_is_contiguous_audited_and_atomic():
         assert len(batch_events) == 2
     finally:
         db.close()
+
+
+def test_recovery_window_can_freeze_before_later_away_period():
+    """Submitting after unlock must keep recovery before the lock, not slide it across away time."""
+    from datetime import timedelta
+
+    tenant_id = "tenant_recovery_freeze"
+    db = database.SessionLocal()
+    try:
+        db.info["skip_tenant_scope"] = True
+        tenant = models.Tenant(id=tenant_id, name="Recovery freeze", slug=tenant_id)
+        db.add(tenant)
+        user = models.User(email="recovery-freeze@example.com", password_hash="x", default_tenant_id=tenant_id)
+        db.add(user)
+        db.flush()
+        member = models.Member(
+            tenant_id=tenant_id, user_id=user.id, name="Recovery Freeze",
+            email=user.email, role="member", timezone_name="Asia/Colombo",
+        )
+        db.add(member)
+        db.flush()
+        client = models.Client(tenant_id=tenant_id, name="Internal", code="FREEZE")
+        db.add(client)
+        db.flush()
+        task = models.TaskInstance(
+            tenant_id=tenant_id, client_id=client.id, client_name=client.name, name="Frozen recovery",
+            owner_id=member.id, status="todo", segments=[], created_at=datetime.utcnow(),
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+        window_end = datetime.utcnow() - timedelta(minutes=5)
+        db.add(models.InactivityEvent(
+            tenant_id=tenant_id, member_id=member.id, kind="screen_locked",
+            started_at=window_end, ended_at=window_end + timedelta(minutes=5),
+            seconds=300, task_id=None,
+        ))
+        db.commit()
+
+        db.info.pop("skip_tenant_scope", None)
+        db.info["tenant_id"] = tenant_id
+        updated = main.recover_task_time_batch(
+            {
+                "total_seconds": 600,
+                "window_end_at": window_end.isoformat() + "Z",
+                "allocations": [{"task_id": task_id, "seconds": 600}],
+            },
+            current_member=member,
+            db=db,
+        )
+
+        segment = updated[0].segments[-1]
+        assert segment["source"] == "forgotten_time_recovery"
+        assert abs((main.parse_utc_naive(segment["end"]) - window_end).total_seconds()) < 0.01
+    finally:
+        db.close()
+
+
+def test_recovery_rejects_overlap_with_recorded_away_time():
+    from datetime import timedelta
+    from fastapi import HTTPException
+
+    tenant_id = "tenant_recovery_away_overlap"
+    db = database.SessionLocal()
+    try:
+        db.info["skip_tenant_scope"] = True
+        tenant = models.Tenant(id=tenant_id, name="Recovery overlap", slug=tenant_id)
+        db.add(tenant)
+        user = models.User(email="recovery-overlap@example.com", password_hash="x", default_tenant_id=tenant_id)
+        db.add(user)
+        db.flush()
+        member = models.Member(
+            tenant_id=tenant_id, user_id=user.id, name="Recovery Overlap",
+            email=user.email, role="member", timezone_name="Asia/Colombo",
+        )
+        db.add(member)
+        db.flush()
+        client = models.Client(tenant_id=tenant_id, name="Internal", code="OVERLAP")
+        db.add(client)
+        db.flush()
+        task = models.TaskInstance(
+            tenant_id=tenant_id, client_id=client.id, client_name=client.name, name="Overlap recovery",
+            owner_id=member.id, status="todo", segments=[], created_at=datetime.utcnow(),
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+        window_end = datetime.utcnow()
+        db.add(models.InactivityEvent(
+            tenant_id=tenant_id, member_id=member.id, kind="screen_locked",
+            started_at=window_end - timedelta(minutes=4),
+            ended_at=window_end - timedelta(minutes=2),
+            seconds=120, task_id=None,
+        ))
+        db.commit()
+
+        db.info.pop("skip_tenant_scope", None)
+        db.info["tenant_id"] = tenant_id
+        try:
+            main.recover_task_time_batch(
+                {
+                    "total_seconds": 600,
+                    "window_end_at": window_end.isoformat() + "Z",
+                    "allocations": [{"task_id": task_id, "seconds": 600}],
+                },
+                current_member=member,
+                db=db,
+            )
+            assert False, "Expected away overlap to be rejected"
+        except HTTPException as exc:
+            assert exc.status_code == 409
+            assert "away time" in exc.detail.lower()
+    finally:
+        db.close()
+
+
+def test_recovery_can_resume_after_away_without_counting_away_time():
+    """One recovery pot may span multiple active slices, but never the away interval between them."""
+    from datetime import timedelta
+
+    tenant_id = "tenant_recovery_resume"
+    db = database.SessionLocal()
+    try:
+        db.info["skip_tenant_scope"] = True
+        tenant = models.Tenant(id=tenant_id, name="Recovery resume", slug=tenant_id)
+        db.add(tenant)
+        user = models.User(email="recovery-resume@example.com", password_hash="x", default_tenant_id=tenant_id)
+        db.add(user)
+        db.flush()
+        member = models.Member(
+            tenant_id=tenant_id, user_id=user.id, name="Recovery Resume",
+            email=user.email, role="member", timezone_name="Asia/Colombo",
+        )
+        db.add(member)
+        db.flush()
+        client = models.Client(tenant_id=tenant_id, name="Internal", code="RESUME")
+        db.add(client)
+        db.flush()
+        task = models.TaskInstance(
+            tenant_id=tenant_id, client_id=client.id, client_name=client.name, name="Resumed recovery",
+            owner_id=member.id, status="todo", segments=[], created_at=datetime.utcnow(),
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+        now = datetime.utcnow()
+        first_start = now - timedelta(minutes=20)
+        first_end = now - timedelta(minutes=8)   # 12 active minutes
+        away_end = now - timedelta(minutes=3)   # 5 away minutes
+        second_end = now                         # 3 more active minutes
+
+        db.add(models.InactivityEvent(
+            tenant_id=tenant_id, member_id=member.id, kind="screen_locked",
+            started_at=first_end, ended_at=away_end,
+            seconds=300, task_id=None,
+        ))
+        db.commit()
+
+        db.info.pop("skip_tenant_scope", None)
+        db.info["tenant_id"] = tenant_id
+        updated = main.recover_task_time_batch(
+            {
+                "total_seconds": 900,
+                "window_end_at": second_end.isoformat() + "Z",
+                "recovery_windows": [
+                    {"start": first_start.isoformat() + "Z", "end": first_end.isoformat() + "Z"},
+                    {"start": away_end.isoformat() + "Z", "end": second_end.isoformat() + "Z"},
+                ],
+                "allocations": [{"task_id": task_id, "seconds": 900}],
+            },
+            current_member=member,
+            db=db,
+        )
+
+        recovery_segments = [s for s in updated[0].segments if s.get("source") == "forgotten_time_recovery"]
+        assert len(recovery_segments) == 2
+        assert round(sum(float(s.get("recovered_seconds") or 0) for s in recovery_segments)) == 900
+        assert main.parse_utc_naive(recovery_segments[0]["end"]) <= first_end
+        assert main.parse_utc_naive(recovery_segments[1]["start"]) >= away_end
+        # The 5-minute lock interval is not part of either recovered segment.
+        for seg in recovery_segments:
+            seg_start = main.parse_utc_naive(seg["start"])
+            seg_end = main.parse_utc_naive(seg["end"])
+            assert not (seg_start < away_end and seg_end > first_end)
+    finally:
+        db.close()
