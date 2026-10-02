@@ -1371,6 +1371,7 @@ function resolvedBankAccountId(row, taskId, clientAccounts) {
 const BUILTIN_HELPING_TASK_TYPE = "Helping/Training";
 const BUILTIN_LEARNING_TASK_TYPE = "Learning & Development";
 const MIN_LEARNING_NOTE_WORDS = 5;
+const MAX_LEARNING_NOTE_WORDS = 40;
 
 function SuggestedTasksReviewModal({ suggestions, clients, templates, roles, taskTypes, bankAccounts, members, currentUser, onClose, onDone, onCreateTasks }) {
   const [rows, setRows] = useState(() =>
@@ -2919,6 +2920,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
   const isLearningTask = effectiveTaskType === BUILTIN_LEARNING_TASK_TYPE;
   const learningNoteWordCount = whatILearned.trim() ? whatILearned.trim().split(/\s+/).filter((word) => /[A-Za-z0-9]/.test(word)).length : 0;
   const learningNoteTooShort = isLearningTask && learningNoteWordCount < MIN_LEARNING_NOTE_WORDS;
+  const learningNoteTooLong = isLearningTask && learningNoteWordCount > MAX_LEARNING_NOTE_WORDS;
   const needsClient = task.client_id === UNASSIGNED_CLIENT_ID && !isLearningTask;
   const [clientId, setClientId] = useState(task.client_id === UNASSIGNED_CLIENT_ID ? "" : task.client_id);
   const total = elapsedSeconds(task, now);
@@ -3088,9 +3090,19 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
               </div>
               <div className="cb-field" style={{ marginBottom: 10 }}>
                 <label className="cb-label">What I Learned *</label>
-                <textarea spellCheck={false} lang="en" className="cb-textarea" rows={3} value={whatILearned} onChange={(e) => setWhatILearned(e.target.value)} placeholder="Capture the useful knowledge so others can find it later." />
-                <div style={{ marginTop: 5, fontSize: 12, color: learningNoteTooShort && whatILearned.trim() ? "var(--danger)" : "var(--ink-faint)" }}>
-                  Minimum {MIN_LEARNING_NOTE_WORDS} words{whatILearned.trim() ? ` · ${learningNoteWordCount} entered` : ""}
+                <textarea
+                  spellCheck={false}
+                  lang="en"
+                  className="cb-textarea"
+                  rows={3}
+                  value={whatILearned}
+                  onChange={(e) => setWhatILearned(e.target.value)}
+                  onPaste={(e) => e.preventDefault()}
+                  onDrop={(e) => e.preventDefault()}
+                  placeholder="Write a short note in your own words."
+                />
+                <div style={{ marginTop: 5, fontSize: 12, color: (learningNoteTooShort && whatILearned.trim()) || learningNoteTooLong ? "var(--danger)" : "var(--ink-faint)" }}>
+                  Paste disabled · {MIN_LEARNING_NOTE_WORDS}–{MAX_LEARNING_NOTE_WORDS} words{whatILearned.trim() ? ` · ${learningNoteWordCount} entered` : ""}
                 </div>
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 12, alignItems: "start" }}>
@@ -3108,7 +3120,7 @@ function CompleteModal({ task, now, roles, taskTypes, clients, learningCategorie
           <button className="cb-btn cb-btn-ghost" onClick={onClose}>Cancel</button>
           <button
             className="cb-btn cb-btn-primary" disabled={busy || (needsClient && !clientId) || (needsCount && endCount === "") || (needsRole && !role) || (needsTaskType && !taskType)
-              || (isLearningTask && (!learningCategory || !learningTopic.trim() || learningNoteTooShort))
+              || (isLearningTask && (!learningCategory || !learningTopic.trim() || learningNoteTooShort || learningNoteTooLong))
               || (periodRequired && (!periodType
                 || (periodType === "daily" && !periodStart)
                 || (periodType === "custom" && (!periodStart || !periodEnd))
