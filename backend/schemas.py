@@ -36,7 +36,7 @@ class MemberOut(BaseModel):
     notification_channel: str = "browser"
     weekly_capacity_hours: float = 40.0
     capacity_effective_from: Optional[date] = None
-    timezone_name: str = "Asia/Colombo"
+    timezone_name: Optional[str] = None
     can_view_leave_capacity_insights: bool = False
     additional_permissions: List[str] = Field(default_factory=list)
     staff_tour_completed: bool = False
@@ -102,7 +102,7 @@ class MemberCapacityUpdate(BaseModel):
 
 
 class MemberTimezoneUpdate(BaseModel):
-    timezone_name: str = Field(min_length=1, max_length=80)
+    timezone_name: Optional[str] = Field(default=None, max_length=80)
     expected_version: int = Field(ge=1)
 
 
@@ -489,6 +489,7 @@ class TaskStart(BaseModel):
 
 class TaskRecoverTime(BaseModel):
     seconds: float = Field(gt=0, le=28800)
+    window_end_at: Optional[datetime] = None
 
 
 class TaskReassign(BaseModel):

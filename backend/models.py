@@ -97,7 +97,9 @@ class Member(TenantScopedMixin, VersionedMixin, Base):
     notification_channel = Column(String, default="browser")
     weekly_capacity_hours = Column(Float, default=40.0)
     capacity_effective_from = Column(Date, default=date.today)
-    timezone_name = Column(String, default="Asia/Colombo")
+    # A member's time zone is intentionally unset until it is explicitly selected.
+    # Server-side consumers already fall back safely where a zone is required.
+    timezone_name = Column(String, nullable=True, default=None)
     can_view_leave_capacity_insights = Column(Boolean, default=False)
     staff_tour_completed = Column(Boolean, default=False)
     additional_permissions = Column(JSON, default=list)

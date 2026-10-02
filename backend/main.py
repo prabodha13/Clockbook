@@ -518,8 +518,12 @@ def run_startup_migrations():
                 # move the date earlier later if historical capacity is genuinely required.
                 conn.execute(text("UPDATE members SET capacity_effective_from = CURRENT_DATE WHERE capacity_effective_from IS NULL"))
             if "timezone_name" not in existing_columns:
-                conn.execute(text("ALTER TABLE members ADD COLUMN timezone_name VARCHAR DEFAULT 'Asia/Colombo'"))
-                conn.execute(text("UPDATE members SET timezone_name = 'Asia/Colombo' WHERE timezone_name IS NULL OR timezone_name = ''"))
+                conn.execute(text("ALTER TABLE members ADD COLUMN timezone_name VARCHAR"))
+            elif engine.dialect.name == "postgresql":
+                # Older deployments created this column with Asia/Colombo as a database
+                # default. Stop silently assigning a location to new members while
+                # preserving every existing member's stored value.
+                conn.execute(text("ALTER TABLE members ALTER COLUMN timezone_name DROP DEFAULT"))
             if "can_view_leave_capacity_insights" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN can_view_leave_capacity_insights BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET can_view_leave_capacity_insights = FALSE WHERE can_view_leave_capacity_insights IS NULL"))
@@ -2762,11 +2766,14 @@ def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate
     if not _member_in_admin_scope(current_member, member):
         raise HTTPException(403, "You cannot change the time zone for that person")
     value = (payload.timezone_name or "").strip()
-    try:
-        ZoneInfo(value)
-    except (ZoneInfoNotFoundError, ValueError):
-        raise HTTPException(400, "Choose a valid IANA time zone")
-    member.timezone_name = value
+    if value:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError):
+            raise HTTPException(400, "Choose a valid IANA time zone")
+        member.timezone_name = value
+    else:
+        member.timezone_name = None
     db.commit()
     db.refresh(member)
     return member
