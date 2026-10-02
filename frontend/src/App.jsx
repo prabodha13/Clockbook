@@ -4550,23 +4550,24 @@ function SettingsView({
         </div>
       )}
 
-      {realIsSuperAdmin && (viewMode === "super_admin" || viewMode === "admin") && (() => {
-        const isDemoAdminProfile = viewMode === "admin";
-        const demoMember = isDemoAdminProfile && currentUser ? {
+      {realIsSuperAdmin && viewMode === "super_admin" && (() => {
+        const demoMember = currentUser ? {
           ...currentUser,
           role: "admin",
           additional_permissions: demoAdminPermissions,
           can_view_leave_capacity_insights: demoAdminPermissions.includes(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY),
           __demo_admin_profile: true,
         } : null;
-        const eligibleMembers = isDemoAdminProfile
-          ? (demoMember ? [demoMember] : [])
-          : members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
+        const eligibleMembers = [
+          ...(demoMember ? [demoMember] : []),
+          ...members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name)),
+        ];
         const normalizedSearch = permissionSearch.trim().toLowerCase();
         const visibleMembers = normalizedSearch
           ? eligibleMembers.filter((m) => `${m.name} ${roleLabel(m.role)}`.toLowerCase().includes(normalizedSearch))
           : eligibleMembers;
         const selected = eligibleMembers.find((m) => m.id === permissionMemberId) || null;
+        const isDemoAdminProfile = !!selected?.__demo_admin_profile;
         const selectedPermissions = new Set(selected?.additional_permissions || []);
         if (selected?.can_view_leave_capacity_insights) selectedPermissions.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
         const togglePermission = async (permission, enabled) => {
@@ -4599,12 +4600,10 @@ function SettingsView({
             </div>
             <div style={SETTINGS_BODY_STYLE}>
               <div className="cb-hint" style={{ marginBottom: 10 }}>
-                {isDemoAdminProfile
-                  ? "Choose the additional permissions your own Admin demo profile should have. These choices are preview-only and do not change your real Super Admin account."
-                  : "Grant selected access without changing someone's role. Only Super Admins can change these permissions. Admin report access always stays within that Admin's normal pod/team scope."}
+                Grant selected access without changing someone's role. Only Super Admins can change these permissions. Your own Admin demo profile is available here for training previews and does not change your real Super Admin account. Admin report access always stays within that Admin's normal pod/team scope.
               </div>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", maxWidth: 760 }}>
-                <div className="cb-hint">{isDemoAdminProfile ? "Your Admin demo profile" : `${eligibleMembers.length} staff/admin account${eligibleMembers.length === 1 ? "" : "s"}`}</div>
+                <div className="cb-hint">{`${eligibleMembers.length} staff/admin profile${eligibleMembers.length === 1 ? "" : "s"}`}</div>
                 <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionListOpen((open) => !open)}>
                   {permissionListOpen ? "Hide staff" : "Show staff"}
                 </button>
@@ -4619,7 +4618,7 @@ function SettingsView({
                     return <div key={member.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 12px", borderTop: index ? "1px solid var(--border)" : "none", background: "var(--surface)" }}>
                       <div style={{ minWidth: 0 }}>
                         <div style={{ fontSize: 13.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{member.name}</div>
-                        <div className="cb-hint">{isDemoAdminProfile ? "Admin demo" : roleLabel(member.role)} · {count ? `${count} additional permission${count === 1 ? "" : "s"}` : "No additional access"}</div>
+                        <div className="cb-hint">{member.__demo_admin_profile ? "Admin demo" : roleLabel(member.role)} · {count ? `${count} additional permission${count === 1 ? "" : "s"}` : "No additional access"}</div>
                       </div>
                       <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionMemberId(member.id)}>Edit permissions</button>
                     </div>;
