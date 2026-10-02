@@ -8142,11 +8142,13 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                 <div style={{ width: 180, minWidth: 180 }}>
                   <SearchableSelect
                     options={timezoneOptions}
-                    value={m.timezone_name || "Asia/Colombo"}
-                    onChange={(value) => value && value !== (m.timezone_name || "Asia/Colombo") && onChangeTimezone(m.id, value)}
-                    placeholder="Search time zones..."
+                    value={m.timezone_name || ""}
+                    onChange={(value) => value !== (m.timezone_name || "") && onChangeTimezone(m.id, value)}
+                    placeholder="Select time zone..."
                     getLabel={(z) => z.name}
                     viewportAware
+                    allowClear
+                    clearLabel="Not set"
                   />
                 </div>
               )}
@@ -8442,7 +8444,7 @@ function HelpReportView() {
 
   function HelpTrendChart({ rows = [], compact = false }) {
     if (!rows.length) return <div className="cb-empty">No help activity in this period.</div>;
-    const width = 760, height = compact ? 150 : 220, padL = 46, padR = 18, padT = 18, padB = compact ? 28 : 36;
+    const width = compact ? 760 : 980, height = compact ? 150 : 220, padL = 46, padR = 18, padT = 18, padB = compact ? 28 : 36;
     const maxValue = Math.max(1, ...rows.flatMap((r) => [Number(r.helped_seconds || 0), Number(r.received_seconds || 0)]));
     const plotW = width - padL - padR, plotH = height - padT - padB;
     const x = (i) => padL + (rows.length === 1 ? plotW / 2 : (i / (rows.length - 1)) * plotW);
@@ -8450,7 +8452,7 @@ function HelpReportView() {
     const points = (key) => rows.map((r, i) => `${x(i)},${y(r[key])}`).join(" ");
     const maxLabels = compact ? 6 : 10;
     const labelEvery = Math.max(1, Math.ceil(rows.length / maxLabels));
-    return <svg viewBox={`0 0 ${width} ${height}`} style={{ width: "100%", height: compact ? 155 : 220, display: "block" }} role="img" aria-label="Recorded help activity trend">
+    return <svg viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMinYMid meet" style={{ width: "100%", height: compact ? 155 : 220, display: "block" }} role="img" aria-label="Recorded help activity trend">
       {[0, .25, .5, .75, 1].map((f) => { const yy = padT + plotH - plotH * f; return <g key={f}><line x1={padL} x2={width-padR} y1={yy} y2={yy} stroke="#E7ECF2"/><text x="2" y={yy+4} fontSize="9" fill="#718096">{formatHM(maxValue*f)}</text></g>; })}
       <polyline fill="none" stroke="#245C43" strokeWidth="2.5" points={points("helped_seconds")}/><polyline fill="none" stroke="#2467D7" strokeWidth="2.5" points={points("received_seconds")}/>{rows.map((r, i) => <g key={r.period_start}><circle cx={x(i)} cy={y(r.helped_seconds)} r="3" fill="#245C43"/><circle cx={x(i)} cy={y(r.received_seconds)} r="3" fill="#2467D7"/>{(i % labelEvery === 0 || i === rows.length - 1) && <text x={x(i)} y={height-9} textAnchor="middle" fontSize="8.8" fill="#718096">{new Date(`${r.period_start}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</text>}</g>)}
     </svg>;
@@ -11917,7 +11919,7 @@ export default function App() {
       const updated = await api.updateMemberTimezone(memberId, timezoneName, current?.version || 1);
       setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
       if (updated.id === currentUser.id) setCurrentUser(updated);
-      showToast(`Time zone updated: ${updated.timezone_name}`);
+      showToast(updated.timezone_name ? `Time zone updated: ${updated.timezone_name}` : "Time zone cleared");
     } catch (err) {
       showToast(err.message, true);
     }
