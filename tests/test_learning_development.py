@@ -83,6 +83,19 @@ def test_ld_can_start_without_fields_but_completion_requires_learning_details():
         assert too_short.value.status_code == 400
         assert "at least 5 words" in too_short.value.detail
 
+        with pytest.raises(HTTPException) as too_long:
+            main.submit_task(
+                task.id,
+                schemas.TaskSubmit(
+                    learning_category="Tax",
+                    learning_topic="Close company surcharge",
+                    what_i_learned=" ".join([f"word{i}" for i in range(41)]),
+                ),
+                current_member=member, db=s,
+            )
+        assert too_long.value.status_code == 400
+        assert "no more than 40 words" in too_long.value.detail
+
         submitted = main.submit_task(
             task.id,
             schemas.TaskSubmit(
