@@ -1,5 +1,15 @@
 const BASE = "/api";
 const TOKEN_KEY = "clockbook-token";
+const INSTANCE_KEY = "clockbook-instance-id";
+
+export function getInstanceId() {
+  let value = sessionStorage.getItem(INSTANCE_KEY);
+  if (!value) {
+    value = (globalThis.crypto?.randomUUID?.() || `cb_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    sessionStorage.setItem(INSTANCE_KEY, value);
+  }
+  return value;
+}
 
 export function getToken() {
   return sessionStorage.getItem(TOKEN_KEY);
@@ -17,6 +27,7 @@ async function request(path, options = {}, timeoutMs = 0) {
   const token = getToken();
   const headers = { "Content-Type": "application/json", ...(options.headers || {}) };
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  headers["X-ClockBook-Instance"] = getInstanceId();
 
   const controller = timeoutMs > 0 ? new AbortController() : null;
   const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
@@ -89,9 +100,10 @@ export const api = {
   getSuggestedTasks: () => request("/calendar/suggested-tasks"),
   dismissSuggestedTask: (eventId) => request(`/calendar/suggested-tasks/${eventId}/dismiss`, { method: "POST" }),
   claimAccount: (payload) => request("/auth/claim", { method: "POST", body: JSON.stringify(payload) }),
-  login: (email, password) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) }),
+  login: (email, password, takeover = false) => request("/auth/login", { method: "POST", body: JSON.stringify({ email, password, takeover: !!takeover, instance_id: getInstanceId() }) }),
   logout: () => request("/auth/logout", { method: "POST" }),
   getMe: () => request("/auth/me"),
+  sendInstanceHeartbeat: () => request("/auth/instance-heartbeat", { method: "POST" }),
   getWorkspaces: () => request("/auth/workspaces"),
   switchWorkspace: (tenantId) => request(`/auth/switch-workspace/${tenantId}`, { method: "POST" }),
   getWorkspaceBranding: () => request("/workspace/branding"),
@@ -200,8 +212,8 @@ export const api = {
     if (startAt) body.start_at = startAt;
     return request(`/tasks/${id}/start`, { method: "POST", body: JSON.stringify(body) }, 8000);
   },
-  recoverTaskTime: (id, seconds) =>
-    request(`/tasks/${id}/recover-time`, { method: "POST", body: JSON.stringify({ seconds }) }),
+  recoverTaskTime: (id, seconds, windowEndAt = null) =>
+    request(`/tasks/${id}/recover-time`, { method: "POST", body: JSON.stringify({ seconds, ...(windowEndAt ? { window_end_at: windowEndAt } : {}) }) }),
   createHelpEvent: (colleagueId, direction, seconds, source, adjusted = false, context = "", inactivityEventId = null) =>
     request("/help-events", { method: "POST", body: JSON.stringify({ colleague_id: colleagueId, direction, seconds, source, adjusted, context, inactivity_event_id: inactivityEventId }) }),
   startAdHocMeeting: (colleagueId = null) =>

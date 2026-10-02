@@ -838,14 +838,17 @@ function LoginScreen({ onLogin }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [activeInstanceConflict, setActiveInstanceConflict] = useState(false);
 
-  async function submit(e) {
+  async function submit(e, takeover = false) {
     e.preventDefault();
     setError("");
     setBusy(true);
     try {
-      await onLogin(email, password);
+      await onLogin(email, password, takeover);
     } catch (err) {
+      const conflict = err?.status === 409 && String(err?.message || "").includes("already active");
+      setActiveInstanceConflict(conflict);
       setError(err.message);
       setBusy(false);
     }
@@ -905,6 +908,17 @@ function LoginScreen({ onLogin }) {
           <button type="submit" className="cb-btn cb-btn-primary" style={{ width: "100%", justifyContent: "center", minHeight: 58, borderRadius: 12, fontSize: 17, fontWeight: 800, background: "linear-gradient(135deg, #2b6b4d 0%, #245c43 100%)", boxShadow: "0 12px 22px rgba(36, 92, 67, 0.18)", borderColor: "#245c43", marginTop: 12 }} disabled={busy}>
             {busy ? "Signing in..." : "Sign in"}
           </button>
+          {activeInstanceConflict && (
+            <button
+              type="button"
+              className="cb-btn"
+              style={{ width: "100%", justifyContent: "center", minHeight: 46, marginTop: 10 }}
+              disabled={busy}
+              onClick={(e) => submit(e, true)}
+            >
+              Use ClockBook here instead
+            </button>
+          )}
         </form>
         <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "26px auto 16px", maxWidth: 530 }}>
           <div style={{ height: 1, flex: 1, background: "#e7edf2" }} />
@@ -4551,22 +4565,25 @@ function SettingsView({
       )}
 
       {realIsSuperAdmin && viewMode === "super_admin" && (() => {
+        // Keep the real staff/admin permissions list exactly as before. The Super Admin's
+        // training/demo profile is separate so it cannot shadow or alter a real member row.
+        const DEMO_ADMIN_PERMISSION_ID = "__clockbook_demo_admin_profile__";
         const demoMember = currentUser ? {
           ...currentUser,
+          id: DEMO_ADMIN_PERMISSION_ID,
           role: "admin",
           additional_permissions: demoAdminPermissions,
           can_view_leave_capacity_insights: demoAdminPermissions.includes(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY),
           __demo_admin_profile: true,
         } : null;
-        const eligibleMembers = [
-          ...(demoMember ? [demoMember] : []),
-          ...members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name)),
-        ];
+        const eligibleMembers = members.filter((m) => m.role !== "super_admin").sort((a, b) => a.name.localeCompare(b.name));
         const normalizedSearch = permissionSearch.trim().toLowerCase();
         const visibleMembers = normalizedSearch
           ? eligibleMembers.filter((m) => `${m.name} ${roleLabel(m.role)}`.toLowerCase().includes(normalizedSearch))
           : eligibleMembers;
-        const selected = eligibleMembers.find((m) => m.id === permissionMemberId) || null;
+        const selected = permissionMemberId === DEMO_ADMIN_PERMISSION_ID
+          ? demoMember
+          : (eligibleMembers.find((m) => m.id === permissionMemberId) || null);
         const isDemoAdminProfile = !!selected?.__demo_admin_profile;
         const selectedPermissions = new Set(selected?.additional_permissions || []);
         if (selected?.can_view_leave_capacity_insights) selectedPermissions.add(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY);
@@ -4602,8 +4619,19 @@ function SettingsView({
               <div className="cb-hint" style={{ marginBottom: 10 }}>
                 Grant selected access without changing someone's role. Only Super Admins can change these permissions. Your own Admin demo profile is available here for training previews and does not change your real Super Admin account. Admin report access always stays within that Admin's normal pod/team scope.
               </div>
+              {demoMember && (
+                <div style={{ border: "1px solid var(--border)", borderRadius: 9, overflow: "hidden", maxWidth: 760, marginBottom: 10 }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 14, padding: "10px 12px", background: "var(--surface)" }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{demoMember.name}</div>
+                      <div className="cb-hint">Admin demo · {permissionCount(demoMember) ? `${permissionCount(demoMember)} additional permission${permissionCount(demoMember) === 1 ? "" : "s"}` : "No additional access"}</div>
+                    </div>
+                    <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionMemberId(DEMO_ADMIN_PERMISSION_ID)}>Edit demo permissions</button>
+                  </div>
+                </div>
+              )}
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", maxWidth: 760 }}>
-                <div className="cb-hint">{`${eligibleMembers.length} staff/admin profile${eligibleMembers.length === 1 ? "" : "s"}`}</div>
+                <div className="cb-hint">{`${eligibleMembers.length} staff/admin account${eligibleMembers.length === 1 ? "" : "s"}`}</div>
                 <button type="button" className="cb-btn cb-btn-sm" onClick={() => setPermissionListOpen((open) => !open)}>
                   {permissionListOpen ? "Hide staff" : "Show staff"}
                 </button>
@@ -10905,6 +10933,10 @@ export default function App() {
   const [meetingTrackPrompt, setMeetingTrackPrompt] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
   const [showGuidedTour, setShowGuidedTour] = useState(false);
+  const [duplicateTabBlocked, setDuplicateTabBlocked] = useState(false);
+  const [localInstanceLeaseEpoch, setLocalInstanceLeaseEpoch] = useState(0);
+  const localTabIdRef = useRef(globalThis.crypto?.randomUUID?.() || `tab_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const localLeaseKeyRef = useRef("");
   const tourAutoOpenedForRef = useRef(null);
 
   // Every timestamp actually saved comes from the server, so what gets recorded is always
@@ -11147,6 +11179,72 @@ export default function App() {
     loadIntegrationStatus();
   }, [authState, loadWorkspaces, loadIntegrationStatus]);
 
+  // Same-browser guard: a fresh local lease prevents two tabs for the same user from
+  // controlling ClockBook at once. The backend session heartbeat below covers other browsers
+  // and devices; this local guard handles duplicated tabs that may initially share sessionStorage.
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser?.email) return;
+    const leaseKey = `clockbook-active-window::${String(currentUser.email).trim().toLowerCase()}`;
+    localLeaseKeyRef.current = leaseKey;
+    const tabId = localTabIdRef.current;
+    let stopped = false;
+
+    const readLease = () => {
+      try { return JSON.parse(localStorage.getItem(leaseKey) || "null"); } catch (_) { return null; }
+    };
+    const writeLease = () => {
+      try { localStorage.setItem(leaseKey, JSON.stringify({ tabId, expiresAt: Date.now() + 12000 })); } catch (_) {}
+    };
+    const current = readLease();
+    if (current?.tabId && current.tabId !== tabId && Number(current.expiresAt || 0) > Date.now()) {
+      setDuplicateTabBlocked(true);
+    } else {
+      setDuplicateTabBlocked(false);
+      writeLease();
+    }
+
+    const iv = setInterval(() => {
+      if (stopped || duplicateTabBlocked) return;
+      const lease = readLease();
+      if (lease?.tabId && lease.tabId !== tabId && Number(lease.expiresAt || 0) > Date.now()) {
+        setDuplicateTabBlocked(true);
+        return;
+      }
+      writeLease();
+    }, 4000);
+    const onStorage = (event) => {
+      if (event.key !== leaseKey || !event.newValue) return;
+      try {
+        const lease = JSON.parse(event.newValue);
+        if (lease?.tabId && lease.tabId !== tabId && Number(lease.expiresAt || 0) > Date.now()) setDuplicateTabBlocked(true);
+      } catch (_) {}
+    };
+    window.addEventListener("storage", onStorage);
+    return () => {
+      stopped = true;
+      clearInterval(iv);
+      window.removeEventListener("storage", onStorage);
+      try {
+        const lease = readLease();
+        if (lease?.tabId === tabId) localStorage.removeItem(leaseKey);
+      } catch (_) {}
+    };
+  }, [authState, currentUser?.email, localInstanceLeaseEpoch, duplicateTabBlocked]);
+
+  // Server-side heartbeat makes a second browser/device sign-in conflict while this instance
+  // is genuinely alive. If the browser crashes or the laptop sleeps, the lease naturally
+  // becomes stale after a few minutes and the user can sign in again without being trapped.
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser || duplicateTabBlocked) return;
+    let cancelled = false;
+    const send = async () => {
+      try { await api.sendInstanceHeartbeat(); } catch (_) { /* normal auth handling deals with revoked sessions */ }
+    };
+    send();
+    const iv = setInterval(() => { if (!cancelled) send(); }, 30000);
+    return () => { cancelled = true; clearInterval(iv); };
+  }, [authState, currentUser?.id, duplicateTabBlocked]);
+
   // Silent presence heartbeat for the Daily start activity report. This is deliberately
   // independent of timer, lock/sleep and notification logic. A missing signal for 3+ hours
   // can be shown to Super Admins as an inferred laptop/browser-off time.
@@ -11169,8 +11267,8 @@ export default function App() {
     })();
   }, [authState, loadAll]);
 
-  async function handleLogin(email, password) {
-    const res = await api.login(email, password);
+  async function handleLogin(email, password, takeover = false) {
+    const res = await api.login(email, password, takeover);
     setToken(res.token);
     setCurrentUser(res.member);
     setAuthState("ready");
@@ -12112,6 +12210,10 @@ export default function App() {
   // A task that tracks a number needs that starting figure once, the first time it is
   // started. Once start_count is set, resuming after a pause skips straight to starting.
   function requestStart(task) {
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) {
+      showToast("Resolve the forgotten-time recovery before starting or resuming a timer.", true);
+      return;
+    }
     if (task.tracks_number_label && task.start_count == null) {
       setStartCountPrompt(task);
     } else {
@@ -12297,6 +12399,11 @@ export default function App() {
   }
 
   async function createQuickMeeting(payload) {
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) {
+      const message = "Resolve the forgotten-time recovery before starting a meeting timer.";
+      showToast(message, true);
+      throw new Error(message);
+    }
     try {
       const result = await api.createQuickMeeting(payload);
       if (result.event_id) {
@@ -12314,6 +12421,11 @@ export default function App() {
   }
 
   async function startAdHocMeeting(colleagueId = null) {
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) {
+      const message = "Resolve the forgotten-time recovery before starting a meeting timer.";
+      showToast(message, true);
+      throw new Error(message);
+    }
     const colleague = colleagueId ? members.find((m) => m.id === colleagueId) : null;
     try {
       await api.startAdHocMeeting(colleagueId);
@@ -12468,6 +12580,32 @@ export default function App() {
   }
   if (authState === "login") {
     return <div className="cb-root" spellCheck={false}><LoginScreen onLogin={handleLogin} /></div>;
+  }
+  if (duplicateTabBlocked && authState === "ready" && currentUser) {
+    return (
+      <div className="cb-root" spellCheck={false}>
+        <div className="cb-center-screen">
+          <div className="cb-welcome" style={{ maxWidth: 520 }}>
+            <div className="cb-welcome-title cb-serif">ClockBook is already open</div>
+            <div className="cb-welcome-sub">Only one active ClockBook window is allowed per user. Use the existing tab, or move the active session to this tab.</div>
+            <button
+              className="cb-btn cb-btn-primary"
+              style={{ width: "100%", justifyContent: "center", marginTop: 14 }}
+              onClick={() => {
+                try {
+                  const key = localLeaseKeyRef.current;
+                  if (key) localStorage.setItem(key, JSON.stringify({ tabId: localTabIdRef.current, expiresAt: Date.now() + 12000 }));
+                } catch (_) {}
+                setDuplicateTabBlocked(false);
+                setLocalInstanceLeaseEpoch((v) => v + 1);
+              }}
+            >
+              Use ClockBook in this tab instead
+            </button>
+          </div>
+        </div>
+      </div>
+    );
   }
   if (dataLoading) {
     return <div className="cb-root" spellCheck={false}><LoadingScreen /></div>;
@@ -12750,7 +12888,14 @@ export default function App() {
       {showManualAddMember && (effectiveCurrentUser?.role === "super_admin" || hasAdditionalPermission(effectiveCurrentUser, ACCESS_PERMISSION.ADD_STAFF_MANUALLY)) && (
         <ManualAddMemberModal onClose={() => setShowManualAddMember(false)} onAdd={addStaffManually} />
       )}
-      {sleepAlert && (
+      {/*
+        An unresolved forgotten-time prompt keeps priority after a lock/away period. The away
+        event and its Windows/browser notification are still created immediately, but its modal
+        waits until the recovery prompt/allocation (or the New Task choice opened from it) has
+        been dealt with. This prevents the away Resume action from jumping ahead of unresolved
+        recovery without changing any underlying away, recovery, timer, or audit records.
+      */}
+      {sleepAlert && !idleNoTrackAlert && !showForgottenRecovery && !showNewTask && (
         <SleepAlertModal
           alert={sleepAlert}
           members={members}
@@ -12769,7 +12914,7 @@ export default function App() {
           }}
         />
       )}
-      {idleNoTrackAlert && !sleepAlert && (
+      {idleNoTrackAlert && (
         <IdleNoTrackModal
           alert={idleNoTrackAlert}
           members={members}
