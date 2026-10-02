@@ -4977,6 +4977,99 @@ def _task_belongs_to_local_work_date(task: models.TaskInstance, member: models.M
     return False
 
 
+
+def _resolve_recovery_window(member, seconds: float, window_end_at=None):
+    """Return an authoritative same-day recovery window.
+
+    window_end_at lets the browser freeze a forgotten-time window at the instant a genuine
+    lock/away period begins, so submitting it after unlock cannot slide that recovery block
+    forward across the away interval. Legacy callers may omit it and keep the existing
+    "ending now" behaviour.
+    """
+    recorded_at = datetime.utcnow()
+    if window_end_at is None:
+        window_end = recorded_at
+    elif isinstance(window_end_at, datetime):
+        window_end = window_end_at.astimezone(timezone.utc).replace(tzinfo=None) if window_end_at.tzinfo else window_end_at
+    else:
+        try:
+            window_end = parse_utc_naive(window_end_at)
+        except Exception:
+            raise HTTPException(400, "window_end_at must be a valid timestamp")
+
+    # Do not allow a client to place a recovery window materially in the future. A few seconds
+    # are tolerated for ordinary browser/server clock skew.
+    if window_end > recorded_at + timedelta(seconds=10):
+        raise HTTPException(400, "Forgotten-time recovery cannot end in the future")
+    if window_end > recorded_at:
+        window_end = recorded_at
+
+    start = window_end - timedelta(seconds=seconds)
+    work_date = _utc_naive_to_local(recorded_at, member).date()
+    if _utc_naive_to_local(window_end, member).date() != work_date or _utc_naive_to_local(start, member).date() != work_date:
+        raise HTTPException(400, "Forgotten time can only be recovered for the current work date")
+    return recorded_at, start, window_end, work_date
+
+
+
+
+def _resolve_recovery_windows(member, total_seconds: float, window_end_at=None, recovery_windows=None):
+    """Resolve one or more active/no-timer recovery slices for the current work date.
+
+    Modern clients may send multiple slices when a recovery reminder was already active, the
+    screen locked, and the same recovery pot later resumed after unlock. The away interval
+    between slices is intentionally excluded. Legacy clients may omit recovery_windows and
+    keep the original single contiguous window behaviour.
+    """
+    if not recovery_windows:
+        recorded_at, start, window_end, work_date = _resolve_recovery_window(member, total_seconds, window_end_at)
+        return recorded_at, [(start, window_end)], work_date
+
+    if not isinstance(recovery_windows, list) or len(recovery_windows) > 50:
+        raise HTTPException(400, "recovery_windows must be a list of up to 50 windows")
+
+    recorded_at = datetime.utcnow()
+    work_date = _utc_naive_to_local(recorded_at, member).date()
+    parsed = []
+    for index, raw in enumerate(recovery_windows):
+        if not isinstance(raw, dict):
+            raise HTTPException(400, f"Recovery window {index + 1} is invalid")
+        try:
+            start = parse_utc_naive(raw.get("start"))
+            end = parse_utc_naive(raw.get("end"))
+        except Exception:
+            raise HTTPException(400, f"Recovery window {index + 1} must have valid start and end timestamps")
+        if end <= start:
+            raise HTTPException(400, f"Recovery window {index + 1} must end after it starts")
+        if end > recorded_at + timedelta(seconds=10):
+            raise HTTPException(400, "Forgotten-time recovery cannot end in the future")
+        if end > recorded_at:
+            end = recorded_at
+        if _utc_naive_to_local(start, member).date() != work_date or _utc_naive_to_local(end, member).date() != work_date:
+            raise HTTPException(400, "Forgotten time can only be recovered for the current work date")
+        parsed.append((start, end))
+
+    parsed.sort(key=lambda row: row[0])
+    for index in range(1, len(parsed)):
+        if parsed[index][0] < parsed[index - 1][1]:
+            raise HTTPException(400, "Recovery windows cannot overlap")
+
+    supported_seconds = sum((end - start).total_seconds() for start, end in parsed)
+    if abs(supported_seconds - float(total_seconds)) > 0.75:
+        raise HTTPException(400, "Recovery windows must add up to the forgotten time")
+
+    return recorded_at, parsed, work_date
+
+def _reject_recovery_away_overlap(db: Session, member_id: str, start: datetime, end: datetime):
+    """Recovery and genuine away/inactivity time are mutually exclusive."""
+    overlap = db.query(models.InactivityEvent.id).filter(
+        models.InactivityEvent.member_id == member_id,
+        models.InactivityEvent.started_at < end,
+        models.InactivityEvent.ended_at > start,
+    ).first()
+    if overlap:
+        raise HTTPException(409, "That forgotten-time period overlaps recorded away time. Refresh and try again.")
+
 @app.post("/api/tasks/{task_id}/recover-time", response_model=schemas.TaskOut)
 def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     """Add a bounded, explicitly-audited block of forgotten time to an existing task.
@@ -4997,15 +5090,10 @@ def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_me
         raise HTTPException(400, "Pause the running task before recovering forgotten time")
 
     seconds = float(payload.seconds)
-    now = datetime.utcnow()
-    start = now - timedelta(seconds=seconds)
-    recovery_date = _utc_naive_to_local(now, current_member).date()
-    recovery_start_date = _utc_naive_to_local(start, current_member).date()
+    now, start, window_end, recovery_date = _resolve_recovery_window(current_member, seconds, payload.window_end_at)
 
     # Forgotten-time recovery is intentionally a same-work-day correction. It must not be
     # used to backfill an older day, and the destination task must belong to today's work.
-    if recovery_start_date != recovery_date:
-        raise HTTPException(400, "Forgotten time can only be recovered for the current work date")
     if not _task_belongs_to_local_work_date(task, current_member, recovery_date):
         raise HTTPException(400, "Forgotten time can only be added to a task from the current work date")
 
@@ -5019,12 +5107,14 @@ def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_me
                 seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
             except Exception:
                 continue
-            if start < seg_end and now > seg_start:
+            if start < seg_end and window_end > seg_start:
                 raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
+
+    _reject_recovery_away_overlap(db, current_member.id, start, window_end)
 
     recovered = {
         "start": start.isoformat() + "Z",
-        "end": now.isoformat() + "Z",
+        "end": window_end.isoformat() + "Z",
         "source": "forgotten_time_recovery",
         "recovered_seconds": round(seconds, 1),
     }
@@ -5106,12 +5196,11 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
         raise HTTPException(400, "Recovery allocations must add up exactly to the forgotten time")
 
     _lock_timer_owner(db, current_member.id)
-    now = datetime.utcnow()
-    start = now - timedelta(seconds=total_seconds)
-    recovery_date = _utc_naive_to_local(now, current_member).date()
-    recovery_start_date = _utc_naive_to_local(start, current_member).date()
-    if recovery_start_date != recovery_date:
-        raise HTTPException(400, "Forgotten time can only be recovered for the current work date")
+    window_end_at = payload.get("window_end_at") if isinstance(payload, dict) else None
+    recovery_windows = payload.get("recovery_windows") if isinstance(payload, dict) else None
+    now, resolved_windows, recovery_date = _resolve_recovery_windows(
+        current_member, total_seconds, window_end_at, recovery_windows
+    )
 
     tasks_by_id = {}
     for task_id, _seconds in allocations:
@@ -5128,30 +5217,34 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
             raise HTTPException(400, "Forgotten time can only be added to tasks from the current work date")
         tasks_by_id[task_id] = task
 
-    # Validate the whole missing window before changing any task.  The split segments will be
-    # contiguous inside this window, so one overlap check protects every allocation at once.
+    # Validate every active/no-timer slice before changing any task. Recovery and genuine
+    # away time are mutually exclusive, and existing tracked segments cannot be overwritten.
     owned_tasks = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id == current_member.id).all()
-    for owned in owned_tasks:
-        for seg in (owned.segments or []):
-            if not isinstance(seg, dict) or not seg.get("start"):
-                continue
-            try:
-                seg_start = parse_utc_naive(seg.get("start"))
-                seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
-            except Exception:
-                continue
-            if start < seg_end and now > seg_start:
-                raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
+    for window_start, window_end in resolved_windows:
+        for owned in owned_tasks:
+            for seg in (owned.segments or []):
+                if not isinstance(seg, dict) or not seg.get("start"):
+                    continue
+                try:
+                    seg_start = parse_utc_naive(seg.get("start"))
+                    seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
+                except Exception:
+                    continue
+                if window_start < seg_end and window_end > seg_start:
+                    raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
+        _reject_recovery_away_overlap(db, current_member.id, window_start, window_end)
 
     batch_id = secrets.token_urlsafe(12)
-    cursor = start
-    planned_segments = []
+    planned_allocations = []
     prior_batch_recovery = 0.0
-    # Snapshot every allocation before mutating any task. This keeps the exact RecordedAt view
-    # deterministic and makes earlier allocations in this same atomic split consume the pool.
+    window_index = 0
+    cursor = resolved_windows[0][0]
+
+    # Snapshot every logical allocation once, but physically place its recovered time only
+    # inside the eligible active/no-timer slices. An allocation may therefore have more than
+    # one recovered segment when a genuine away interval split the recovery pot.
     for index, (task_id, seconds) in enumerate(allocations):
         task = tasks_by_id[task_id]
-        segment_end = cursor + timedelta(seconds=seconds)
         _append_time_integrity_snapshot(
             db, member=current_member, task=task, entry_source="Recovery",
             manual_duration_seconds=seconds,
@@ -5161,22 +5254,55 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
             recovery_batch_id=batch_id, recovery_allocation_index=index,
             additional_prior_recovery_seconds=prior_batch_recovery,
         )
-        planned_segments.append((index, task, seconds, cursor, segment_end))
+
+        remaining = float(seconds)
+        parts = []
+        while remaining > 1e-6:
+            if window_index >= len(resolved_windows):
+                raise HTTPException(400, "Recovery windows do not contain enough active time")
+            window_start, window_end = resolved_windows[window_index]
+            if cursor < window_start or cursor >= window_end:
+                cursor = window_start
+            capacity = max(0.0, (window_end - cursor).total_seconds())
+            if capacity <= 1e-6:
+                window_index += 1
+                if window_index < len(resolved_windows):
+                    cursor = resolved_windows[window_index][0]
+                continue
+            take = min(remaining, capacity)
+            part_end = cursor + timedelta(seconds=take)
+            parts.append((cursor, part_end, take))
+            cursor = part_end
+            remaining -= take
+            if (window_end - cursor).total_seconds() <= 1e-6:
+                window_index += 1
+                if window_index < len(resolved_windows):
+                    cursor = resolved_windows[window_index][0]
+
+        planned_allocations.append((index, task, seconds, parts))
         prior_batch_recovery += seconds
-        cursor = segment_end
 
     touched = []
-    for index, task, seconds, segment_start, segment_end in planned_segments:
-        recovered = {
-            "start": segment_start.isoformat() + "Z",
-            "end": segment_end.isoformat() + "Z",
-            "source": "forgotten_time_recovery",
-            "recovered_seconds": round(seconds, 1),
-            "recovery_batch_id": batch_id,
-            "recovery_allocation_index": index,
-            "recovery_total_seconds": round(total_seconds, 1),
-        }
-        task.segments = [*(task.segments or []), recovered]
+    for index, task, seconds, parts in planned_allocations:
+        new_segments = list(task.segments or [])
+        audit_parts = []
+        for part_start, part_end, part_seconds in parts:
+            recovered = {
+                "start": part_start.isoformat() + "Z",
+                "end": part_end.isoformat() + "Z",
+                "source": "forgotten_time_recovery",
+                "recovered_seconds": round(part_seconds, 1),
+                "recovery_batch_id": batch_id,
+                "recovery_allocation_index": index,
+                "recovery_total_seconds": round(total_seconds, 1),
+            }
+            new_segments.append(recovered)
+            audit_parts.append({
+                "start": recovered["start"],
+                "end": recovered["end"],
+                "seconds": recovered["recovered_seconds"],
+            })
+        task.segments = new_segments
         if not task.owner_id:
             task.owner_id = current_member.id
         if task.status == "todo":
@@ -5190,23 +5316,15 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
             changes={
                 "seconds": round(seconds, 1),
                 "source": "forgotten_time_recovery",
-                "start": recovered["start"],
-                "end": recovered["end"],
+                "start": audit_parts[0]["start"],
+                "end": audit_parts[-1]["end"],
+                "segments": audit_parts,
                 "recovery_batch_id": batch_id,
                 "recovery_allocation_index": index,
                 "recovery_total_seconds": round(total_seconds, 1),
             },
         ))
         touched.append(task)
-
-    # Floating point inputs can leave sub-second drift.  The validation tolerance above is
-    # intentionally tiny; close the final segment exactly at the authoritative server time.
-    if touched:
-        last_task = touched[-1]
-        last_segments = list(last_task.segments or [])
-        if last_segments:
-            last_segments[-1] = {**last_segments[-1], "end": now.isoformat() + "Z"}
-            last_task.segments = last_segments
 
     db.commit()
     for task in touched:
