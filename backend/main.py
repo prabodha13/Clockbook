@@ -5146,10 +5146,35 @@ def _resolve_recovery_windows(member, total_seconds: float, window_end_at=None, 
             raise HTTPException(400, "Recovery windows cannot overlap")
 
     supported_seconds = sum((end - start).total_seconds() for start, end in parsed)
-    if abs(supported_seconds - float(total_seconds)) > 0.75:
+    # The browser allocates recovery in whole seconds while the source windows retain
+    # millisecond precision. A valid whole-second recovery therefore may leave less than
+    # one fractional second unused, but it must never request more time than the windows
+    # actually contain. This avoids a rounded-up request exhausting the final window.
+    fractional_remainder = supported_seconds - float(total_seconds)
+    if fractional_remainder < -1e-6 or fractional_remainder >= 1.0:
         raise HTTPException(400, "Recovery windows must add up to the forgotten time")
 
     return recorded_at, parsed, work_date
+
+def _recovery_boundary_ms(value: datetime) -> datetime:
+    """Compare recovery boundaries at browser timestamp precision.
+
+    JavaScript Date/ISO timestamps preserve milliseconds, while server-created timer segment
+    timestamps may contain additional microseconds. Without normalizing that extra precision,
+    a client round-trip of an exact segment end such as .123456 becomes .123000 and appears to
+    overlap the segment by 456 microseconds. That is not a real time overlap; it is only a
+    serialization precision difference. Genuine overlaps of 1 millisecond or more remain
+    blocked.
+    """
+    return value.replace(microsecond=(value.microsecond // 1000) * 1000)
+
+
+def _recovery_intervals_overlap(start: datetime, end: datetime, other_start: datetime, other_end: datetime) -> bool:
+    return (
+        _recovery_boundary_ms(start) < _recovery_boundary_ms(other_end)
+        and _recovery_boundary_ms(end) > _recovery_boundary_ms(other_start)
+    )
+
 
 def _reject_recovery_away_overlap(db: Session, member_id: str, start: datetime, end: datetime):
     """Recovery and genuine away/inactivity time are mutually exclusive."""
@@ -5198,7 +5223,7 @@ def recover_task_time(task_id: str, payload: schemas.TaskRecoverTime, current_me
                 seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
             except Exception:
                 continue
-            if start < seg_end and window_end > seg_start:
+            if _recovery_intervals_overlap(start, window_end, seg_start, seg_end):
                 raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
 
     _reject_recovery_away_overlap(db, current_member.id, start, window_end)
@@ -5321,7 +5346,7 @@ def recover_task_time_batch(payload: dict, current_member: models.Member = Depen
                     seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now
                 except Exception:
                     continue
-                if window_start < seg_end and window_end > seg_start:
+                if _recovery_intervals_overlap(window_start, window_end, seg_start, seg_end):
                     raise HTTPException(409, "That forgotten-time period overlaps time already tracked. Refresh and try again.")
         _reject_recovery_away_overlap(db, current_member.id, window_start, window_end)
 
