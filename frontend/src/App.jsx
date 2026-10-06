@@ -11565,12 +11565,14 @@ export default function App() {
 
   async function reportGap(gapMs, sleepStartMs) {
     if (gapMs < SLEEP_THRESHOLD_MS) return;
-    // If IdleDetector already knows the screen is locked, it owns this away period.
-    // Do not let the heartbeat fallback create a broader duplicate sleep_gap on unlock,
-    // because that can reach a few seconds before the real lock boundary and overlap a
-    // legitimate forgotten-time recovery slice that was frozen at the actual lock time.
-    if (isScreenLockedRef.current) return;
-    if (Date.now() - lastAlertRef.current < 5000) return; // avoid two detectors firing for the same gap
+    // Once IdleDetector has started successfully it is the sole authority for lock/away
+    // periods. A delayed heartbeat callback can run only after unlock, when screenState is
+    // already back to "unlocked"; checking isScreenLockedRef at that point is therefore too
+    // late and can create a second, broader sleep_gap that reaches backwards into genuine
+    // active/no-timer recovery time. The timing-gap detector is strictly a fallback for
+    // browsers/sessions where IdleDetector is unavailable, denied or failed to start.
+    if (idleDetectorActiveRef.current) return;
+    if (Date.now() - lastAlertRef.current < 5000) return; // avoid two fallback detectors firing for the same gap
     lastAlertRef.current = Date.now();
     const task = runningTaskRef.current;
     freezeNoTrackWindow(sleepStartMs);
