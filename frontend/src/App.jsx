@@ -10869,7 +10869,33 @@ function GuidedTour({ onClose, onSetNewTaskOpen, calendarConnected, karbonConnec
   );
 }
 
+const PENDING_RECOVERY_STORAGE_KEY = "clockbook_pending_forgotten_recovery";
+const PENDING_AWAY_STORAGE_KEY = "clockbook_pending_away_alert";
+const PENDING_MEETING_STORAGE_KEY = "clockbook_pending_meeting_alert";
+
+function readSessionJson(key) {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeSessionJson(key, value) {
+  try {
+    if (value == null) sessionStorage.removeItem(key);
+    else sessionStorage.setItem(key, JSON.stringify(value));
+  } catch (_) {
+    // Session storage can be unavailable in hardened/private browser contexts.
+  }
+}
+
 export default function App() {
+  const pendingRecoveryOnLoadRef = useRef(readSessionJson(PENDING_RECOVERY_STORAGE_KEY));
+  const pendingRecoveryOnLoad = pendingRecoveryOnLoadRef.current;
   const [authState, setAuthState] = useState("loading"); // loading | claim | login | invite | ready
   const [invitationToken, setInvitationToken] = useState(() => {
     try { return new URLSearchParams(window.location.search).get("invite") || ""; } catch (_) { return ""; }
@@ -10920,7 +10946,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
-  const [showForgottenRecovery, setShowForgottenRecovery] = useState(false);
+  const [showForgottenRecovery, setShowForgottenRecovery] = useState(() => Number(pendingRecoveryOnLoad?.gapMs) > 0);
   const [showForgottenRecoveryPreview, setShowForgottenRecoveryPreview] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
   const [showQuickMeeting, setShowQuickMeeting] = useState(false);
@@ -10931,8 +10957,18 @@ export default function App() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [showManualAddMember, setShowManualAddMember] = useState(false);
   const [invitationRefreshKey, setInvitationRefreshKey] = useState(0);
-  const [sleepAlert, setSleepAlert] = useState(null);
-  const [meetingAlert, setMeetingAlert] = useState(null);
+  const [sleepAlert, setSleepAlert] = useState(() => readSessionJson(PENDING_AWAY_STORAGE_KEY));
+  const [meetingAlert, setMeetingAlert] = useState(() => {
+    const saved = readSessionJson(PENDING_MEETING_STORAGE_KEY);
+    if (!saved) return null;
+    // Meeting prompts are time-sensitive. Keep them through refresh/redeploy, but never
+    // resurrect a stale meeting prompt hours later in the same browser session.
+    if (saved.raisedAt && Date.now() - Number(saved.raisedAt) > 2 * 60 * 60 * 1000) {
+      writeSessionJson(PENDING_MEETING_STORAGE_KEY, null);
+      return null;
+    }
+    return saved;
+  });
   const [meetingTrackPrompt, setMeetingTrackPrompt] = useState(null);
   const [alertsBannerDismissed, setAlertsBannerDismissed] = useState(false);
   const [showGuidedTour, setShowGuidedTour] = useState(false);
@@ -11057,6 +11093,26 @@ export default function App() {
     setToast({ msg, isError: !!isError });
     setTimeout(() => setToast(null), 3600);
   }, []);
+
+  // Action-required alerts survive an ordinary refresh/redeploy in this tab until the
+  // person explicitly resolves them. Transient success/error toasts intentionally do not.
+  useEffect(() => {
+    writeSessionJson(PENDING_AWAY_STORAGE_KEY, sleepAlert);
+  }, [sleepAlert]);
+
+  useEffect(() => {
+    writeSessionJson(PENDING_MEETING_STORAGE_KEY, meetingAlert);
+  }, [meetingAlert]);
+
+  function clearAwayAlert() {
+    writeSessionJson(PENDING_AWAY_STORAGE_KEY, null);
+    setSleepAlert(null);
+  }
+
+  function clearMeetingAlert() {
+    writeSessionJson(PENDING_MEETING_STORAGE_KEY, null);
+    setMeetingAlert(null);
+  }
 
   // Checks for a saved login on load. If it is missing or no longer valid, this finds out
   // whether the workspace already has passwords set up (show the login screen) or is being
@@ -11308,6 +11364,10 @@ export default function App() {
       // proceed with a local logout even if the server call fails
     }
     clearToken();
+    writeSessionJson(PENDING_RECOVERY_STORAGE_KEY, null);
+    writeSessionJson(PENDING_AWAY_STORAGE_KEY, null);
+    writeSessionJson(PENDING_MEETING_STORAGE_KEY, null);
+    try { sessionStorage.removeItem(NO_TRACK_PENDING_KEY); } catch (_) {}
     setCurrentUser(null);
     setWorkspaces([]);
     setActiveWorkspaceId("");
@@ -11450,8 +11510,10 @@ export default function App() {
   // Shows the same "you were away" popup and notification as before, kept separate from
   // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
   // person with this once they are actually back to see it
-  function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise = null) {
-    setSleepAlert({ task: task || null, gapMs, sleepStartMs, inactivityEventPromise });
+  function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventId = null, causePhrase = null) {
+    const alert = { task: task || null, gapMs, sleepStartMs, inactivityEventId, ...(causePhrase ? { causePhrase } : {}) };
+    writeSessionJson(PENDING_AWAY_STORAGE_KEY, alert);
+    setSleepAlert(alert);
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
     // delivers it straight to the notification center with no visible toast. Waiting a
     // couple of seconds is an attempt to land just outside that window instead, this is an
@@ -11512,14 +11574,14 @@ export default function App() {
     lastAlertRef.current = Date.now();
     const task = runningTaskRef.current;
     freezeNoTrackWindow(sleepStartMs);
-    const inactivityEventPromise = recordInactivity("sleep_gap", sleepStartMs, sleepStartMs + gapMs, task);
+    const inactivityEventId = await recordInactivity("sleep_gap", sleepStartMs, sleepStartMs + gapMs, task);
     // If a task was running, cut it off exactly when the machine went away. If no task was
     // running, still preserve the same away period so it can be classified as help or ignored.
     if (task) await pauseTaskAt(task, sleepStartMs);
     // The heartbeat fallback has now reached the end of the away interval. If a recovery
     // reminder was active before the gap, resume it here without adding the away duration.
     resumeNoTrackWindow(sleepStartMs + gapMs);
-    showAwayAlert(task, gapMs, sleepStartMs, inactivityEventPromise);
+    showAwayAlert(task, gapMs, sleepStartMs, inactivityEventId);
   }
 
   const wasHiddenSinceLastCheckRef = useRef(false);
@@ -11615,7 +11677,7 @@ export default function App() {
       const detector = new window.IdleDetector();
       let lockedSince = null;
       let lockedTask = null;
-      detector.addEventListener("change", () => {
+      detector.addEventListener("change", async () => {
         // Mirrors the OS-reported lock state into a shared ref, purely additive, read
         // elsewhere (the no-track countdown) as a more reliable signal than inferring sleep
         // from JS timing, since this reflects the real lock state even if this tab itself
@@ -11646,12 +11708,12 @@ export default function App() {
           lockedSince = null;
           lockedTask = null;
           lastAlertRef.current = Date.now();
-          const inactivityEventPromise = recordInactivity("screen_locked", sleepStart, sleepStart + gap, task);
+          const inactivityEventId = await recordInactivity("screen_locked", sleepStart, sleepStart + gap, task);
           // The previously-earned recovery amount survives the lock. Resume the same recovery
           // pot from the moment the screen becomes active again; the lock interval itself stays
           // exclusively in away/inactivity handling.
           resumeNoTrackWindow(Date.now());
-          showAwayAlert(task, gap, sleepStart, inactivityEventPromise);
+          showAwayAlert(task, gap, sleepStart, inactivityEventId);
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
@@ -11749,10 +11811,22 @@ export default function App() {
   const noTrackSnoozeUntilRef = useRef(0);
   const noTrackHandledRef = useRef(!!idleNoTrackAlert);
   const idleNoTrackAlertRef = useRef(idleNoTrackAlert);
-  const forgotToTrackGapMsRef = useRef(null);
-  const forgotToTrackWindowEndMsRef = useRef(null);
-  const forgotToTrackWindowsRef = useRef(null);
+  const forgotToTrackGapMsRef = useRef(Number(pendingRecoveryOnLoad?.gapMs) > 0 ? Number(pendingRecoveryOnLoad.gapMs) : null);
+  const forgotToTrackWindowEndMsRef = useRef(Number.isFinite(Number(pendingRecoveryOnLoad?.windowEndMs)) ? Number(pendingRecoveryOnLoad.windowEndMs) : null);
+  const forgotToTrackWindowsRef = useRef(Array.isArray(pendingRecoveryOnLoad?.recoveryWindows) ? pendingRecoveryOnLoad.recoveryWindows : null);
   const noTrackBrowserNotificationRef = useRef(null);
+
+  function savePendingForgottenRecovery(gapMs, windowEndMs, recoveryWindows) {
+    writeSessionJson(PENDING_RECOVERY_STORAGE_KEY, {
+      gapMs: Number(gapMs) || 0,
+      windowEndMs: Number(windowEndMs) || Date.now(),
+      recoveryWindows: Array.isArray(recoveryWindows) ? recoveryWindows : [],
+    });
+  }
+
+  function clearPendingForgottenRecovery() {
+    writeSessionJson(PENDING_RECOVERY_STORAGE_KEY, null);
+  }
 
   useEffect(() => {
     idleNoTrackAlertRef.current = idleNoTrackAlert;
@@ -11925,8 +11999,8 @@ export default function App() {
       try {
         const updated = await api.pauseTask(task.id, new Date(lastSeen).toISOString());
         mergeTask(updated);
-        const inactivityEventPromise = recordInactivity("stale_gap", lastSeen - clockOffsetRef.current, Date.now(), task);
-        setSleepAlert({ task, gapMs, sleepStartMs: lastSeen, causePhrase: "was closed, shut down, or lost connection", inactivityEventPromise });
+        const inactivityEventId = await recordInactivity("stale_gap", lastSeen - clockOffsetRef.current, Date.now(), task);
+        showAwayAlert(task, gapMs, lastSeen, inactivityEventId, "was closed, shut down, or lost connection");
       } catch (err) {
         // If this fails, the task is still visibly running on the dashboard and the person
         // can pause or adjust it themselves, nothing is silently lost
@@ -11971,7 +12045,9 @@ export default function App() {
         if (meeting && !promptedMeetingIdsRef.current.has(meeting.id)) {
           promptedMeetingIdsRef.current.add(meeting.id);
           savePromptedMeetingIds(promptedMeetingIdsRef.current);
-          setMeetingAlert({ task, summary: meeting.summary, meetingId: meeting.id });
+          const nextMeetingAlert = { task, summary: meeting.summary, meetingId: meeting.id, raisedAt: Date.now() };
+          writeSessionJson(PENDING_MEETING_STORAGE_KEY, nextMeetingAlert);
+          setMeetingAlert(nextMeetingAlert);
           const alertText = `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`;
           let sentViaSlack = false;
           try {
@@ -12502,6 +12578,7 @@ export default function App() {
       const gapMs = forgotToTrackGapMsRef.current;
       recoveredGapMs = gapMs;
       forgotToTrackGapMsRef.current = null;
+      clearPendingForgottenRecovery();
       try {
         const windowEndMs = forgotToTrackWindowEndMsRef.current || Date.now();
         const recovered = await api.recoverTaskTime(
@@ -12512,7 +12589,7 @@ export default function App() {
         finalTasks = [recovered, ...created.slice(1)];
         recoveredTask = recovered;
       } catch (err) {
-        showToast(err.message || "Could not recover the forgotten time", true);
+        showToast("ClockBook couldn't recover this time. Refresh and try again.", true);
       }
     }
     forgotToTrackWindowEndMsRef.current = null;
@@ -12840,7 +12917,7 @@ export default function App() {
           currentUser={effectiveCurrentUser}
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} onAddClient={addClient}
-          onClose={() => { forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; setShowForgottenRecovery(false); }}
+          onClose={() => { forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; clearPendingForgottenRecovery(); setShowForgottenRecovery(false); }}
           onCreateRecoveryTask={async (payload) => {
             const created = await api.createTask(payload);
             setTasks((prev) => [created, ...prev]);
@@ -12864,9 +12941,9 @@ export default function App() {
               }),
             });
             if (!response.ok) {
-              let message = "Could not recover the forgotten time";
-              try { const body = await response.json(); message = body.detail || message; } catch (_) {}
-              throw new Error(message);
+              // Keep backend validation details out of the staff-facing recovery flow. The
+              // integrity guard still blocks invalid recovery; the user only needs a safe retry.
+              throw new Error("ClockBook couldn't recover this time. Refresh and try again.");
             }
             const updatedTasks = await response.json();
             for (const updated of updatedTasks) mergeTask(updated);
@@ -12874,6 +12951,7 @@ export default function App() {
             forgotToTrackGapMsRef.current = null;
             forgotToTrackWindowEndMsRef.current = null;
             forgotToTrackWindowsRef.current = null;
+            clearPendingForgottenRecovery();
             setShowForgottenRecovery(false);
             showToast(`${niceDuration(recoveredGap)} recovered across ${updatedTasks.length} task${updatedTasks.length === 1 ? "" : "s"} and flagged as forgotten time`);
             const continueTask = updatedTasks[updatedTasks.length - 1];
@@ -12886,7 +12964,7 @@ export default function App() {
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
           recoveringForgottenTime={forgotToTrackGapMsRef.current != null}
-          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; }} onCreate={createTasks} onAddClient={addClient}
+          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; clearPendingForgottenRecovery(); }} onCreate={createTasks} onAddClient={addClient}
         />
       )}
       {startCountPrompt && (
@@ -12925,17 +13003,15 @@ export default function App() {
           alert={sleepAlert}
           members={members}
           currentUser={currentUser}
-          onDismiss={() => setSleepAlert(null)}
+          onDismiss={clearAwayAlert}
           onResume={async () => {
             if (sleepAlert.task) requestStart(sleepAlert.task);
-            setSleepAlert(null);
+            clearAwayAlert();
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
-            const inactivityEventId = sleepAlert.inactivityEventPromise
-              ? await sleepAlert.inactivityEventPromise
-              : null;
+            const inactivityEventId = sleepAlert.inactivityEventId || null;
             await logHelpEvent(direction, colleagueId, seconds, "sleep_alert", isAdjusted, context, inactivityEventId);
-            setSleepAlert(null);
+            clearAwayAlert();
           }}
         />
       )}
@@ -12959,8 +13035,16 @@ export default function App() {
             noTrackHandledRef.current = false;
             idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
-            if (includeLostTime) setShowForgottenRecovery(true);
-            else setShowNewTask(true);
+            // Clear the source prompt synchronously before opening the recovery workflow so
+            // an immediate refresh cannot restore both overlays at once.
+            try { sessionStorage.removeItem(NO_TRACK_PENDING_KEY); } catch (_) {}
+            if (includeLostTime) {
+              savePendingForgottenRecovery(liveGapMs, windowEndMs, recoveryWindows);
+              setShowForgottenRecovery(true);
+            } else {
+              clearPendingForgottenRecovery();
+              setShowNewTask(true);
+            }
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
             await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted, context);
@@ -12974,14 +13058,14 @@ export default function App() {
       {meetingAlert && (
         <MeetingAlertModal
           alert={meetingAlert}
-          onDismiss={() => setMeetingAlert(null)}
+          onDismiss={clearMeetingAlert}
           onPause={async () => {
             await pauseTask(meetingAlert.task.id);
-            setMeetingAlert(null);
+            clearMeetingAlert();
           }}
           onTrackMeeting={() => {
             setMeetingTrackPrompt(meetingAlert);
-            setMeetingAlert(null);
+            clearMeetingAlert();
           }}
         />
       )}
