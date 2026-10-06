@@ -12326,6 +12326,22 @@ export default function App() {
     }
   }
 
+  function startNoTrackCountdownFromClosedTask(task) {
+    // Start the no-timer clock from the exact server-confirmed end of the segment that just
+    // closed. The 15-second no-track watcher is only a fallback observer; using its most
+    // recent tick here could make recovery begin a few seconds before the timer actually
+    // stopped, which the backend correctly rejects as overlapping tracked time.
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) return;
+    const segments = Array.isArray(task?.segments) ? task.segments : [];
+    const lastClosed = [...segments].reverse().find((seg) => seg?.end);
+    const serverEndMs = lastClosed?.end ? new Date(lastClosed.end).getTime() : NaN;
+    const localEndMs = Number.isFinite(serverEndMs)
+      ? serverEndMs - clockOffsetRef.current
+      : Date.now();
+    noTrackSinceRef.current = Math.min(Date.now(), Math.max(0, localEndMs));
+    noTrackHandledRef.current = false;
+  }
+
   async function pauseTask(taskId, endAt) {
     if (timerActionPendingRef.current) return;
     timerActionPendingRef.current = { taskId, action: "pause" };
@@ -12339,6 +12355,7 @@ export default function App() {
         openSegmentsRemaining: (updated.segments || []).filter((s) => !s.end).length,
       });
       mergeTask(updated);
+      startNoTrackCountdownFromClosedTask(updated);
     } catch (err) {
       await reconcileTimerAfterUncertainRequest(err);
     } finally {
@@ -12360,9 +12377,11 @@ export default function App() {
   }
 
   async function submitCompletion(taskId, note, endCount, adjustedSeconds, role, taskType, clientId, period, learning) {
+    const wasRunning = tasks.find((task) => task.id === taskId)?.status === "running";
     try {
       const updated = await api.submitTask(taskId, note || "", endCount != null ? endCount : null, adjustedSeconds != null ? adjustedSeconds : null, role, taskType, clientId, period, learning);
       mergeTask(updated);
+      if (wasRunning) startNoTrackCountdownFromClosedTask(updated);
       setCompletingTask(null);
       showToast("Task submitted");
     } catch (err) {
