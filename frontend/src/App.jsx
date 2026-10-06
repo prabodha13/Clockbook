@@ -4091,7 +4091,10 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
         : <div style={{ display: "grid", gap: 12 }}>{libraryRows.map((person) => <div key={person.member_id} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", overflow: "hidden" }}>
             <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "var(--paper-soft)" }}>
               <div><div style={{ fontSize: 17, fontWeight: 800 }}>{person.member_name}</div><div className="cb-hint">{person.relevant_count} relevant learning record{person.relevant_count === 1 ? "" : "s"}</div></div>
-              <div className="cb-hint">Ask this person first if their experience matches what you need.</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "8px 11px", border: "1px solid rgba(36, 92, 67, 0.22)", borderRadius: 8, background: "rgba(36, 92, 67, 0.07)", color: "var(--ink)", maxWidth: 390 }}>
+                <HelpCircle size={16} style={{ color: "var(--green)", flex: "0 0 auto" }} />
+                <div style={{ lineHeight: 1.35 }}><strong style={{ fontWeight: 750 }}>Check with this person first.</strong> <span style={{ color: "var(--ink-soft)" }}>Ask whether their experience matches what you need.</span></div>
+              </div>
             </div>
             <div>{person.records.map((record, i) => <div key={`${record.topic}-${record.learned_at}-${i}`} style={{ padding: "13px 14px", borderBottom: i < person.records.length - 1 ? "1px solid var(--line)" : "none" }}>
               <div style={{ display: "flex", alignItems: "baseline", gap: 9, flexWrap: "wrap" }}><div style={{ fontWeight: 750, fontSize: 15 }}>{record.topic}</div><span style={{ fontSize: 11, padding: "2px 7px", border: "1px solid var(--line)", borderRadius: 999, color: "var(--ink-soft)" }}>{record.category}</span></div>
