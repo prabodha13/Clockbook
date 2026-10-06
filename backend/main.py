@@ -1221,6 +1221,26 @@ def _active_sessions_for_user(db: Session, user_id: str):
 
 def _create_single_user_session(db: Session, user_id: str, member_id: str, tenant_id: str, instance_id: str | None, takeover: bool = False):
     active = _active_sessions_for_user(db, user_id)
+    normalized_instance_id = (instance_id or None)
+
+    # A refresh/redeploy can leave the browser at the login screen while the server still has
+    # that exact browser instance's live session. Re-authenticating from the same instance is
+    # a reconnect, not a competing ClockBook. Reuse the existing token instead of forcing a
+    # takeover or weakening the active-instance timeout. A genuinely different instance still
+    # receives the normal conflict below.
+    if active and not takeover and normalized_instance_id:
+        same_instance = [s for s in active if s.instance_id == normalized_instance_id]
+        other_instances = [s for s in active if s.instance_id != normalized_instance_id]
+        if same_instance and not other_instances:
+            existing = max(same_instance, key=lambda s: (s.last_seen_at or s.created_at or datetime.min))
+            existing.member_id = member_id
+            existing.tenant_id = tenant_id
+            existing.last_seen_at = datetime.utcnow()
+            for session in same_instance:
+                if session.token != existing.token:
+                    db.delete(session)
+            return existing.token
+
     if active and not takeover:
         raise HTTPException(409, "ClockBook is already active in another browser or device. Use the existing ClockBook, or choose 'Use ClockBook here instead'.")
     # One user identity gets one live ClockBook session across every workspace. Stale sessions
@@ -1228,7 +1248,7 @@ def _create_single_user_session(db: Session, user_id: str, member_id: str, tenan
     _sessions_for_user(db, user_id).delete(synchronize_session=False)
     token = secrets.token_urlsafe(32)
     db.add(models.Session(
-        token=token, user_id=user_id, member_id=member_id, tenant_id=tenant_id, instance_id=(instance_id or None),
+        token=token, user_id=user_id, member_id=member_id, tenant_id=tenant_id, instance_id=normalized_instance_id,
         last_seen_at=datetime.utcnow(),
     ))
     return token
