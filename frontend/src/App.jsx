@@ -10958,6 +10958,7 @@ export default function App() {
   const [showManualAddMember, setShowManualAddMember] = useState(false);
   const [invitationRefreshKey, setInvitationRefreshKey] = useState(0);
   const [sleepAlert, setSleepAlert] = useState(() => readSessionJson(PENDING_AWAY_STORAGE_KEY));
+  const postAwayStartTaskRef = useRef(null);
   const [meetingAlert, setMeetingAlert] = useState(() => {
     const saved = readSessionJson(PENDING_MEETING_STORAGE_KEY);
     if (!saved) return null;
@@ -11107,6 +11108,12 @@ export default function App() {
   function clearAwayAlert() {
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, null);
     setSleepAlert(null);
+    // If recovered time was saved while an away check was still waiting, defer the normal
+    // "continue from now" start until that away check is resolved. This avoids showing an
+    // error after a successful recovery and prevents a timer from starting behind the modal.
+    const pendingStart = postAwayStartTaskRef.current;
+    postAwayStartTaskRef.current = null;
+    if (pendingStart) setTimeout(() => requestStart(pendingStart), 0);
   }
 
   function clearMeetingAlert() {
@@ -11523,8 +11530,8 @@ export default function App() {
         try {
           const n = new Notification("Clockbook", {
             body: task
-              ? `Timer for ${task.client_name}: ${task.name} was paused automatically after about ${niceDuration(gapMs)} away.`
-              : `Clockbook detected about ${niceDuration(gapMs)} of away time with no timer running.`,
+              ? `Your timer for ${task.client_name}: ${task.name} was paused while you were away. Review it when you return.`
+              : `ClockBook has a quick time-away check ready for you. Review it when you return.`,
             tag: "clockbook-sleep-alert",
             requireInteraction: true,
           });
@@ -12957,7 +12964,10 @@ export default function App() {
             setShowForgottenRecovery(false);
             showToast(`${niceDuration(recoveredGap)} recovered across ${updatedTasks.length} task${updatedTasks.length === 1 ? "" : "s"} and flagged as forgotten time`);
             const continueTask = updatedTasks[updatedTasks.length - 1];
-            if (continueTask) requestStart(continueTask);
+            if (continueTask) {
+              if (sleepAlert) postAwayStartTaskRef.current = continueTask;
+              else requestStart(continueTask);
+            }
           }}
         />
       )}
