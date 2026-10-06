@@ -278,3 +278,126 @@ def test_recovery_can_resume_after_away_without_counting_away_time():
             assert not (seg_start < away_end and seg_end > first_end)
     finally:
         db.close()
+
+
+def test_recovery_boundary_round_trip_does_not_false_overlap_server_microseconds():
+    """A JS millisecond timestamp representing an exact server segment end must not false-overlap."""
+    from datetime import timedelta
+
+    tenant_id = "tenant_recovery_ms_boundary"
+    db = database.SessionLocal()
+    try:
+        db.info["skip_tenant_scope"] = True
+        tenant = models.Tenant(id=tenant_id, name="Recovery ms boundary", slug=tenant_id)
+        db.add(tenant)
+        user = models.User(email="recovery-ms@example.com", password_hash="x", default_tenant_id=tenant_id)
+        db.add(user)
+        db.flush()
+        member = models.Member(
+            tenant_id=tenant_id, user_id=user.id, name="Recovery Millisecond Boundary",
+            email=user.email, role="member", timezone_name="Asia/Colombo",
+        )
+        db.add(member)
+        db.flush()
+        client = models.Client(tenant_id=tenant_id, name="Internal", code="MSBOUND")
+        db.add(client)
+        db.flush()
+
+        # Simulate a server-created segment end with microsecond precision. A browser Date
+        # round-trip truncates this to milliseconds (.123000).
+        exact_end = datetime.utcnow().replace(microsecond=123456) - timedelta(minutes=11)
+        browser_end = exact_end.replace(microsecond=123000)
+        tracked = models.TaskInstance(
+            tenant_id=tenant_id, client_id=client.id, client_name=client.name, name="Tracked",
+            owner_id=member.id, status="paused",
+            segments=[{
+                "start": (exact_end - timedelta(minutes=5)).isoformat() + "Z",
+                "end": exact_end.isoformat() + "Z",
+            }],
+            created_at=datetime.utcnow(),
+        )
+        recovery_task = models.TaskInstance(
+            tenant_id=tenant_id, client_id=client.id, client_name=client.name, name="Recovery",
+            owner_id=member.id, status="todo", segments=[], created_at=datetime.utcnow(),
+        )
+        db.add_all([tracked, recovery_task])
+        db.commit()
+        recovery_task_id = recovery_task.id
+
+        recovery_end = browser_end + timedelta(minutes=10)
+        db.info.pop("skip_tenant_scope", None)
+        db.info["tenant_id"] = tenant_id
+        updated = main.recover_task_time_batch(
+            {
+                "total_seconds": 600,
+                "recovery_windows": [{
+                    "start": browser_end.isoformat() + "Z",
+                    "end": recovery_end.isoformat() + "Z",
+                }],
+                "allocations": [{"task_id": recovery_task_id, "seconds": 600}],
+            },
+            current_member=member,
+            db=db,
+        )
+
+        recovered = [s for s in updated[0].segments if s.get("source") == "forgotten_time_recovery"]
+        assert len(recovered) == 1
+        assert recovered[0]["start"].startswith(browser_end.isoformat())
+    finally:
+        db.close()
+
+
+def test_recovery_fractional_window_capacity_does_not_fail_whole_second_allocation():
+    """A 600.x second active window should safely support a 600-second recovery allocation."""
+    from datetime import timedelta
+
+    tenant_id = "tenant_recovery_fractional_capacity"
+    db = database.SessionLocal()
+    try:
+        db.info["skip_tenant_scope"] = True
+        tenant = models.Tenant(id=tenant_id, name="Recovery fractional capacity", slug=tenant_id)
+        db.add(tenant)
+        user = models.User(email="recovery-fractional@example.com", password_hash="x", default_tenant_id=tenant_id)
+        db.add(user)
+        db.flush()
+        member = models.Member(
+            tenant_id=tenant_id, user_id=user.id, name="Recovery Fractional",
+            email=user.email, role="member", timezone_name="Asia/Colombo",
+        )
+        db.add(member)
+        db.flush()
+        client = models.Client(tenant_id=tenant_id, name="Internal", code="FRAC")
+        db.add(client)
+        db.flush()
+        task = models.TaskInstance(
+            tenant_id=tenant_id, client_id=client.id, client_name=client.name,
+            name="Fractional capacity recovery", owner_id=member.id,
+            status="todo", segments=[], created_at=datetime.utcnow(),
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+        window_end = datetime.utcnow() - timedelta(seconds=1)
+        window_start = window_end - timedelta(seconds=600, milliseconds=600)
+
+        db.info.pop("skip_tenant_scope", None)
+        db.info["tenant_id"] = tenant_id
+        updated = main.recover_task_time_batch(
+            {
+                "total_seconds": 600,
+                "window_end_at": window_end.isoformat() + "Z",
+                "recovery_windows": [
+                    {"start": window_start.isoformat() + "Z", "end": window_end.isoformat() + "Z"},
+                ],
+                "allocations": [{"task_id": task_id, "seconds": 600}],
+            },
+            current_member=member,
+            db=db,
+        )
+
+        segment = updated[0].segments[-1]
+        assert segment["source"] == "forgotten_time_recovery"
+        assert abs((main.parse_utc_naive(segment["end"]) - main.parse_utc_naive(segment["start"])).total_seconds() - 600) < 0.01
+    finally:
+        db.close()
