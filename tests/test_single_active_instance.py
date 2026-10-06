@@ -58,6 +58,38 @@ def test_active_instance_blocks_second_session_until_explicit_takeover():
         db.close()
 
 
+def test_same_instance_reconnect_reuses_live_session_without_takeover():
+    db = database.SessionLocal()
+    try:
+        db.info["skip_tenant_scope"] = True
+        tenant, user, member = _seed_user(db, "reconnect")
+        first = models.Session(
+            tenant_id=tenant.id,
+            token="single-reconnect-first",
+            user_id=user.id,
+            member_id=member.id,
+            instance_id="browser-same",
+            last_seen_at=datetime.utcnow(),
+        )
+        db.add(first)
+        db.commit()
+
+        token = main._create_single_user_session(
+            db, user.id, member.id, tenant.id, "browser-same", takeover=False
+        )
+        db.commit()
+
+        rows = db.query(models.Session).filter(
+            models.Session.user_id == user.id
+        ).execution_options(skip_tenant_scope=True).all()
+        assert token == "single-reconnect-first"
+        assert len(rows) == 1
+        assert rows[0].instance_id == "browser-same"
+    finally:
+        db.rollback()
+        db.close()
+
+
 def test_stale_instance_does_not_trap_user_out_of_clockbook():
     db = database.SessionLocal()
     try:
