@@ -37,6 +37,7 @@ class MemberOut(BaseModel):
     weekly_capacity_hours: float = 40.0
     capacity_effective_from: Optional[date] = None
     timezone_name: Optional[str] = None
+    work_arrangement: Literal["office", "remote"] = "office"
     can_view_leave_capacity_insights: bool = False
     additional_permissions: List[str] = Field(default_factory=list)
     staff_tour_completed: bool = False
@@ -103,6 +104,15 @@ class MemberCapacityUpdate(BaseModel):
 
 class MemberTimezoneUpdate(BaseModel):
     timezone_name: Optional[str] = Field(default=None, max_length=80)
+    expected_version: int = Field(ge=1)
+
+
+class InitialTimezoneSet(BaseModel):
+    timezone_name: str = Field(min_length=1, max_length=80)
+
+
+class MemberWorkArrangementUpdate(BaseModel):
+    work_arrangement: Literal["office", "remote"]
     expected_version: int = Field(ge=1)
 
 

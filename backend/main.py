@@ -532,6 +532,9 @@ def run_startup_migrations():
                 # default. Stop silently assigning a location to new members while
                 # preserving every existing member's stored value.
                 conn.execute(text("ALTER TABLE members ALTER COLUMN timezone_name DROP DEFAULT"))
+            if "work_arrangement" not in existing_columns:
+                conn.execute(text("ALTER TABLE members ADD COLUMN work_arrangement VARCHAR DEFAULT 'office'"))
+                conn.execute(text("UPDATE members SET work_arrangement = 'office' WHERE work_arrangement IS NULL OR work_arrangement = ''"))
             if "can_view_leave_capacity_insights" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN can_view_leave_capacity_insights BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET can_view_leave_capacity_insights = FALSE WHERE can_view_leave_capacity_insights IS NULL"))
@@ -2840,6 +2843,23 @@ def update_staff_tour(payload: schemas.StaffTourUpdate, current_member: models.M
     return current_member
 
 
+@app.patch("/api/auth/timezone", response_model=schemas.MemberOut)
+def set_initial_timezone(payload: schemas.InitialTimezoneSet, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # One-time self-service setup only. Once a member has a timezone, the existing
+    # admin/super-admin endpoint remains the only way to change it.
+    if (current_member.timezone_name or "").strip():
+        raise HTTPException(403, "Your time zone is managed by an administrator")
+    value = (payload.timezone_name or "").strip()
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise HTTPException(400, "Choose a valid IANA time zone")
+    current_member.timezone_name = value
+    db.commit()
+    db.refresh(current_member)
+    return current_member
+
+
 @app.patch("/api/members/{member_id}/timezone", response_model=schemas.MemberOut)
 def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
@@ -2858,6 +2878,21 @@ def update_member_timezone(member_id: str, payload: schemas.MemberTimezoneUpdate
         member.timezone_name = value
     else:
         member.timezone_name = None
+    db.commit()
+    db.refresh(member)
+    return member
+
+
+@app.patch("/api/members/{member_id}/work-arrangement", response_model=schemas.MemberOut)
+def update_member_work_arrangement(member_id: str, payload: schemas.MemberWorkArrangementUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    member = db.get(models.Member, member_id)
+    if not member:
+        raise HTTPException(404, "Member not found")
+    _require_expected_version(member, payload.expected_version)
+    if not _member_in_admin_scope(current_member, member):
+        raise HTTPException(403, "You cannot change the work arrangement for that person")
+    member.work_arrangement = payload.work_arrangement
     db.commit()
     db.refresh(member)
     return member
