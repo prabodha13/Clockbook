@@ -11438,7 +11438,10 @@ export default function App() {
     writeSessionJson(PENDING_RECOVERY_STORAGE_KEY, null);
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, null);
     writeSessionJson(PENDING_MEETING_STORAGE_KEY, null);
-    try { sessionStorage.removeItem(NO_TRACK_PENDING_KEY); } catch (_) {}
+    try {
+      sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
+      sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY);
+    } catch (_) {}
     setCurrentUser(null);
     setWorkspaces([]);
     setActiveWorkspaceId("");
@@ -11768,7 +11771,12 @@ export default function App() {
           // looking at it during a long lock, and nothing is lost if this computer never
           // comes back before someone eventually submits the task.
           lockedSince = Date.now();
+          const hadRecoveryReminder = !!idleNoTrackAlertRef.current;
           freezeNoTrackWindow(lockedSince);
+          // If the 10-minute reminder had not fired yet, the pre-threshold countdown must
+          // restart only after unlock. Do not let a refresh/redeploy during the lock restore
+          // active time from before the machine was locked.
+          if (!hadRecoveryReminder && !runningTaskRef.current) clearNoTrackCountdownStart();
           lockedTask = runningTaskRef.current;
           if (lockedTask && Date.now() - lastAlertRef.current >= 5000) {
             lastAlertRef.current = Date.now();
@@ -11785,7 +11793,15 @@ export default function App() {
           // The previously-earned recovery amount survives the lock. Resume the same recovery
           // pot from the moment the screen becomes active again; the lock interval itself stays
           // exclusively in away/inactivity handling.
-          resumeNoTrackWindow(Date.now());
+          const returnedAt = Date.now();
+          const hadRecoveryReminder = !!idleNoTrackAlertRef.current;
+          resumeNoTrackWindow(returnedAt);
+          // With no existing recovery reminder, unlock begins a fresh 10-minute active/no-timer
+          // countdown. With an existing reminder, resumeNoTrackWindow() preserves its slices.
+          if (!hadRecoveryReminder && !runningTaskRef.current) {
+            setNoTrackCountdownStart(returnedAt);
+            noTrackHandledRef.current = false;
+          }
           showAwayAlert(task, gap, sleepStart, inactivityEventId);
         }
       });
@@ -11857,6 +11873,7 @@ export default function App() {
 
   const NO_TRACK_THRESHOLD_MS = 10 * 60 * 1000;
   const NO_TRACK_PENDING_KEY = "clockbook_pending_no_track_alert";
+  const NO_TRACK_COUNTDOWN_KEY = "clockbook_no_track_countdown_since";
   const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(() => {
     // Keep an unanswered no-track prompt through a normal browser refresh. Session storage is
     // intentionally used instead of permanent local storage: the prompt belongs to this tab's
@@ -11880,7 +11897,16 @@ export default function App() {
       return null;
     }
   });
-  const noTrackSinceRef = useRef(idleNoTrackAlert?.since || Date.now());
+  const noTrackSinceRef = useRef((() => {
+    if (idleNoTrackAlert?.since) return Number(idleNoTrackAlert.since);
+    try {
+      const saved = Number(sessionStorage.getItem(NO_TRACK_COUNTDOWN_KEY));
+      if (Number.isFinite(saved) && saved > 0 && saved <= Date.now()) return saved;
+    } catch (_) {
+      // Session storage can be unavailable; fall back to a fresh countdown below.
+    }
+    return Date.now();
+  })());
   const noTrackSnoozeUntilRef = useRef(0);
   const noTrackHandledRef = useRef(!!idleNoTrackAlert);
   const idleNoTrackAlertRef = useRef(idleNoTrackAlert);
@@ -11901,19 +11927,55 @@ export default function App() {
     writeSessionJson(PENDING_RECOVERY_STORAGE_KEY, null);
   }
 
+  function setNoTrackCountdownStart(atMs) {
+    const next = Math.min(Date.now(), Math.max(0, Number(atMs) || Date.now()));
+    noTrackSinceRef.current = next;
+    try { sessionStorage.setItem(NO_TRACK_COUNTDOWN_KEY, String(next)); } catch (_) {}
+    return next;
+  }
+
+  function clearNoTrackCountdownStart() {
+    try { sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY); } catch (_) {}
+  }
+
   useEffect(() => {
     idleNoTrackAlertRef.current = idleNoTrackAlert;
     try {
-      if (idleNoTrackAlert?.since) sessionStorage.setItem(NO_TRACK_PENDING_KEY, JSON.stringify({
-        since: idleNoTrackAlert.since,
-        ...(idleNoTrackAlert.until ? { until: idleNoTrackAlert.until } : {}),
-        ...(Array.isArray(idleNoTrackAlert.windows) && idleNoTrackAlert.windows.length ? { windows: idleNoTrackAlert.windows } : {}),
-      }));
-      else sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
+      if (idleNoTrackAlert?.since) {
+        sessionStorage.setItem(NO_TRACK_PENDING_KEY, JSON.stringify({
+          since: idleNoTrackAlert.since,
+          ...(idleNoTrackAlert.until ? { until: idleNoTrackAlert.until } : {}),
+          ...(Array.isArray(idleNoTrackAlert.windows) && idleNoTrackAlert.windows.length ? { windows: idleNoTrackAlert.windows } : {}),
+        }));
+        // Once the reminder exists, its richer persisted state is the source of truth.
+        sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY);
+      } else {
+        sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
+      }
     } catch (_) {
       // Storage can be unavailable in hardened/private browser contexts; the live prompt still works.
     }
   }, [idleNoTrackAlert]);
+
+  // Persist the pre-10-minute countdown too, not just the reminder that appears after
+  // the threshold. This makes a normal refresh/redeploy transparent: five minutes before
+  // the reload plus five minutes after it still produces the reminder at ten minutes.
+  useEffect(() => {
+    if (authState !== "ready" || dataLoading || !currentUser) return;
+    if (myRunningTask) {
+      clearNoTrackCountdownStart();
+      return;
+    }
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) return;
+    try {
+      const saved = Number(sessionStorage.getItem(NO_TRACK_COUNTDOWN_KEY));
+      if (Number.isFinite(saved) && saved > 0) return;
+    } catch (_) {
+      // If storage is unavailable, the live in-memory countdown still works.
+      return;
+    }
+    setNoTrackCountdownStart(noTrackSinceRef.current);
+  }, [authState, dataLoading, currentUser?.id, myRunningTask?.id, showForgottenRecovery]);
 
   function showNoTrackBrowserNotification(gapMs, silent = false) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -11997,6 +12059,7 @@ export default function App() {
       const hasRunningTask = !!runningTaskRef.current;
       if (hasRunningTask) {
         noTrackSinceRef.current = nowTick;
+        clearNoTrackCountdownStart();
         noTrackHandledRef.current = false;
         return;
       }
@@ -12007,8 +12070,10 @@ export default function App() {
         // frozen by the real lock event above.
         const awayStartedAt = idleDetectorActiveRef.current ? nowTick : Math.max(0, nowTick - gap);
         freezeNoTrackWindow(awayStartedAt);
-        noTrackSinceRef.current = nowTick;
-        if (!idleNoTrackAlertRef.current) noTrackHandledRef.current = false;
+        if (!idleNoTrackAlertRef.current) {
+          setNoTrackCountdownStart(nowTick);
+          noTrackHandledRef.current = false;
+        }
         return;
       }
       // A recovery reminder that was already visible before a genuine lock/away period remains
@@ -12022,6 +12087,7 @@ export default function App() {
       const gapMs = nowTick - noTrackSinceRef.current;
       const alert = { since: noTrackSinceRef.current };
       idleNoTrackAlertRef.current = alert;
+      clearNoTrackCountdownStart();
       setIdleNoTrackAlert(alert);
       sendNoTrackNotification(gapMs);
       // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -12429,7 +12495,7 @@ export default function App() {
     const localEndMs = Number.isFinite(serverEndMs)
       ? serverEndMs - clockOffsetRef.current
       : Date.now();
-    noTrackSinceRef.current = Math.min(Date.now(), Math.max(0, localEndMs));
+    setNoTrackCountdownStart(localEndMs);
     noTrackHandledRef.current = false;
   }
 
@@ -13159,7 +13225,7 @@ export default function App() {
           currentUser={currentUser}
           onSnooze={(snoozeMs) => {
             noTrackSnoozeUntilRef.current = Date.now() + snoozeMs;
-            noTrackSinceRef.current = Date.now();
+            setNoTrackCountdownStart(Date.now());
             noTrackHandledRef.current = false;
             idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
@@ -13168,7 +13234,7 @@ export default function App() {
             forgotToTrackGapMsRef.current = includeLostTime ? liveGapMs : null;
             forgotToTrackWindowEndMsRef.current = includeLostTime ? windowEndMs : null;
             forgotToTrackWindowsRef.current = includeLostTime ? recoveryWindows : null;
-            noTrackSinceRef.current = Date.now();
+            setNoTrackCountdownStart(Date.now());
             noTrackHandledRef.current = false;
             idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
@@ -13185,7 +13251,7 @@ export default function App() {
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
             await logHelpEvent(direction, colleagueId, seconds, "idle_prompt", isAdjusted, context);
-            noTrackSinceRef.current = Date.now();
+            setNoTrackCountdownStart(Date.now());
             noTrackHandledRef.current = false;
             idleNoTrackAlertRef.current = null;
             setIdleNoTrackAlert(null);
