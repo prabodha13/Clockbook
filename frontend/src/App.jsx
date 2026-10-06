@@ -9602,15 +9602,10 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
 function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
-  // Keep the away period live until the user classifies or ignores it. This lets someone who
-  // genuinely left their desk to help a colleague see the full elapsed away time rather than
-  // only the frozen duration that existed when the alert was first created.
-  const [liveNow, setLiveNow] = useState(Date.now());
-  useEffect(() => {
-    const iv = setInterval(() => setLiveNow(Date.now()), 1000);
-    return () => clearInterval(iv);
-  }, []);
-  const liveGapMs = Math.max(0, liveNow - alert.sleepStartMs);
+  // The away interval ends when ClockBook detects the return/unlock. Keep that duration fixed
+  // while the person decides how to classify it; time spent resolving this prompt is active
+  // again and must not be added to the earlier away period.
+  const frozenGapMs = Math.max(0, Number(alert.gapMs) || 0);
 
   if (mode === "helped" || mode === "received") {
     return (
@@ -9618,7 +9613,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
         title={mode === "helped" ? "Who did you help?" : "Who helped you?"}
         members={members}
         currentUser={currentUser}
-        initialSeconds={liveGapMs / 1000}
+        initialSeconds={frozenGapMs / 1000}
         onClose={() => setMode("main")}
         onConfirm={(colleagueId, seconds, isAdjusted, context) => onHelp(mode, colleagueId, seconds, isAdjusted, context)}
       />
@@ -9634,7 +9629,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
             This computer looks like it {alert.causePhrase || "was locked or asleep"} for about{" "}
-            <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(liveGapMs)}</strong>.
+            <strong style={{ whiteSpace: "nowrap" }}>{niceDuration(frozenGapMs)}</strong>.
             {alert.task ? (
               <> The timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> was paused when the away period started, so this time was not added to that task.</>
             ) : (
