@@ -10938,7 +10938,24 @@ export default function App() {
   const [showGuidedTour, setShowGuidedTour] = useState(false);
   const [duplicateTabBlocked, setDuplicateTabBlocked] = useState(false);
   const [localInstanceLeaseEpoch, setLocalInstanceLeaseEpoch] = useState(0);
-  const localTabIdRef = useRef(globalThis.crypto?.randomUUID?.() || `tab_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const localTabIdRef = useRef((() => {
+    const storageKey = "clockbook-local-tab-id";
+    let previousId = "";
+    let isReload = false;
+    try { previousId = sessionStorage.getItem(storageKey) || ""; } catch (_) {}
+    try {
+      const navigation = performance.getEntriesByType?.("navigation")?.[0];
+      isReload = navigation?.type === "reload";
+    } catch (_) {}
+    // A real reload is still the same browser tab, so keep its local lease identity.
+    // A duplicated/new tab gets a fresh id even if the browser copied sessionStorage,
+    // preserving the one-active-window rule without falsely blocking ordinary refreshes.
+    const tabId = isReload && previousId
+      ? previousId
+      : (globalThis.crypto?.randomUUID?.() || `tab_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+    try { sessionStorage.setItem(storageKey, tabId); } catch (_) {}
+    return tabId;
+  })());
   const localLeaseKeyRef = useRef("");
   const tourAutoOpenedForRef = useRef(null);
 
