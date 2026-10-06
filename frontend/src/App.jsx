@@ -8036,7 +8036,7 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onChangeWorkArrangement, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
@@ -8199,6 +8199,19 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                     />
                   </label>
                 </div>
+              )}
+              {isAdmin && (
+                <select
+                  className="cb-select"
+                  style={{ width: 118, minWidth: 118, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
+                  value={m.work_arrangement || "office"}
+                  onChange={(e) => onChangeWorkArrangement(m.id, e.target.value)}
+                  aria-label={`Work arrangement for ${m.name}`}
+                  title="Work arrangement"
+                >
+                  <option value="office">Office</option>
+                  <option value="remote">Remote</option>
+                </select>
               )}
               {isAdmin && (
                 <div style={{ width: 180, minWidth: 180 }}>
@@ -9601,6 +9614,7 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
 
 function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
   const [busy, setBusy] = useState(false);
+  const canClassifyColleagueHelp = (currentUser?.work_arrangement || "office") === "office";
   const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
   // The away interval ends when ClockBook detects the return/unlock. Keep that duration fixed
   // while the person decides how to classify it; time spent resolving this prompt is active
@@ -9637,19 +9651,72 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
             )}
           </div>
           <div className="cb-hint" style={{ marginTop: 10 }}>
-            If this time was spent helping a colleague or receiving help, you can record it below. Otherwise choose Ignore and nothing will be logged.
+            {canClassifyColleagueHelp
+              ? "If this time was spent helping a colleague or receiving help, you can record it below. Otherwise choose Ignore and nothing will be logged."
+              : "Choose Ignore to clear this time-away check. Nothing will be logged."}
           </div>
         </div>
         <div className="cb-modal-foot" style={{ flexWrap: "wrap" }}>
           <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onDismiss}>Ignore</button>
-          <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>
-          <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>
+          {canClassifyColleagueHelp && <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>}
+          {canClassifyColleagueHelp && <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>}
           {alert.task && (
             <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onResume(); }}>
               Resume timer
             </button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function InitialTimezoneModal({ currentUser, onConfirm }) {
+  const browserZone = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (_) { return ""; }
+  })();
+  const timezoneOptions = useMemo(() => {
+    let zones = [];
+    try { zones = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []; } catch (_) {}
+    if (!zones.length) zones = ["Asia/Colombo", "Europe/Dublin", "Europe/London", "America/New_York", "America/Toronto", "America/Vancouver", "Australia/Sydney", "Asia/Dubai"];
+    if (browserZone && !zones.includes(browserZone)) zones = [browserZone, ...zones];
+    return zones.map((z) => ({ id: z, name: z.replace(/_/g, " ") }));
+  }, [browserZone]);
+  const [timezoneName, setTimezoneName] = useState(browserZone);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  return (
+    <div className="cb-center-screen">
+      <div className="cb-welcome" style={{ maxWidth: 520 }}>
+        <div className="cb-welcome-title cb-serif">Confirm your time zone</div>
+        <div className="cb-welcome-sub" style={{ marginBottom: 16 }}>
+          ClockBook uses your time zone for work dates, recovery and reporting. Confirm it once to continue. After setup, an Admin or Super Admin can change it if needed.
+        </div>
+        <div className="cb-field" style={{ textAlign: "left" }}>
+          <label className="cb-label">Time zone</label>
+          <SearchableSelect
+            options={timezoneOptions}
+            value={timezoneName}
+            onChange={setTimezoneName}
+            placeholder="Select your time zone..."
+            getLabel={(z) => z.name}
+            viewportAware
+          />
+        </div>
+        {error && <div className="cb-error" style={{ marginTop: 10, textAlign: "left" }}>{error}</div>}
+        <button
+          className="cb-btn cb-btn-primary"
+          style={{ width: "100%", justifyContent: "center", marginTop: 14 }}
+          disabled={!timezoneName || busy}
+          onClick={async () => {
+            setBusy(true); setError("");
+            try { await onConfirm(timezoneName); }
+            catch (err) { setError(err.message || "Could not save your time zone"); setBusy(false); }
+          }}
+        >
+          {busy ? "Saving..." : "Confirm time zone"}
+        </button>
       </div>
     </div>
   );
@@ -12190,6 +12257,24 @@ export default function App() {
     }
   }
 
+  async function changeMemberWorkArrangement(memberId, workArrangement) {
+    try {
+      const current = members.find((m) => m.id === memberId);
+      const updated = await api.updateMemberWorkArrangement(memberId, workArrangement, current?.version || 1);
+      setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+      if (updated.id === currentUser.id) setCurrentUser(updated);
+      showToast(`Work arrangement updated: ${updated.work_arrangement === "remote" ? "Remote" : "Office"}`);
+    } catch (err) {
+      showToast(err.message, true);
+    }
+  }
+
+  async function confirmInitialTimezone(timezoneName) {
+    const updated = await api.setInitialTimezone(timezoneName);
+    setCurrentUser(updated);
+    setMembers((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+  }
+
   async function changeMemberInsightsPermission(memberId, enabled) {
     try {
       const current = members.find((m) => m.id === memberId);
@@ -12317,6 +12402,10 @@ export default function App() {
   // A task that tracks a number needs that starting figure once, the first time it is
   // started. Once start_count is set, resuming after a pause skips straight to starting.
   function requestStart(task) {
+    if (sleepAlert) {
+      showToast("Resolve the time-away check before starting or resuming a timer.", true);
+      return;
+    }
     if (idleNoTrackAlertRef.current || showForgottenRecovery) {
       showToast("Resolve the forgotten-time recovery before starting or resuming a timer.", true);
       return;
@@ -12780,6 +12869,9 @@ export default function App() {
       </div>
     );
   }
+  if (authState === "ready" && currentUser && !(currentUser.timezone_name || "").trim()) {
+    return <div className="cb-root" spellCheck={false}><InitialTimezoneModal currentUser={currentUser} onConfirm={confirmInitialTimezone} /></div>;
+  }
 
   return (
     <div className="cb-root" spellCheck={false}>
@@ -12868,6 +12960,7 @@ export default function App() {
                 onAddMember={() => setShowAddMember(true)} onManualAddMember={() => setShowManualAddMember(true)} invitationRefreshKey={invitationRefreshKey} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
                 onChangeTimezone={changeMemberTimezone}
+                onChangeWorkArrangement={changeMemberWorkArrangement}
                 onSetCredentials={setMemberCredentials} onDeleteMember={deleteMember}
                 onConnectCalendar={connectGoogleCalendar} onDisconnectCalendar={disconnectGoogleCalendar}
                 pods={pods} onAssignPod={assignMemberPod}
@@ -12965,7 +13058,7 @@ export default function App() {
           }}
         />
       )}
-      {showForgottenRecovery && forgotToTrackGapMsRef.current != null && (
+      {showForgottenRecovery && forgotToTrackGapMsRef.current != null && !sleepAlert && (
         <ForgottenTimeRecoveryModal
           gapMs={forgotToTrackGapMsRef.current}
           tasks={tasks}
@@ -12998,7 +13091,7 @@ export default function App() {
           }}
         />
       )}
-      {showNewTask && (
+      {showNewTask && !sleepAlert && (
         <NewTaskModal
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
@@ -13037,21 +13130,20 @@ export default function App() {
         <ManualAddMemberModal onClose={() => setShowManualAddMember(false)} onAdd={addStaffManually} />
       )}
       {/*
-        An unresolved forgotten-time prompt keeps priority after a lock/away period. The away
-        event and its Windows/browser notification are still created immediately, but its modal
-        waits until the recovery prompt/allocation (or the New Task choice opened from it) has
-        been dealt with. This prevents the away Resume action from jumping ahead of unresolved
-        recovery without changing any underlying away, recovery, timer, or audit records.
+        Time-away classification has first priority after return/unlock. Any existing forgotten-time
+        recovery state remains intact behind it and resumes from the unlock boundary, but the user
+        resolves the just-finished away period before returning to recovery or creating a task.
       */}
-      {sleepAlert && !idleNoTrackAlert && !showForgottenRecovery && !showNewTask && (
+      {sleepAlert && (
         <SleepAlertModal
           alert={sleepAlert}
           members={members}
           currentUser={currentUser}
           onDismiss={clearAwayAlert}
           onResume={async () => {
-            if (sleepAlert.task) requestStart(sleepAlert.task);
+            const taskToResume = sleepAlert.task || null;
             clearAwayAlert();
+            if (taskToResume) setTimeout(() => requestStart(taskToResume), 0);
           }}
           onHelp={async (direction, colleagueId, seconds, isAdjusted, context) => {
             const inactivityEventId = sleepAlert.inactivityEventId || null;
@@ -13060,7 +13152,7 @@ export default function App() {
           }}
         />
       )}
-      {idleNoTrackAlert && (
+      {idleNoTrackAlert && !sleepAlert && (
         <IdleNoTrackModal
           alert={idleNoTrackAlert}
           members={members}
@@ -13100,7 +13192,7 @@ export default function App() {
           }}
         />
       )}
-      {meetingAlert && (
+      {meetingAlert && !sleepAlert && (
         <MeetingAlertModal
           alert={meetingAlert}
           onDismiss={clearMeetingAlert}
