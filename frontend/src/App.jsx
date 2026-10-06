@@ -10262,7 +10262,9 @@ function ForgottenTimeRecoveryModal({
   gapMs, tasks, currentUser, clients, templates, members, bankAccounts, roles, taskTypes,
   onAddClient, onClose, onRecoverSplit, onCreateRecoveryTask, previewOnly = false,
 }) {
-  const recoveredSeconds = Math.max(1, Math.round(gapMs / 1000));
+  // Recovery allocations are whole seconds. Always round down so the requested amount can
+  // never exceed the exact active/no-timer window by a fractional second.
+  const recoveredSeconds = Math.max(1, Math.floor(gapMs / 1000));
   const allocationIdRef = useRef(1);
   const [createdTasks, setCreatedTasks] = useState([]);
   const [showTaskCreator, setShowTaskCreator] = useState(false);
@@ -12606,7 +12608,8 @@ export default function App() {
         const windowEndMs = forgotToTrackWindowEndMsRef.current || Date.now();
         const recovered = await api.recoverTaskTime(
           created[0].id,
-          Math.max(1, Math.round(gapMs / 1000)),
+          // Never request more whole seconds than the exact recovery window contains.
+          Math.max(1, Math.floor(gapMs / 1000)),
           new Date(windowEndMs + clockOffsetRef.current).toISOString(),
         );
         finalTasks = [recovered, ...created.slice(1)];
