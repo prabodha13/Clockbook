@@ -11280,6 +11280,9 @@ export default function App() {
       return;
     }
     try {
+      // This countdown belongs to the workspace the user is actively working in. A deliberate
+      // workspace switch starts fresh; refreshes and redeploys within the same workspace keep it.
+      clearNoTrackCountdownStart();
       const result = await api.switchWorkspace(tenantId);
       setToken(result.token);
       // Reloading after a workspace switch deliberately clears all tenant-owned UI state,
@@ -11440,7 +11443,7 @@ export default function App() {
     writeSessionJson(PENDING_MEETING_STORAGE_KEY, null);
     try {
       sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
-      sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY);
+      clearNoTrackCountdownStart();
     } catch (_) {}
     setCurrentUser(null);
     setWorkspaces([]);
@@ -11873,7 +11876,12 @@ export default function App() {
 
   const NO_TRACK_THRESHOLD_MS = 10 * 60 * 1000;
   const NO_TRACK_PENDING_KEY = "clockbook_pending_no_track_alert";
-  const NO_TRACK_COUNTDOWN_KEY = "clockbook_no_track_countdown_since";
+  const NO_TRACK_COUNTDOWN_KEY_BASE = "clockbook_no_track_countdown_since";
+
+  function noTrackCountdownStorageKey() {
+    if (!activeWorkspaceId || !currentUser?.id) return null;
+    return `${NO_TRACK_COUNTDOWN_KEY_BASE}:${activeWorkspaceId}:${currentUser.id}`;
+  }
   const [idleNoTrackAlert, setIdleNoTrackAlert] = useState(() => {
     // Keep an unanswered no-track prompt through a normal browser refresh. Session storage is
     // intentionally used instead of permanent local storage: the prompt belongs to this tab's
@@ -11897,16 +11905,8 @@ export default function App() {
       return null;
     }
   });
-  const noTrackSinceRef = useRef((() => {
-    if (idleNoTrackAlert?.since) return Number(idleNoTrackAlert.since);
-    try {
-      const saved = Number(sessionStorage.getItem(NO_TRACK_COUNTDOWN_KEY));
-      if (Number.isFinite(saved) && saved > 0 && saved <= Date.now()) return saved;
-    } catch (_) {
-      // Session storage can be unavailable; fall back to a fresh countdown below.
-    }
-    return Date.now();
-  })());
+  const noTrackSinceRef = useRef(idleNoTrackAlert?.since ? Number(idleNoTrackAlert.since) : Date.now());
+  const noTrackCountdownScopeRef = useRef("");
   const noTrackSnoozeUntilRef = useRef(0);
   const noTrackHandledRef = useRef(!!idleNoTrackAlert);
   const idleNoTrackAlertRef = useRef(idleNoTrackAlert);
@@ -11930,12 +11930,19 @@ export default function App() {
   function setNoTrackCountdownStart(atMs) {
     const next = Math.min(Date.now(), Math.max(0, Number(atMs) || Date.now()));
     noTrackSinceRef.current = next;
-    try { sessionStorage.setItem(NO_TRACK_COUNTDOWN_KEY, String(next)); } catch (_) {}
+    const storageKey = noTrackCountdownStorageKey();
+    if (storageKey) {
+      try { sessionStorage.setItem(storageKey, String(next)); } catch (_) {}
+    }
     return next;
   }
 
   function clearNoTrackCountdownStart() {
-    try { sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY); } catch (_) {}
+    const storageKey = noTrackCountdownStorageKey();
+    try {
+      if (storageKey) sessionStorage.removeItem(storageKey);
+      sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY_BASE);
+    } catch (_) {}
   }
 
   useEffect(() => {
@@ -11948,7 +11955,7 @@ export default function App() {
           ...(Array.isArray(idleNoTrackAlert.windows) && idleNoTrackAlert.windows.length ? { windows: idleNoTrackAlert.windows } : {}),
         }));
         // Once the reminder exists, its richer persisted state is the source of truth.
-        sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY);
+        clearNoTrackCountdownStart();
       } else {
         sessionStorage.removeItem(NO_TRACK_PENDING_KEY);
       }
@@ -11958,24 +11965,46 @@ export default function App() {
   }, [idleNoTrackAlert]);
 
   // Persist the pre-10-minute countdown too, not just the reminder that appears after
-  // the threshold. This makes a normal refresh/redeploy transparent: five minutes before
-  // the reload plus five minutes after it still produces the reminder at ten minutes.
+  // the threshold. The key is scoped to this workspace and member, so refresh/redeploy keeps
+  // the countdown while an intentional workspace switch cannot inherit it.
   useEffect(() => {
-    if (authState !== "ready" || dataLoading || !currentUser) return;
+    if (authState !== "ready" || dataLoading || !currentUser || !activeWorkspaceId) return;
+    const storageKey = noTrackCountdownStorageKey();
+    if (!storageKey) return;
+    const scope = `${activeWorkspaceId}:${currentUser.id}`;
+
+    if (noTrackCountdownScopeRef.current !== scope) {
+      noTrackCountdownScopeRef.current = scope;
+      try {
+        const saved = Number(sessionStorage.getItem(storageKey));
+        if (Number.isFinite(saved) && saved > 0 && saved <= Date.now()) {
+          noTrackSinceRef.current = saved;
+        }
+        // Remove the previous release's unscoped key. Do not migrate it because there is no
+        // reliable way to prove which workspace owned that timestamp.
+        sessionStorage.removeItem(NO_TRACK_COUNTDOWN_KEY_BASE);
+      } catch (_) {
+        // If storage is unavailable, the live in-memory countdown still works.
+      }
+    }
+
     if (myRunningTask) {
       clearNoTrackCountdownStart();
       return;
     }
-    if (idleNoTrackAlertRef.current || showForgottenRecovery) return;
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) {
+      clearNoTrackCountdownStart();
+      return;
+    }
     try {
-      const saved = Number(sessionStorage.getItem(NO_TRACK_COUNTDOWN_KEY));
+      const saved = Number(sessionStorage.getItem(storageKey));
       if (Number.isFinite(saved) && saved > 0) return;
     } catch (_) {
       // If storage is unavailable, the live in-memory countdown still works.
       return;
     }
     setNoTrackCountdownStart(noTrackSinceRef.current);
-  }, [authState, dataLoading, currentUser?.id, myRunningTask?.id, showForgottenRecovery]);
+  }, [authState, dataLoading, activeWorkspaceId, currentUser?.id, myRunningTask?.id, showForgottenRecovery]);
 
   function showNoTrackBrowserNotification(gapMs, silent = false) {
     if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -12483,6 +12512,24 @@ export default function App() {
     }
   }
 
+  // Recovery has already been committed successfully before this helper is called, so do not
+  // send the automatic continuation back through requestStart's unresolved-recovery guard.
+  // React state from the recovery modal may still belong to the render that initiated the save,
+  // which previously produced a false red "Resolve the forgotten-time recovery" toast even
+  // though the recovered time had already been recorded. Away still keeps priority.
+  function continueAfterSuccessfulRecovery(task) {
+    if (!task) return;
+    if (sleepAlert) {
+      postAwayStartTaskRef.current = task;
+      return;
+    }
+    if (task.tracks_number_label && task.start_count == null) {
+      setStartCountPrompt(task);
+    } else {
+      startTask(task.id, null);
+    }
+  }
+
   function startNoTrackCountdownFromClosedTask(task) {
     // Start the no-timer clock from the exact server-confirmed end of the segment that just
     // closed. The 15-second no-track watcher is only a fallback observer; using its most
@@ -12807,8 +12854,8 @@ export default function App() {
     setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
     if (recoveredTask) {
-      showToast(`${niceDuration(recoveredGapMs)} recovered and flagged as forgotten time`);
-      if (startImmediately) requestStart(recoveredTask);
+      showToast(`Successfully recovered ${niceDuration(recoveredGapMs)} and added it to ${recoveredTask.name}.`);
+      if (startImmediately) continueAfterSuccessfulRecovery(recoveredTask);
     } else if (startImmediately && finalTasks.length === 1) {
       requestStart(finalTasks[0]);
     }
@@ -13148,12 +13195,13 @@ export default function App() {
             forgotToTrackWindowsRef.current = null;
             clearPendingForgottenRecovery();
             setShowForgottenRecovery(false);
-            showToast(`${niceDuration(recoveredGap)} recovered across ${updatedTasks.length} task${updatedTasks.length === 1 ? "" : "s"} and flagged as forgotten time`);
             const continueTask = updatedTasks[updatedTasks.length - 1];
-            if (continueTask) {
-              if (sleepAlert) postAwayStartTaskRef.current = continueTask;
-              else requestStart(continueTask);
+            if (updatedTasks.length === 1 && continueTask) {
+              showToast(`Successfully recovered ${niceDuration(recoveredGap)} and added it to ${continueTask.name}.`);
+            } else {
+              showToast(`Successfully recovered ${niceDuration(recoveredGap)} across ${updatedTasks.length} tasks.`);
             }
+            continueAfterSuccessfulRecovery(continueTask);
           }}
         />
       )}
