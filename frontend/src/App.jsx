@@ -10358,11 +10358,11 @@ function ForgottenTimeRecoveryModal({
 
   return (
     <>
-      <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-overlay" onMouseDown={(e) => { if (previewOnly && e.target === e.currentTarget && !busy) onClose(); }}>
         <div className="cb-modal" style={{ width: "min(760px, calc(100vw - 28px))" }}>
           <div className="cb-modal-head">
             <div className="cb-modal-title">{previewOnly ? "Test forgotten time recovery" : "Recover forgotten time"}</div>
-            <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>
+            {previewOnly && <button className="cb-icon-btn" disabled={busy} onClick={onClose}><X size={16} /></button>}
           </div>
           <div className="cb-modal-body">
             {previewOnly && (
@@ -10434,7 +10434,7 @@ function ForgottenTimeRecoveryModal({
             {error && <div className="cb-error" style={{ marginTop: 12 }}>{error}</div>}
           </div>
           <div className="cb-modal-foot">
-            <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
+            {previewOnly && <button type="button" className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>}
             <button type="button" className="cb-btn cb-btn-primary" disabled={busy || overAllocated || remainingSeconds < 1} onClick={recover}>
               {busy ? (previewOnly ? "Checking..." : "Recovering...") : previewOnly ? `Test ${niceDuration(gapMs)} split across ${allocations.length} task${allocations.length === 1 ? "" : "s"}` : `Recover ${niceDuration(gapMs)} across ${allocations.length} task${allocations.length === 1 ? "" : "s"}`}
             </button>
@@ -12590,6 +12590,29 @@ export default function App() {
     }
   }
 
+  async function recoverForgottenTimeBatch(allocations, recoveredSeconds) {
+    const token = getToken();
+    const response = await fetch("/api/tasks/recover-time/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({
+        total_seconds: recoveredSeconds,
+        allocations,
+        window_end_at: new Date((forgotToTrackWindowEndMsRef.current || Date.now()) + clockOffsetRef.current).toISOString(),
+        recovery_windows: Array.isArray(forgotToTrackWindowsRef.current)
+          ? forgotToTrackWindowsRef.current.map((w) => ({
+              start: new Date(w.start + clockOffsetRef.current).toISOString(),
+              end: new Date(w.end + clockOffsetRef.current).toISOString(),
+            }))
+          : undefined,
+      }),
+    });
+    if (!response.ok) {
+      throw new Error("ClockBook couldn't recover this time. Refresh and try again.");
+    }
+    return response.json();
+  }
+
   async function createTasks(payloads, startImmediately = false) {
     const created = [];
     for (const payload of payloads) {
@@ -12601,25 +12624,31 @@ export default function App() {
     let recoveredGapMs = null;
     if (forgotToTrackGapMsRef.current != null && created.length > 0) {
       const gapMs = forgotToTrackGapMsRef.current;
+      const recoveredSeconds = Math.max(1, Math.floor(gapMs / 1000));
       recoveredGapMs = gapMs;
-      forgotToTrackGapMsRef.current = null;
-      clearPendingForgottenRecovery();
       try {
-        const windowEndMs = forgotToTrackWindowEndMsRef.current || Date.now();
-        const recovered = await api.recoverTaskTime(
-          created[0].id,
-          // Never request more whole seconds than the exact recovery window contains.
-          Math.max(1, Math.floor(gapMs / 1000)),
-          new Date(windowEndMs + clockOffsetRef.current).toISOString(),
+        const updatedTasks = await recoverForgottenTimeBatch(
+          [{ task_id: created[0].id, seconds: recoveredSeconds }],
+          recoveredSeconds,
         );
-        finalTasks = [recovered, ...created.slice(1)];
-        recoveredTask = recovered;
+        const recovered = updatedTasks[0];
+        if (recovered) {
+          finalTasks = [recovered, ...created.slice(1)];
+          recoveredTask = recovered;
+        }
+        forgotToTrackGapMsRef.current = null;
+        forgotToTrackWindowEndMsRef.current = null;
+        forgotToTrackWindowsRef.current = null;
+        clearPendingForgottenRecovery();
       } catch (err) {
+        // Keep the unresolved recovery intact so the user can retry it from the allocation flow.
         showToast("ClockBook couldn't recover this time. Refresh and try again.", true);
+        setShowForgottenRecovery(true);
       }
+    } else {
+      forgotToTrackWindowEndMsRef.current = null;
+      forgotToTrackWindowsRef.current = null;
     }
-    forgotToTrackWindowEndMsRef.current = null;
-    forgotToTrackWindowsRef.current = null;
     setTasks((prev) => [...finalTasks, ...prev]);
     setShowNewTask(false);
     if (recoveredTask) {
@@ -12943,35 +12972,16 @@ export default function App() {
           currentUser={effectiveCurrentUser}
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} onAddClient={addClient}
-          onClose={() => { forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; clearPendingForgottenRecovery(); setShowForgottenRecovery(false); }}
+          // A confirmed forgotten-time recovery is action-required. The live modal is intentionally
+          // non-dismissible; preview mode keeps its own normal close behavior above.
+          onClose={() => {}}
           onCreateRecoveryTask={async (payload) => {
             const created = await api.createTask(payload);
             setTasks((prev) => [created, ...prev]);
             return created;
           }}
           onRecoverSplit={async (allocations, recoveredSeconds) => {
-            const token = getToken();
-            const response = await fetch("/api/tasks/recover-time/batch", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-              body: JSON.stringify({
-                total_seconds: recoveredSeconds,
-                allocations,
-                window_end_at: new Date((forgotToTrackWindowEndMsRef.current || Date.now()) + clockOffsetRef.current).toISOString(),
-                recovery_windows: Array.isArray(forgotToTrackWindowsRef.current)
-                  ? forgotToTrackWindowsRef.current.map((w) => ({
-                      start: new Date(w.start + clockOffsetRef.current).toISOString(),
-                      end: new Date(w.end + clockOffsetRef.current).toISOString(),
-                    }))
-                  : undefined,
-              }),
-            });
-            if (!response.ok) {
-              // Keep backend validation details out of the staff-facing recovery flow. The
-              // integrity guard still blocks invalid recovery; the user only needs a safe retry.
-              throw new Error("ClockBook couldn't recover this time. Refresh and try again.");
-            }
-            const updatedTasks = await response.json();
+            const updatedTasks = await recoverForgottenTimeBatch(allocations, recoveredSeconds);
             for (const updated of updatedTasks) mergeTask(updated);
             const recoveredGap = forgotToTrackGapMsRef.current;
             forgotToTrackGapMsRef.current = null;
@@ -12993,7 +13003,13 @@ export default function App() {
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
           roles={roles} taskTypes={taskTypes} currentUser={effectiveCurrentUser}
           recoveringForgottenTime={forgotToTrackGapMsRef.current != null}
-          onClose={() => { setShowNewTask(false); forgotToTrackGapMsRef.current = null; forgotToTrackWindowEndMsRef.current = null; forgotToTrackWindowsRef.current = null; clearPendingForgottenRecovery(); }} onCreate={createTasks} onAddClient={addClient}
+          onClose={() => {
+            setShowNewTask(false);
+            if (forgotToTrackGapMsRef.current != null) {
+              // Returning from a new-task detour must not discard an unresolved recovery.
+              setShowForgottenRecovery(true);
+            }
+          }} onCreate={createTasks} onAddClient={addClient}
         />
       )}
       {startCountPrompt && (
