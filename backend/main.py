@@ -3834,6 +3834,11 @@ def get_insights(
         cursor = start_date
         while cursor <= actual_end_date:
             if trend_granularity == "daily":
+                # Insights' short-range trend represents working days only. Weekend zeroes
+                # create artificial dips between Friday and Monday, so do not seed them.
+                if cursor.weekday() >= 5:
+                    cursor += timedelta(days=1)
+                    continue
                 bucket = cursor
             elif trend_granularity == "weekly":
                 bucket = cursor - timedelta(days=cursor.weekday())
@@ -3849,6 +3854,10 @@ def get_insights(
             continue
         d = dt.date()
         if trend_granularity == "daily":
+            # Keep weekend activity out of the daily trend as well. Summary totals and all
+            # other Insights calculations remain unchanged; this only affects the chart.
+            if d.weekday() >= 5:
+                continue
             bucket = d
         elif trend_granularity == "weekly":
             bucket = d - timedelta(days=d.weekday())
