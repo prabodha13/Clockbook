@@ -11600,10 +11600,29 @@ export default function App() {
   // person with this once they are actually back to see it
   function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventId = null, causePhrase = null, source = null) {
     // Remote staff still use the same lock detection, timer pausing, inactivity audit and
-    // forgotten-time recovery boundaries as office staff. The only difference is that a
-    // screen-lock event is silent for them: no ClockBook away modal and no Windows/browser
-    // notification. Sleep/offline alerts and every other flow are deliberately unchanged.
-    if (source === "screen_locked" && workArrangementRef.current === "remote") return;
+    // forgotten-time recovery boundaries as office staff. A screen-lock event never opens
+    // the office-style away-classification modal for them. If a timer was running, though,
+    // keep the one operational browser notification that tells them ClockBook paused it.
+    // With no running timer the screen-lock event stays completely silent.
+    if (source === "screen_locked" && workArrangementRef.current === "remote") {
+      if (task) {
+        setTimeout(() => {
+          if ("Notification" in window && Notification.permission === "granted") {
+            try {
+              const n = new Notification("Clockbook", {
+                body: `Your timer for ${task.client_name}: ${task.name} was paused while you were away.`,
+                tag: "clockbook-sleep-alert",
+                requireInteraction: true,
+              });
+              n.onclick = () => window.focus();
+            } catch (e) {
+              // Some platforms restrict the Notification constructor, safe to ignore
+            }
+          }
+        }, 2000);
+      }
+      return;
+    }
     const alert = { task: task || null, gapMs, sleepStartMs, inactivityEventId, ...(causePhrase ? { causePhrase } : {}), ...(source ? { source } : {}) };
     sleepAlertRef.current = alert;
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, alert);
