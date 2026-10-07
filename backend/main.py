@@ -667,6 +667,10 @@ def run_startup_migrations():
                     "(SELECT NULLIF(m.timezone_name, '') FROM members m WHERE m.id = time_integrity_audit_entries.member_id), 'UTC') "
                     "WHERE recorded_timezone_name IS NULL OR recorded_timezone_name = ''"
                 ))
+            if "task_started_at" not in existing_integrity_columns:
+                conn.execute(text("ALTER TABLE time_integrity_audit_entries ADD COLUMN task_started_at TIMESTAMP"))
+            if "task_ended_at" not in existing_integrity_columns:
+                conn.execute(text("ALTER TABLE time_integrity_audit_entries ADD COLUMN task_ended_at TIMESTAMP"))
 
     # Normalize the old payroll-only requirement into the generic Work period model.
     # Existing generic period configurations were already mandatory at completion, so preserve
@@ -6491,6 +6495,37 @@ def _time_integrity_presence_seconds(db: Session, member: models.Member, work_da
     return max(active_seconds - unexplained_away_overlap, 0.0)
 
 
+def _time_integrity_task_bounds(task: models.TaskInstance | None, member: models.Member | None, work_date, recorded_at: datetime | None = None):
+    """Return the first timer start and last closed timer end for this task on the audit work date.
+
+    Recovery segments are included because they are real task segments, but an open segment is
+    clipped to RecordedAt for immutable snapshots. Historical rows that pre-date these snapshot
+    columns can use the same helper against the retained task segments.
+    """
+    if task is None or member is None or work_date is None:
+        return None, None
+    day_start, day_end = _local_workday_utc_bounds(work_date, member)
+    clip_end = min(recorded_at, day_end) if recorded_at is not None else day_end
+    starts = []
+    ends = []
+    for seg in (task.segments or []):
+        if not isinstance(seg, dict) or not seg.get("start"):
+            continue
+        try:
+            start = parse_utc_naive(seg.get("start"))
+            end = parse_utc_naive(seg.get("end")) if seg.get("end") else clip_end
+        except Exception:
+            continue
+        overlap_start = max(start, day_start)
+        overlap_end = min(end, clip_end)
+        if overlap_end <= overlap_start:
+            continue
+        starts.append(overlap_start)
+        if seg.get("end") or recorded_at is not None:
+            ends.append(overlap_end)
+    return (min(starts) if starts else None, max(ends) if ends else None)
+
+
 def _time_integrity_segment_totals(db: Session, member: models.Member, work_date, recorded_at: datetime):
     day_start, day_end = _local_workday_utc_bounds(work_date, member)
     clip_end = min(recorded_at, day_end)
@@ -6546,6 +6581,7 @@ def _append_time_integrity_snapshot(
     # one atomic batch observe the same presence record instead of staging duplicates.
     db.flush()
     work_date = work_date or _time_integrity_work_date(task, member, recorded_at)
+    task_started_at, task_ended_at = _time_integrity_task_bounds(task, member, work_date, recorded_at)
     net_active = _time_integrity_presence_seconds(db, member, work_date, recorded_at)
     automatic, recovered = _time_integrity_segment_totals(db, member, work_date, recorded_at)
     recovered += max(float(additional_prior_recovery_seconds or 0.0), 0.0)
@@ -6566,6 +6602,7 @@ def _append_time_integrity_snapshot(
         client_id=task.client_id, client_name=task.client_name or "", task_name=task.name or "",
         entry_source=entry_source, recorded_at=recorded_at,
         recorded_timezone_name=(member.timezone_name or "UTC").strip() or "UTC",
+        task_started_at=task_started_at, task_ended_at=task_ended_at,
         net_active_presence_seconds=round(net_active, 3),
         automatically_tracked_seconds=round(automatic, 3),
         recovered_allocated_seconds=round(recovered, 3),
@@ -7267,6 +7304,9 @@ def time_integrity_audit_report(
 
     member_rows = db.query(models.Member).all() if current_member.role == "super_admin" else db.query(models.Member).filter(models.Member.id.in_(allowed_ids)).all()
     members_by_id = {member.id: member for member in member_rows}
+    task_ids = {row.task_id for row in raw_rows if row.task_id}
+    task_rows = db.query(models.TaskInstance).filter(models.TaskInstance.id.in_(task_ids)).all() if task_ids else []
+    tasks_by_id = {task.id: task for task in task_rows}
     result_rows = []
     repeated_flags = {}
     manual_delays = []
@@ -7291,6 +7331,16 @@ def time_integrity_audit_report(
             recorded_zone = timezone.utc
         local_recorded = original.recorded_at.replace(tzinfo=timezone.utc).astimezone(recorded_zone)
         staff_name = member.name if member else (original.member_name or "Former staff member")
+        task_started_at = getattr(original, "task_started_at", None)
+        task_ended_at = getattr(original, "task_ended_at", None)
+        if (task_started_at is None or task_ended_at is None) and member is not None and original.task_id:
+            historical_start, historical_end = _time_integrity_task_bounds(
+                tasks_by_id.get(original.task_id), member, original.work_date, original.recorded_at
+            )
+            if task_started_at is None:
+                task_started_at = historical_start
+            if task_ended_at is None:
+                task_ended_at = historical_end
 
         if location_values and recorded_timezone_name not in location_values:
             continue
@@ -7312,6 +7362,7 @@ def time_integrity_audit_report(
             task=original.task_name or "", entry_source=original.entry_source,
             manual_duration_seconds=manual_duration, recorded_at=original.recorded_at,
             recorded_timezone_name=recorded_timezone_name,
+            task_started_at=task_started_at, task_ended_at=task_ended_at,
             net_active_presence_seconds=max(float(original.net_active_presence_seconds or 0.0), 0.0),
             automatically_tracked_seconds=max(float(original.automatically_tracked_seconds or 0.0), 0.0),
             recovered_allocated_seconds=max(float(original.recovered_allocated_seconds or 0.0), 0.0),

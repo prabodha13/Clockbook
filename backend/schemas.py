@@ -654,6 +654,8 @@ class TimeIntegrityAuditRow(BaseModel):
     manual_duration_seconds: float = 0.0
     recorded_at: datetime
     recorded_timezone_name: str = "UTC"
+    task_started_at: Optional[datetime] = None
+    task_ended_at: Optional[datetime] = None
     net_active_presence_seconds: float = 0.0
     automatically_tracked_seconds: float = 0.0
     recovered_allocated_seconds: float = 0.0
@@ -670,7 +672,7 @@ class TimeIntegrityAuditRow(BaseModel):
     recovery_batch_id: Optional[str] = None
     recovery_allocation_index: Optional[int] = None
 
-    @field_serializer("recorded_at", "last_edited_at")
+    @field_serializer("recorded_at", "last_edited_at", "task_started_at", "task_ended_at")
     def serialize_time_integrity_utc(self, value: Optional[datetime], _info):
         if value is None:
             return None
