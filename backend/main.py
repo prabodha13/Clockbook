@@ -6589,6 +6589,35 @@ def _time_integrity_segment_totals(db: Session, member: models.Member, work_date
     return max(automatic, 0.0), max(recovered, 0.0)
 
 
+def _tracked_total_for_member_date(db: Session, member: models.Member, work_date, as_of: datetime | None = None):
+    """Return server-authoritative tracked seconds for one member/local work date.
+
+    This mirrors the segment evidence used by Time Integrity, including forgotten-time
+    recovery segments, and clips open/cross-midnight segments to the selected local day.
+    """
+    day_start, day_end = _local_workday_utc_bounds(work_date, member)
+    clip_now = as_of or datetime.utcnow()
+    clip_end = min(day_end, clip_now)
+    total = 0.0
+    if clip_end <= day_start:
+        return 0.0
+    tasks = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id == member.id).all()
+    for task in tasks:
+        for seg in (task.segments or []):
+            if not isinstance(seg, dict) or not seg.get("start"):
+                continue
+            try:
+                start = parse_utc_naive(seg.get("start"))
+                end = parse_utc_naive(seg.get("end")) if seg.get("end") else clip_now
+            except Exception:
+                continue
+            overlap_start = max(start, day_start)
+            overlap_end = min(end, clip_end)
+            if overlap_end > overlap_start:
+                total += (overlap_end - overlap_start).total_seconds()
+    return max(total, 0.0)
+
+
 def _time_integrity_prior_manual_seconds(db: Session, member_id: str, work_date, recorded_at: datetime):
     rows = db.query(models.TimeIntegrityAuditEntry).filter(
         models.TimeIntegrityAuditEntry.member_id == member_id,
@@ -7253,6 +7282,64 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
     return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": note_text}
 
 
+@app.post("/api/audit/tracked-total-check", response_model=schemas.TrackedTotalCheckOut)
+def tracked_total_check(
+    payload: schemas.TrackedTotalCheckIn,
+    current_member: models.Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+):
+    """Silently compare the browser's displayed daily total with server segment evidence.
+
+    The staff UI is not interrupted. Meaningful mismatches are append-only audit evidence so
+    management can distinguish a display/state problem from genuine timer-segment growth.
+    """
+    now = datetime.utcnow()
+    local_now = now.replace(tzinfo=timezone.utc).astimezone(_member_zone(current_member))
+    work_date = local_now.date()
+    server_total = _tracked_total_for_member_date(db, current_member, work_date, now)
+    displayed_total = max(float(payload.displayed_total_seconds or 0.0), 0.0)
+    difference = server_total - displayed_total
+    mismatch = abs(difference) >= 30.0
+
+    if mismatch:
+        # Do not flood the append-only audit if the same stale browser remains open. One
+        # record per five minutes is enough to prove the discrepancy and preserve its size.
+        recent = db.query(models.AuditEvent).filter(
+            models.AuditEvent.actor_member_id == current_member.id,
+            models.AuditEvent.action == "tracked_total_display_mismatch",
+            models.AuditEvent.created_at >= now - timedelta(minutes=5),
+        ).order_by(models.AuditEvent.created_at.desc()).first()
+        if recent is None:
+            running = db.query(models.TaskInstance).filter(
+                models.TaskInstance.owner_id == current_member.id,
+                models.TaskInstance.status == "running",
+            ).first()
+            db.add(models.AuditEvent(
+                tenant_id=current_member.tenant_id,
+                actor_member_id=current_member.id,
+                action="tracked_total_display_mismatch",
+                entity_type="Member",
+                entity_id=current_member.id,
+                changes={
+                    "work_date": work_date.isoformat(),
+                    "timezone_name": (current_member.timezone_name or "UTC").strip() or "UTC",
+                    "displayed_total_seconds": round(displayed_total, 3),
+                    "server_total_seconds": round(server_total, 3),
+                    "difference_seconds": round(difference, 3),
+                    "running_task_id": running.id if running else None,
+                },
+            ))
+            db.commit()
+
+    return schemas.TrackedTotalCheckOut(
+        work_date=work_date,
+        displayed_total_seconds=round(displayed_total, 3),
+        server_total_seconds=round(server_total, 3),
+        difference_seconds=round(difference, 3),
+        mismatch=mismatch,
+    )
+
+
 @app.get("/api/reports/time-integrity-audit", response_model=schemas.TimeIntegrityAuditResponse)
 def time_integrity_audit_report(
     date_from: str = None, date_to: str = None, member_id: str = None, pod_id: str = None,
@@ -7432,7 +7519,111 @@ def time_integrity_audit_report(
         repeated_unreconciled_staff=len(repeated_ids),
         repeated_unreconciled_staff_names=repeated_names,
     )
-    return schemas.TimeIntegrityAuditResponse(rows=result_rows, summary=summary)
+
+    # Full retained timer evidence for the selected day/person range. The row-level Segments
+    # column above is intentionally clipped to that immutable audit snapshot; this timeline is
+    # separate so management can reconstruct how a day's displayed total actually accumulated.
+    if start_date is not None:
+        timeline_from = start_date
+    elif result_rows:
+        timeline_from = min(row.work_date for row in result_rows)
+    else:
+        timeline_from = datetime.utcnow().date()
+    if end_date is not None:
+        timeline_to = end_date
+    elif result_rows:
+        timeline_to = max(row.work_date for row in result_rows)
+    else:
+        timeline_to = timeline_from
+
+    timeline_member_ids = set(member_ids or allowed_ids)
+    timeline_tasks_query = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id.in_(timeline_member_ids))
+    if client_ids:
+        timeline_tasks_query = timeline_tasks_query.filter(models.TaskInstance.client_id.in_(client_ids))
+    timeline_tasks = timeline_tasks_query.all()
+    daily_segments = []
+    now_utc = datetime.utcnow()
+    for task in timeline_tasks:
+        member = members_by_id.get(task.owner_id)
+        if member is None:
+            continue
+        if current_member.role == "admin" and current_member.pod_id:
+            task_scope_pod = task.submitted_pod_id or member.pod_id
+            if task_scope_pod != current_member.pod_id:
+                continue
+        if pod_ids:
+            task_scope_pod = task.submitted_pod_id or member.pod_id
+            if task_scope_pod not in pod_ids:
+                continue
+        for index, seg in enumerate(task.segments or []):
+            if not isinstance(seg, dict) or not seg.get("start"):
+                continue
+            try:
+                seg_start = parse_utc_naive(seg.get("start"))
+                seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now_utc
+            except Exception:
+                continue
+            if seg_end <= seg_start:
+                continue
+            local_start_date = _utc_naive_to_local(seg_start, member).date()
+            local_end_date = _utc_naive_to_local(max(seg_start, seg_end - timedelta(microseconds=1)), member).date()
+            slice_date = max(local_start_date, timeline_from)
+            last_date = min(local_end_date, timeline_to)
+            while slice_date <= last_date:
+                day_start, day_end = _local_workday_utc_bounds(slice_date, member)
+                overlap_start = max(seg_start, day_start)
+                overlap_end = min(seg_end, day_end, now_utc)
+                if overlap_end > overlap_start:
+                    daily_segments.append(schemas.TimeIntegrityDailySegment(
+                        member_id=member.id, staff_member=member.name or "", work_date=slice_date,
+                        task_id=task.id, client=task.client_name or "", task=task.name or "",
+                        segment_index=index + 1, started_at=overlap_start, ended_at=overlap_end,
+                        seconds=round((overlap_end - overlap_start).total_seconds(), 3),
+                        source=seg.get("source") or "timer", task_status=task.status or "",
+                    ))
+                slice_date += timedelta(days=1)
+    daily_segments.sort(key=lambda row: (row.work_date, row.started_at, row.staff_member), reverse=True)
+
+    # Browser-vs-server total checks are captured prospectively. They are the missing evidence
+    # in cases where task segments are correct but a person reports seeing a lower dashboard
+    # total. Only meaningful mismatches are stored, so this list should normally be empty.
+    display_checks = []
+    check_events = db.query(models.AuditEvent).filter(
+        models.AuditEvent.action == "tracked_total_display_mismatch",
+        models.AuditEvent.actor_member_id.in_(timeline_member_ids),
+    ).order_by(models.AuditEvent.created_at.desc()).limit(1000).all()
+    for event in check_events:
+        changes = event.changes or {}
+        try:
+            check_date = datetime.strptime(str(changes.get("work_date")), "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if check_date < timeline_from or check_date > timeline_to:
+            continue
+        if event.actor_member_id not in timeline_member_ids:
+            continue
+        member = members_by_id.get(event.actor_member_id)
+        if member is None:
+            continue
+        if current_member.role == "admin" and current_member.pod_id and member.pod_id != current_member.pod_id:
+            continue
+        if pod_ids and member.pod_id not in pod_ids:
+            continue
+        check_zone = str(changes.get("timezone_name") or member.timezone_name or "UTC")
+        if location_values and check_zone not in location_values:
+            continue
+        display_checks.append(schemas.TrackedTotalDisplayCheck(
+            id=event.id, member_id=member.id, staff_member=member.name or "", work_date=check_date,
+            captured_at=event.created_at, timezone_name=check_zone,
+            displayed_total_seconds=max(float(changes.get("displayed_total_seconds") or 0.0), 0.0),
+            server_total_seconds=max(float(changes.get("server_total_seconds") or 0.0), 0.0),
+            difference_seconds=float(changes.get("difference_seconds") or 0.0),
+            running_task_id=changes.get("running_task_id"),
+        ))
+
+    return schemas.TimeIntegrityAuditResponse(
+        rows=result_rows, daily_segments=daily_segments, display_checks=display_checks, summary=summary
+    )
 
 
 @app.get("/api/audit/changes", response_model=list[schemas.AuditEventOut])

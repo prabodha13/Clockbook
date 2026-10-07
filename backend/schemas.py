@@ -707,7 +707,61 @@ class TimeIntegrityAuditSummary(BaseModel):
     repeated_unreconciled_staff_names: List[str] = Field(default_factory=list)
 
 
+class TimeIntegrityDailySegment(BaseModel):
+    member_id: str
+    staff_member: str
+    work_date: date
+    task_id: str
+    client: str
+    task: str
+    segment_index: int
+    started_at: datetime
+    ended_at: datetime
+    seconds: float = 0.0
+    source: str = "timer"
+    task_status: str = ""
+
+    @field_serializer("started_at", "ended_at")
+    def serialize_daily_segment_utc(self, value: datetime, _info):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+
+
+class TrackedTotalDisplayCheck(BaseModel):
+    id: str
+    member_id: str
+    staff_member: str
+    work_date: date
+    captured_at: datetime
+    timezone_name: str = "UTC"
+    displayed_total_seconds: float = 0.0
+    server_total_seconds: float = 0.0
+    difference_seconds: float = 0.0
+    running_task_id: Optional[str] = None
+
+    @field_serializer("captured_at")
+    def serialize_check_utc(self, value: datetime, _info):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+
+
+class TrackedTotalCheckIn(BaseModel):
+    displayed_total_seconds: float = Field(ge=0, le=86400 * 2)
+
+
+class TrackedTotalCheckOut(BaseModel):
+    work_date: date
+    displayed_total_seconds: float = 0.0
+    server_total_seconds: float = 0.0
+    difference_seconds: float = 0.0
+    mismatch: bool = False
+
+
 class TimeIntegrityAuditResponse(BaseModel):
     rows: List[TimeIntegrityAuditRow] = Field(default_factory=list)
+    daily_segments: List[TimeIntegrityDailySegment] = Field(default_factory=list)
+    display_checks: List[TrackedTotalDisplayCheck] = Field(default_factory=list)
     summary: TimeIntegrityAuditSummary
 
