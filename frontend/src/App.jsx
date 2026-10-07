@@ -11552,6 +11552,8 @@ export default function App() {
   //     screen has been locked for at least a minute.
   const runningTaskRef = useRef(null);
   useEffect(() => { runningTaskRef.current = myRunningTask || null; }, [myRunningTask]);
+  const workArrangementRef = useRef(currentUser?.work_arrangement || "office");
+  useEffect(() => { workArrangementRef.current = currentUser?.work_arrangement || "office"; }, [currentUser?.work_arrangement]);
 
   const lastAlertRef = useRef(0);
   const SLEEP_THRESHOLD_MS = 60000;
@@ -11587,8 +11589,13 @@ export default function App() {
   // Shows the same "you were away" popup and notification as before, kept separate from
   // pauseTaskAt so a screen lock can cut the timer off immediately while only bothering the
   // person with this once they are actually back to see it
-  function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventId = null, causePhrase = null) {
-    const alert = { task: task || null, gapMs, sleepStartMs, inactivityEventId, ...(causePhrase ? { causePhrase } : {}) };
+  function showAwayAlert(task, gapMs, sleepStartMs, inactivityEventId = null, causePhrase = null, source = null) {
+    // Remote staff still use the same lock detection, timer pausing, inactivity audit and
+    // forgotten-time recovery boundaries as office staff. The only difference is that a
+    // screen-lock event is silent for them: no ClockBook away modal and no Windows/browser
+    // notification. Sleep/offline alerts and every other flow are deliberately unchanged.
+    if (source === "screen_locked" && workArrangementRef.current === "remote") return;
+    const alert = { task: task || null, gapMs, sleepStartMs, inactivityEventId, ...(causePhrase ? { causePhrase } : {}), ...(source ? { source } : {}) };
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, alert);
     setSleepAlert(alert);
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
@@ -11805,7 +11812,7 @@ export default function App() {
             setNoTrackCountdownStart(returnedAt);
             noTrackHandledRef.current = false;
           }
-          showAwayAlert(task, gap, sleepStart, inactivityEventId);
+          showAwayAlert(task, gap, sleepStart, inactivityEventId, null, "screen_locked");
         }
       });
       // Chrome enforces a minimum threshold of 60000ms for this API
