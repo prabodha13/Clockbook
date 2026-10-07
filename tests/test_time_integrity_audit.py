@@ -419,3 +419,55 @@ def test_time_integrity_presence_does_not_use_help_recorded_after_snapshot_time(
         assert at_12 == pytest.approx(3 * 60 * 60)
     finally:
         s.close()
+
+
+def test_time_integrity_snapshots_task_start_and_end_and_backfills_legacy_rows():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_time_integrity_task_bounds")
+        super_admin = _member(s, tenant.id, "bounds-super@example.com", "super_admin")
+        staff = _member(s, tenant.id, "bounds-staff@example.com", timezone_name="UTC")
+        s.info["actor_member_id"] = staff.id
+        client = _client(s, "Bounds Client")
+        day = datetime(2026, 10, 6)
+        task = models.TaskInstance(
+            client_id=client.id, client_name=client.name, name="Bounds task",
+            owner_id=staff.id, status="submitted",
+            segments=[
+                {"start": day.replace(hour=9).isoformat() + "Z", "end": day.replace(hour=10).isoformat() + "Z"},
+                {"start": day.replace(hour=11).isoformat() + "Z", "end": day.replace(hour=12, minute=30).isoformat() + "Z"},
+            ],
+            created_at=day.replace(hour=8, minute=55),
+        )
+        s.add(task)
+        s.commit()
+
+        snap = main._append_time_integrity_snapshot(
+            s, member=staff, task=task, entry_source="Automatic",
+            manual_duration_seconds=0, current_value_seconds=2.5 * 3600,
+            recorded_at=day.replace(hour=13), work_date=day.date(),
+        )
+        s.commit()
+        s.refresh(snap)
+        assert snap.task_started_at == day.replace(hour=9)
+        assert snap.task_ended_at == day.replace(hour=12, minute=30)
+
+        # Simulate a pre-deployment audit row where the new snapshot columns did not exist yet.
+        snap.task_started_at = None
+        snap.task_ended_at = None
+        # Bypass append-only protection only for this migration-compatibility simulation.
+        state = s.info.get("allow_audit_maintenance")
+        s.info["allow_audit_maintenance"] = True
+        s.commit()
+        if state is None:
+            s.info.pop("allow_audit_maintenance", None)
+        else:
+            s.info["allow_audit_maintenance"] = state
+
+        s.info["actor_member_id"] = super_admin.id
+        report = main.time_integrity_audit_report(current_member=super_admin, db=s)
+        row = next(r for r in report.rows if r.task_id == task.id)
+        assert row.task_started_at == day.replace(hour=9)
+        assert row.task_ended_at == day.replace(hour=12, minute=30)
+    finally:
+        s.close()
