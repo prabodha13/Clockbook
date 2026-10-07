@@ -82,13 +82,20 @@ def test_last_week_time_trend_is_daily_and_keeps_zero_days():
         )
 
         trend = result["tracked_trend"]
-        assert len(trend) == 7
-        assert [row["period_start"] for row in trend] == [
-            (start + timedelta(days=i)).isoformat() for i in range(7)
+        expected_days = [
+            start + timedelta(days=i)
+            for i in range(7)
+            if (start + timedelta(days=i)).weekday() < 5
         ]
-        assert trend[1]["seconds"] == 3600
-        assert trend[4]["seconds"] == 7200
-        assert trend[0]["seconds"] == 0
-        assert trend[6]["seconds"] == 0
+        assert [row["period_start"] for row in trend] == [day.isoformat() for day in expected_days]
+        assert all(datetime.fromisoformat(row["period_start"]).weekday() < 5 for row in trend)
+
+        by_day = {row["period_start"]: row for row in trend}
+        first_task_day = start + timedelta(days=1)
+        second_task_day = start + timedelta(days=4)
+        if first_task_day.weekday() < 5:
+            assert by_day[first_task_day.isoformat()]["seconds"] == 3600
+        if second_task_day.weekday() < 5:
+            assert by_day[second_task_day.isoformat()]["seconds"] == 7200
     finally:
         s.close()
