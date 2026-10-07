@@ -9397,11 +9397,11 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
 
   const rows = data?.rows || [];
   const summary = data?.summary || {};
-  const integrityColumnWidths = [150,110,170,190,120,110,145,155,140,140,150,150,150,150,90,110,110,140,180,135];
+  const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,155,140,140,150,150,150,150,90,110,110,140,180,135];
   const integrityTableWidth = integrityColumnWidths.reduce((total, width) => total + width, 0);
   const integrityHeaders = [
     ["Staff member", false], ["Work date", false], ["Client", false], ["Task", false], ["Entry source", false],
-    ["Manual duration", true], ["RecordedAt", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
+    ["Manual duration", true], ["RecordedAt", false], ["Task started", false], ["Task ended", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
     ["Recovery already allocated", true], ["Prior manual allocated", true], ["Available unallocated active", true],
     ["Unreconciled manual time", true], ["Later edited?", false], ["Original value", true], ["Current value", true],
     ["Last edited", false], ["Reason / note", false], ["Review status", false],
@@ -9567,6 +9567,8 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
             <td>{r.entry_source}</td>
             <td className="num cb-mono">{fmt(r.manual_duration_seconds)}</td>
             <td>{formatInZone(r.recorded_at, r.recorded_timezone_name, true)}</td>
+            <td>{r.task_started_at ? formatInZone(r.task_started_at, r.recorded_timezone_name, false) : "—"}</td>
+            <td>{r.task_ended_at ? formatInZone(r.task_ended_at, r.recorded_timezone_name, false) : "—"}</td>
             <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{(r.recorded_timezone_name || "UTC").replace(/_/g, " ")}</td>
             <td className="num cb-mono">{fmt(r.net_active_presence_seconds)}</td>
             <td className="num cb-mono">{fmt(r.automatically_tracked_seconds)}</td>
