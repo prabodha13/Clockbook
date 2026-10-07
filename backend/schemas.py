@@ -639,6 +639,21 @@ class AuditEventOut(BaseModel):
     created_at: datetime
 
 
+class TimeIntegrityTaskSegment(BaseModel):
+    segment_index: int
+    started_at: datetime
+    ended_at: datetime
+    seconds: float = 0.0
+    source: str = "timer"
+    clipped_to_recorded_at: bool = False
+
+    @field_serializer("started_at", "ended_at")
+    def serialize_segment_utc(self, value: datetime, _info):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+
+
 class TimeIntegrityAuditRow(BaseModel):
     id: str
     entry_group_id: str
@@ -656,6 +671,7 @@ class TimeIntegrityAuditRow(BaseModel):
     recorded_timezone_name: str = "UTC"
     task_started_at: Optional[datetime] = None
     task_ended_at: Optional[datetime] = None
+    timer_segments: List[TimeIntegrityTaskSegment] = Field(default_factory=list)
     net_active_presence_seconds: float = 0.0
     automatically_tracked_seconds: float = 0.0
     recovered_allocated_seconds: float = 0.0

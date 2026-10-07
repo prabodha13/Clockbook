@@ -6526,6 +6526,42 @@ def _time_integrity_task_bounds(task: models.TaskInstance | None, member: models
     return (min(starts) if starts else None, max(ends) if ends else None)
 
 
+def _time_integrity_task_segments(task: models.TaskInstance | None, member: models.Member | None, work_date, recorded_at: datetime | None = None):
+    """Return the task's individual timer/recovery slices on the audit work date.
+
+    This is report evidence only: it does not alter task segments. Older audit rows can be
+    reconstructed from retained TaskInstance.segments, while every slice is clipped to the
+    original audit RecordedAt so later activity cannot leak into an earlier snapshot.
+    """
+    if task is None or member is None or work_date is None:
+        return []
+    day_start, day_end = _local_workday_utc_bounds(work_date, member)
+    clip_end = min(recorded_at, day_end) if recorded_at is not None else day_end
+    result = []
+    for index, seg in enumerate(task.segments or []):
+        if not isinstance(seg, dict) or not seg.get("start"):
+            continue
+        try:
+            start = parse_utc_naive(seg.get("start"))
+            raw_end = parse_utc_naive(seg.get("end")) if seg.get("end") else None
+            end = raw_end or clip_end
+        except Exception:
+            continue
+        overlap_start = max(start, day_start)
+        overlap_end = min(end, clip_end)
+        if overlap_end <= overlap_start:
+            continue
+        result.append({
+            "segment_index": index + 1,
+            "started_at": overlap_start,
+            "ended_at": overlap_end,
+            "seconds": round((overlap_end - overlap_start).total_seconds(), 3),
+            "source": seg.get("source") or "timer",
+            "clipped_to_recorded_at": bool(recorded_at is not None and (raw_end is None or raw_end > clip_end)),
+        })
+    return result
+
+
 def _time_integrity_segment_totals(db: Session, member: models.Member, work_date, recorded_at: datetime):
     day_start, day_end = _local_workday_utc_bounds(work_date, member)
     clip_end = min(recorded_at, day_end)
@@ -7333,6 +7369,9 @@ def time_integrity_audit_report(
         staff_name = member.name if member else (original.member_name or "Former staff member")
         task_started_at = getattr(original, "task_started_at", None)
         task_ended_at = getattr(original, "task_ended_at", None)
+        timer_segments = _time_integrity_task_segments(
+            tasks_by_id.get(original.task_id), member, original.work_date, original.recorded_at
+        ) if member is not None and original.task_id else []
         if (task_started_at is None or task_ended_at is None) and member is not None and original.task_id:
             historical_start, historical_end = _time_integrity_task_bounds(
                 tasks_by_id.get(original.task_id), member, original.work_date, original.recorded_at
@@ -7362,7 +7401,7 @@ def time_integrity_audit_report(
             task=original.task_name or "", entry_source=original.entry_source,
             manual_duration_seconds=manual_duration, recorded_at=original.recorded_at,
             recorded_timezone_name=recorded_timezone_name,
-            task_started_at=task_started_at, task_ended_at=task_ended_at,
+            task_started_at=task_started_at, task_ended_at=task_ended_at, timer_segments=timer_segments,
             net_active_presence_seconds=max(float(original.net_active_presence_seconds or 0.0), 0.0),
             automatically_tracked_seconds=max(float(original.automatically_tracked_seconds or 0.0), 0.0),
             recovered_allocated_seconds=max(float(original.recovered_allocated_seconds or 0.0), 0.0),
