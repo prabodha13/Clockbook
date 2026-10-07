@@ -11606,11 +11606,18 @@ export default function App() {
     // With no running timer the screen-lock event stays completely silent.
     if (source === "screen_locked" && workArrangementRef.current === "remote") {
       if (task) {
+        const pausedMessage = `Your timer for ${task.client_name}: ${task.name} was paused while you were away.`;
+        // Always surface an in-app operational notice when ClockBook itself paused a remote
+        // user's running timer. Browser/Windows notifications are permission-dependent, so
+        // relying on them alone can make the pause look silent even though it happened.
+        // This is deliberately only a toast: remote staff still never receive the office
+        // away-classification modal for screen locks.
+        showToast(pausedMessage);
         setTimeout(() => {
           if ("Notification" in window && Notification.permission === "granted") {
             try {
               const n = new Notification("Clockbook", {
-                body: `Your timer for ${task.client_name}: ${task.name} was paused while you were away.`,
+                body: pausedMessage,
                 tag: "clockbook-sleep-alert",
                 requireInteraction: true,
               });
