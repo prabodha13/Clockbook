@@ -11022,6 +11022,10 @@ export default function App() {
   const [showManualAddMember, setShowManualAddMember] = useState(false);
   const [invitationRefreshKey, setInvitationRefreshKey] = useState(0);
   const [sleepAlert, setSleepAlert] = useState(() => readSessionJson(PENDING_AWAY_STORAGE_KEY));
+  // Keep an immediate mirror of the away-alert state for action guards. React state updates are
+  // asynchronous, so the Resume button must be able to clear the guard synchronously before
+  // asking ClockBook to restart the paused task.
+  const sleepAlertRef = useRef(sleepAlert);
   const postAwayStartTaskRef = useRef(null);
   const [meetingAlert, setMeetingAlert] = useState(() => {
     const saved = readSessionJson(PENDING_MEETING_STORAGE_KEY);
@@ -11162,6 +11166,7 @@ export default function App() {
   // Action-required alerts survive an ordinary refresh/redeploy in this tab until the
   // person explicitly resolves them. Transient success/error toasts intentionally do not.
   useEffect(() => {
+    sleepAlertRef.current = sleepAlert;
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, sleepAlert);
   }, [sleepAlert]);
 
@@ -11170,6 +11175,10 @@ export default function App() {
   }, [meetingAlert]);
 
   function clearAwayAlert() {
+    // Clear the synchronous guard first. The React render that opened the modal still has the old
+    // sleepAlert value until the next render, and using that stale value made Resume immediately
+    // reject itself with "Resolve the time-away check".
+    sleepAlertRef.current = null;
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, null);
     setSleepAlert(null);
     // If recovered time was saved while an away check was still waiting, defer the normal
@@ -11596,6 +11605,7 @@ export default function App() {
     // notification. Sleep/offline alerts and every other flow are deliberately unchanged.
     if (source === "screen_locked" && workArrangementRef.current === "remote") return;
     const alert = { task: task || null, gapMs, sleepStartMs, inactivityEventId, ...(causePhrase ? { causePhrase } : {}), ...(source ? { source } : {}) };
+    sleepAlertRef.current = alert;
     writeSessionJson(PENDING_AWAY_STORAGE_KEY, alert);
     setSleepAlert(alert);
     // Firing this the instant the screen unlocks seems to land it in a window where Windows
@@ -12504,7 +12514,7 @@ export default function App() {
   // A task that tracks a number needs that starting figure once, the first time it is
   // started. Once start_count is set, resuming after a pause skips straight to starting.
   function requestStart(task) {
-    if (sleepAlert) {
+    if (sleepAlertRef.current) {
       showToast("Resolve the time-away check before starting or resuming a timer.", true);
       return;
     }
@@ -12526,7 +12536,7 @@ export default function App() {
   // though the recovered time had already been recorded. Away still keeps priority.
   function continueAfterSuccessfulRecovery(task) {
     if (!task) return;
-    if (sleepAlert) {
+    if (sleepAlertRef.current) {
       postAwayStartTaskRef.current = task;
       return;
     }
