@@ -9304,6 +9304,16 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const integrityTableRef = useRef(null);
   const integrityScrollSyncRef = useRef(false);
   const [integrityScrollLeft, setIntegrityScrollLeft] = useState(0);
+  const [expandedIntegritySegments, setExpandedIntegritySegments] = useState(() => new Set());
+
+  function toggleIntegritySegments(rowId) {
+    setExpandedIntegritySegments((previous) => {
+      const next = new Set(previous);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
 
   const visiblePodIds = new Set((members || []).map((m) => m.pod_id).filter(Boolean));
   const visiblePods = (pods || []).filter((p) => visiblePodIds.has(p.id));
@@ -9397,11 +9407,11 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
 
   const rows = data?.rows || [];
   const summary = data?.summary || {};
-  const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,155,140,140,150,150,150,150,90,110,110,140,180,135];
+  const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,95,155,140,140,150,150,150,150,90,110,110,140,180,135];
   const integrityTableWidth = integrityColumnWidths.reduce((total, width) => total + width, 0);
   const integrityHeaders = [
     ["Staff member", false], ["Work date", false], ["Client", false], ["Task", false], ["Entry source", false],
-    ["Manual duration", true], ["RecordedAt", false], ["Task started", false], ["Task ended", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
+    ["Manual duration", true], ["RecordedAt", false], ["Task started", false], ["Task ended", false], ["Segments", false], ["Selected location", false], ["Net active presence", true], ["Automatically tracked", true],
     ["Recovery already allocated", true], ["Prior manual allocated", true], ["Available unallocated active", true],
     ["Unreconciled manual time", true], ["Later edited?", false], ["Original value", true], ["Current value", true],
     ["Last edited", false], ["Reason / note", false], ["Review status", false],
@@ -9559,30 +9569,66 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
         <div ref={integrityTableScrollRef} onScroll={() => syncIntegrityHorizontalScroll("body")} className="cb-table-wrap" style={{ overflowX: "auto", maxWidth: "100%", borderTop: 0, borderRadius: "0 0 8px 8px" }}>
         <table ref={integrityTableRef} className="cb-table" style={{ width: integrityTableWidth, minWidth: integrityTableWidth, tableLayout: "fixed" }}>
           <colgroup>{integrityColumnWidths.map((w, i) => <col key={i} style={{ width: w }} />)}</colgroup>
-          <tbody>{rows.map((r) => <tr key={r.id} style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
-            <td>{r.staff_member}</td>
-            <td>{r.work_date}<div className="cb-hint">{r.entry_timing}</div></td>
-            <td>{r.client || "—"}</td>
-            <td>{r.task || "—"}</td>
-            <td>{r.entry_source}</td>
-            <td className="num cb-mono">{fmt(r.manual_duration_seconds)}</td>
-            <td>{formatInZone(r.recorded_at, r.recorded_timezone_name, true)}</td>
-            <td>{r.task_started_at ? formatInZone(r.task_started_at, r.recorded_timezone_name, false) : "—"}</td>
-            <td>{r.task_ended_at ? formatInZone(r.task_ended_at, r.recorded_timezone_name, false) : "—"}</td>
-            <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{(r.recorded_timezone_name || "UTC").replace(/_/g, " ")}</td>
-            <td className="num cb-mono">{fmt(r.net_active_presence_seconds)}</td>
-            <td className="num cb-mono">{fmt(r.automatically_tracked_seconds)}</td>
-            <td className="num cb-mono">{fmt(r.recovered_allocated_seconds)}</td>
-            <td className="num cb-mono">{fmt(r.prior_manual_allocated_seconds)}</td>
-            <td className="num cb-mono">{fmt(r.available_unallocated_active_seconds)}</td>
-            <td className="num cb-mono" style={{ fontWeight: Number(r.unreconciled_manual_seconds || 0) > 0 ? 800 : 500 }}>{fmt(r.unreconciled_manual_seconds)}</td>
-            <td>{yesNo(r.later_edited)}</td>
-            <td className="num cb-mono">{fmt(r.original_value_seconds)}</td>
-            <td className="num cb-mono">{fmt(r.current_value_seconds)}</td>
-            <td>{r.last_edited_at ? formatInZone(r.last_edited_at, r.recorded_timezone_name, true) : "—"}</td>
-            <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.reason_note || "—"}</td>
-            <td>{r.review_status}</td>
-          </tr>)}</tbody>
+          <tbody>{rows.map((r) => {
+            const segments = Array.isArray(r.timer_segments) ? r.timer_segments : [];
+            const expanded = expandedIntegritySegments.has(r.id);
+            return <Fragment key={r.id}>
+              <tr style={Number(r.unreconciled_manual_seconds || 0) > 0 ? { background: "#fff8e8" } : undefined}>
+                <td>{r.staff_member}</td>
+                <td>{r.work_date}<div className="cb-hint">{r.entry_timing}</div></td>
+                <td>{r.client || "—"}</td>
+                <td>{r.task || "—"}</td>
+                <td>{r.entry_source}</td>
+                <td className="num cb-mono">{fmt(r.manual_duration_seconds)}</td>
+                <td>{formatInZone(r.recorded_at, r.recorded_timezone_name, true)}</td>
+                <td>{r.task_started_at ? formatInZone(r.task_started_at, r.recorded_timezone_name, false) : "—"}</td>
+                <td>{r.task_ended_at ? formatInZone(r.task_ended_at, r.recorded_timezone_name, false) : "—"}</td>
+                <td>
+                  {segments.length > 0 ? <button
+                    type="button"
+                    className="cb-btn cb-btn-sm cb-btn-ghost"
+                    onClick={() => toggleIntegritySegments(r.id)}
+                    aria-expanded={expanded}
+                    title={expanded ? "Hide exact timer segments" : "Show exact timer segments"}
+                    style={{ padding: "4px 7px", whiteSpace: "nowrap" }}
+                  >
+                    {segments.length} {segments.length === 1 ? "segment" : "segments"}
+                    {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button> : "—"}
+                </td>
+                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{(r.recorded_timezone_name || "UTC").replace(/_/g, " ")}</td>
+                <td className="num cb-mono">{fmt(r.net_active_presence_seconds)}</td>
+                <td className="num cb-mono">{fmt(r.automatically_tracked_seconds)}</td>
+                <td className="num cb-mono">{fmt(r.recovered_allocated_seconds)}</td>
+                <td className="num cb-mono">{fmt(r.prior_manual_allocated_seconds)}</td>
+                <td className="num cb-mono">{fmt(r.available_unallocated_active_seconds)}</td>
+                <td className="num cb-mono" style={{ fontWeight: Number(r.unreconciled_manual_seconds || 0) > 0 ? 800 : 500 }}>{fmt(r.unreconciled_manual_seconds)}</td>
+                <td>{yesNo(r.later_edited)}</td>
+                <td className="num cb-mono">{fmt(r.original_value_seconds)}</td>
+                <td className="num cb-mono">{fmt(r.current_value_seconds)}</td>
+                <td>{r.last_edited_at ? formatInZone(r.last_edited_at, r.recorded_timezone_name, true) : "—"}</td>
+                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.reason_note || "—"}</td>
+                <td>{r.review_status}</td>
+              </tr>
+              {expanded && segments.length > 0 && <tr>
+                <td colSpan={integrityHeaders.length} style={{ padding: "0 14px 12px 14px", background: "var(--paper-soft)" }}>
+                  <div style={{ border: "1px solid var(--line)", borderRadius: 8, background: "var(--paper)", overflow: "hidden" }}>
+                    <div style={{ padding: "8px 10px", fontSize: 12, fontWeight: 700, borderBottom: "1px solid var(--line)" }}>Exact timer segments for this task on {r.work_date}</div>
+                    <table className="cb-table" style={{ width: "100%", minWidth: 0, tableLayout: "fixed" }}>
+                      <thead><tr><th style={{ width: 72 }}>Segment</th><th>Started</th><th>Ended</th><th className="num">Duration</th><th>Source</th></tr></thead>
+                      <tbody>{segments.map((segment) => <tr key={`${r.id}-${segment.segment_index}`}>
+                        <td>#{segment.segment_index}</td>
+                        <td>{formatInZone(segment.started_at, r.recorded_timezone_name, true)}</td>
+                        <td>{formatInZone(segment.ended_at, r.recorded_timezone_name, true)}{segment.clipped_to_recorded_at ? <div className="cb-hint">Clipped to this audit snapshot</div> : null}</td>
+                        <td className="num cb-mono">{fmt(segment.seconds)}</td>
+                        <td>{segment.source === "forgotten_time_recovery" ? "Recovered time" : "Timer"}</td>
+                      </tr>)}</tbody>
+                    </table>
+                  </div>
+                </td>
+              </tr>}
+            </Fragment>;
+          })}</tbody>
         </table>
       </div>
         </div>
