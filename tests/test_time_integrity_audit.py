@@ -469,5 +469,18 @@ def test_time_integrity_snapshots_task_start_and_end_and_backfills_legacy_rows()
         row = next(r for r in report.rows if r.task_id == task.id)
         assert row.task_started_at == day.replace(hour=9)
         assert row.task_ended_at == day.replace(hour=12, minute=30)
+        assert [(segment.segment_index, segment.started_at, segment.ended_at, segment.seconds, segment.source) for segment in row.timer_segments] == [
+            (1, day.replace(hour=9), day.replace(hour=10), 3600.0, "timer"),
+            (2, day.replace(hour=11), day.replace(hour=12, minute=30), 5400.0, "timer"),
+        ]
+
+        task.segments = [*(task.segments or []), {"start": day.replace(hour=12, minute=45).isoformat() + "Z", "end": day.replace(hour=14).isoformat() + "Z"}]
+        s.info["allow_audit_maintenance"] = True
+        s.commit()
+        s.info.pop("allow_audit_maintenance", None)
+        clipped = main._time_integrity_task_segments(task, staff, day.date(), day.replace(hour=13))
+        assert clipped[-1]["started_at"] == day.replace(hour=12, minute=45)
+        assert clipped[-1]["ended_at"] == day.replace(hour=13)
+        assert clipped[-1]["clipped_to_recorded_at"] is True
     finally:
         s.close()
