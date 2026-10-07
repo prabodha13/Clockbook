@@ -484,3 +484,60 @@ def test_time_integrity_snapshots_task_start_and_end_and_backfills_legacy_rows()
         assert clipped[-1]["clipped_to_recorded_at"] is True
     finally:
         s.close()
+
+
+def test_tracked_total_check_logs_browser_server_mismatch_and_report_exposes_timeline():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s, "tenant_tracked_total_check")
+        super_admin = _member(s, tenant.id, "tracked-total-super@example.com", "super_admin", timezone_name="UTC")
+        staff = _member(s, tenant.id, "tracked-total-staff@example.com", timezone_name="UTC")
+        client = _client(s, "Tracked Total Client")
+        now = datetime.utcnow().replace(microsecond=0)
+        day = now.date()
+        task = models.TaskInstance(
+            client_id=client.id, client_name=client.name, name="Tracked total task",
+            owner_id=staff.id, status="paused",
+            segments=[{
+                "start": (now - timedelta(hours=2)).isoformat() + "Z",
+                "end": (now - timedelta(hours=1)).isoformat() + "Z",
+            }],
+        )
+        s.add(task)
+        s.commit()
+
+        s.info["actor_member_id"] = staff.id
+        check = main.tracked_total_check(
+            schemas.TrackedTotalCheckIn(displayed_total_seconds=30 * 60),
+            current_member=staff, db=s,
+        )
+        assert check.work_date == day
+        assert check.server_total_seconds == pytest.approx(3600, abs=2)
+        assert check.difference_seconds == pytest.approx(1800, abs=2)
+        assert check.mismatch is True
+
+        event = s.query(models.AuditEvent).filter(
+            models.AuditEvent.actor_member_id == staff.id,
+            models.AuditEvent.action == "tracked_total_display_mismatch",
+        ).one()
+        assert event.changes["work_date"] == day.isoformat()
+        assert float(event.changes["displayed_total_seconds"]) == pytest.approx(1800)
+        assert float(event.changes["server_total_seconds"]) == pytest.approx(3600, abs=2)
+
+        s.info["actor_member_id"] = super_admin.id
+        report = main.time_integrity_audit_report(
+            date_from=day.isoformat(), date_to=day.isoformat(), member_id=staff.id,
+            current_member=super_admin, db=s,
+        )
+        assert len(report.daily_segments) == 1
+        segment = report.daily_segments[0]
+        assert segment.member_id == staff.id
+        assert segment.task_id == task.id
+        assert segment.seconds == pytest.approx(3600)
+        assert len(report.display_checks) == 1
+        discrepancy = report.display_checks[0]
+        assert discrepancy.member_id == staff.id
+        assert discrepancy.displayed_total_seconds == pytest.approx(1800)
+        assert discrepancy.server_total_seconds == pytest.approx(3600, abs=2)
+    finally:
+        s.close()
