@@ -9305,6 +9305,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const integrityScrollSyncRef = useRef(false);
   const [integrityScrollLeft, setIntegrityScrollLeft] = useState(0);
   const [expandedIntegritySegments, setExpandedIntegritySegments] = useState(() => new Set());
+  const [showDailyTimerTimeline, setShowDailyTimerTimeline] = useState(false);
 
   function toggleIntegritySegments(rowId) {
     setExpandedIntegritySegments((previous) => {
@@ -9406,7 +9407,20 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   }
 
   const rows = data?.rows || [];
+  const dailySegments = data?.daily_segments || [];
+  const displayChecks = data?.display_checks || [];
   const summary = data?.summary || {};
+  const dailySegmentTotals = (() => {
+    const grouped = new Map();
+    for (const segment of dailySegments) {
+      const key = `${segment.member_id}|${segment.work_date}`;
+      const previous = grouped.get(key) || { memberId: segment.member_id, staff: segment.staff_member, workDate: segment.work_date, seconds: 0, count: 0 };
+      previous.seconds += Math.max(0, Number(segment.seconds || 0));
+      previous.count += 1;
+      grouped.set(key, previous);
+    }
+    return [...grouped.values()].sort((a, b) => b.workDate.localeCompare(a.workDate) || a.staff.localeCompare(b.staff));
+  })();
   const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,95,155,140,140,150,150,150,150,90,110,110,140,180,135];
   const integrityTableWidth = integrityColumnWidths.reduce((total, width) => total + width, 0);
   const integrityHeaders = [
@@ -9540,6 +9554,53 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
           ["Average delay WorkDate → RecordedAt", `${Number(summary.average_delay_days || 0).toFixed(2)} days`],
           ["Staff with repeated unreconciled time", summary.repeated_unreconciled_staff || 0],
         ].map(([label, value]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "13px 15px" }}><div className="cb-hint">{label}</div><div style={{ fontSize: 22, fontWeight: 750, marginTop: 4 }}>{value}</div>{label.startsWith("Staff with") && (summary.repeated_unreconciled_staff_names || []).length > 0 && <div className="cb-hint" style={{ marginTop: 4 }}>{summary.repeated_unreconciled_staff_names.join(", ")}</div>}</div>)}
+      </div>
+
+      {displayChecks.length > 0 && <div style={{ border: "1px solid #e1b84b", background: "#fff8e8", borderRadius: 10, padding: 12, marginBottom: 16 }}>
+        <div style={{ fontWeight: 750, marginBottom: 4 }}>Displayed total differed from server evidence</div>
+        <div className="cb-hint" style={{ marginBottom: 8 }}>ClockBook captured these silently when the total visible in the browser differed from the server's timer segments by at least 30 seconds.</div>
+        <div className="cb-table-wrap" style={{ background: "var(--paper)" }}>
+          <table className="cb-table" style={{ minWidth: 860 }}>
+            <thead><tr><th>Staff member</th><th>Work date</th><th>Captured</th><th className="num">Displayed</th><th className="num">Server</th><th className="num">Difference</th><th>Selected location</th></tr></thead>
+            <tbody>{displayChecks.map((check) => <tr key={check.id}>
+              <td>{check.staff_member}</td><td>{check.work_date}</td>
+              <td>{formatInZone(check.captured_at, check.timezone_name, true)}</td>
+              <td className="num cb-mono">{fmt(check.displayed_total_seconds)}</td>
+              <td className="num cb-mono">{fmt(check.server_total_seconds)}</td>
+              <td className="num cb-mono" style={{ fontWeight: 800 }}>{check.difference_seconds >= 0 ? "+" : "−"}{fmt(Math.abs(check.difference_seconds))}</td>
+              <td>{(check.timezone_name || "UTC").replace(/_/g, " ")}</td>
+            </tr>)}</tbody>
+          </table>
+        </div>
+      </div>}
+
+      <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 16, overflow: "hidden" }}>
+        <button type="button" className="cb-btn cb-btn-ghost" onClick={() => setShowDailyTimerTimeline((value) => !value)} style={{ width: "100%", justifyContent: "space-between", borderRadius: 0, padding: "10px 12px" }}>
+          <span><strong>Tracked-time timeline</strong> <span className="cb-hint">{dailySegments.length} exact segment{dailySegments.length === 1 ? "" : "s"}</span></span>
+          {showDailyTimerTimeline ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </button>
+        {showDailyTimerTimeline && <div style={{ borderTop: "1px solid var(--line)" }}>
+          {dailySegmentTotals.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 12px", borderBottom: "1px solid var(--line)", background: "var(--paper-soft)" }}>
+            {dailySegmentTotals.map((total) => <div key={`${total.memberId}-${total.workDate}`} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "7px 9px", background: "var(--paper)" }}>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>{total.staff} · {total.workDate}</div>
+              <div className="cb-mono" style={{ marginTop: 2 }}>{fmt(total.seconds)} <span className="cb-hint">({total.count} segments)</span></div>
+            </div>)}
+          </div>}
+          {dailySegments.length === 0 ? <div className="cb-empty">No timer segments match the selected date, person, pod and client filters.</div> : <div className="cb-table-wrap" style={{ border: 0, borderRadius: 0 }}>
+            <table className="cb-table" style={{ minWidth: 1120 }}>
+              <thead><tr><th>Staff member</th><th>Work date</th><th>Client</th><th>Task</th><th>Segment</th><th>Started</th><th>Ended</th><th className="num">Duration</th><th>Source</th><th>Status</th></tr></thead>
+              <tbody>{dailySegments.map((segment) => {
+                const member = members.find((m) => m.id === segment.member_id);
+                const zone = member?.timezone_name || "UTC";
+                return <tr key={`${segment.member_id}-${segment.task_id}-${segment.segment_index}-${segment.started_at}`}>
+                  <td>{segment.staff_member}</td><td>{segment.work_date}</td><td>{segment.client || "—"}</td><td>{segment.task || "—"}</td><td>#{segment.segment_index}</td>
+                  <td>{formatInZone(segment.started_at, zone, true)}</td><td>{formatInZone(segment.ended_at, zone, true)}</td>
+                  <td className="num cb-mono">{fmt(segment.seconds)}</td><td>{segment.source === "forgotten_time_recovery" ? "Recovered time" : "Timer"}</td><td>{segment.task_status || "—"}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>}
+        </div>}
       </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
@@ -11029,6 +11090,8 @@ export default function App() {
   const [pods, setPods] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
+  const trackedTotalAuditTasksRef = useRef([]);
+  const trackedTotalAuditUserRef = useRef(null);
   const [timerActionPending, setTimerActionPending] = useState(null);
   const timerActionPendingRef = useRef(null);
   const [view, setView] = useState("dashboard");
@@ -11464,6 +11527,51 @@ export default function App() {
     send();
     const iv = setInterval(() => { if (!cancelled) send(); }, 5 * 60 * 1000);
     return () => { cancelled = true; clearInterval(iv); };
+  }, [authState, currentUser?.id]);
+
+  // Keep a silent proof of what the browser was actually displaying versus the
+  // server-authoritative segment total. This is intentionally management-only evidence.
+  // If a meaningful mismatch is detected, refresh task state immediately so the visible
+  // total self-heals while the backend keeps an append-only discrepancy record.
+  useEffect(() => { trackedTotalAuditTasksRef.current = tasks; }, [tasks]);
+  useEffect(() => { trackedTotalAuditUserRef.current = currentUser; }, [currentUser]);
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser) return;
+    let cancelled = false;
+    let checking = false;
+    const check = async () => {
+      if (cancelled || checking || document.visibilityState === "hidden") return;
+      const member = trackedTotalAuditUserRef.current;
+      if (!member) return;
+      checking = true;
+      try {
+        const nowMs = Date.now() + clockOffsetRef.current;
+        const displayedTotal = trackedTotalAuditTasksRef.current
+          .filter((task) => task.owner_id === member.id)
+          .reduce((sum, task) => sum + elapsedSecondsToday(task, nowMs, member), 0);
+        const result = await api.checkTrackedTotal(displayedTotal);
+        if (!cancelled && result?.mismatch) {
+          const freshTasks = await api.getTasksForTimerReconcile();
+          if (!cancelled) setTasks(freshTasks);
+        }
+      } catch (_) {
+        // Diagnostic/self-healing only. Never interrupt staff time tracking.
+      } finally {
+        checking = false;
+      }
+    };
+    const initial = setTimeout(check, 15000);
+    const iv = setInterval(check, 60000);
+    const onVisible = () => { if (document.visibilityState === "visible") check(); };
+    window.addEventListener("focus", check);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      clearTimeout(initial);
+      clearInterval(iv);
+      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [authState, currentUser?.id]);
 
   useEffect(() => {
