@@ -3525,6 +3525,47 @@ def _insights_is_billable(task: models.TaskInstance, billing_by_type=None):
     return task_type.lower().startswith("billable:")
 
 
+def _insights_client_work_type(task: models.TaskInstance):
+    """Return the broad client-work bucket used by the Client Work drill-down.
+
+    Prefer the template field because it is the most stable broad classification (for
+    example Bookkeeping, Year-End Accounts, Tax, Company Secretarial / CRO). Historical
+    or ad-hoc billable tasks fall back to their configured task type and finally task name.
+    """
+    label = (
+        getattr(task, "source_template_field", None)
+        or getattr(task, "source_template_category", None)
+        or task.task_type
+        or task.name
+        or "Other client work"
+    )
+    label = str(label).strip() or "Other client work"
+    if label.lower().startswith("billable:"):
+        label = label.split(":", 1)[1].strip() or "Other client work"
+    return label
+
+
+def _insights_client_work_period_label(task: models.TaskInstance):
+    label = period_label(task)
+    return label or "Period not recorded"
+
+
+def _insights_client_work_period_key(task: models.TaskInstance):
+    key = period_key(task)
+    return key if key.strip("|") else "unassigned"
+
+
+def _insights_client_work_metric(task: models.TaskInstance):
+    label = (getattr(task, "tracks_number_label", None) or "").strip()
+    if not label or task.start_count is None or task.end_count is None:
+        return None
+    try:
+        quantity = max(int(task.end_count) - int(task.start_count), 0)
+    except (TypeError, ValueError):
+        return None
+    return label, quantity
+
+
 def _insights_business_days(start_date, end_date):
     if end_date < start_date:
         return 0
@@ -3637,6 +3678,139 @@ def _insights_change(current_value, previous_value):
     if previous_value <= 0:
         return None
     return round(((current_value - previous_value) / previous_value) * 100, 1)
+
+
+@app.get("/api/insights/client-work")
+def get_insights_client_work(
+    member_id: str = None,
+    current_member: models.Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+):
+    """Billable client work accumulated to date for one visible person.
+
+    This deliberately reuses the existing Insights visibility model: staff can only see
+    themselves, Admins can only see members already in their permitted/pod scope, and
+    Super Admins can see everyone. Only submitted tasks whose configured task type is
+    billable are included. Non-billable internal/admin/help/L&D work never enters this
+    response.
+    """
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    target_id = member_id or current_member.id
+    if target_id not in allowed_ids:
+        raise HTTPException(403, "You cannot view client work for that person")
+    target = db.get(models.Member, target_id)
+    if not target:
+        raise HTTPException(404, "Member not found")
+
+    billing_by_type = {
+        row.name: bool(row.is_billable)
+        for row in db.query(models.TaskTypeOption).all()
+    }
+    tasks = db.query(models.TaskInstance).filter(
+        models.TaskInstance.status == "submitted",
+        models.TaskInstance.submitted_by_id == target_id,
+    ).all()
+    if current_member.role == "admin" and current_member.pod_id:
+        tasks = [t for t in tasks if _submitted_task_visible_to_admin_pod(t, current_member)]
+
+    tasks = [
+        t for t in tasks
+        if _insights_is_billable(t, billing_by_type)
+        and t.client_id
+        and (t.client_name or "").strip()
+        and (t.client_name or "").strip().lower() not in {"internal support", "internal admin"}
+    ]
+
+    clients = {}
+    total_seconds = 0.0
+    total_task_records = 0
+    for task in tasks:
+        seconds = _insights_task_seconds(task)
+        if seconds <= 0:
+            continue
+        total_seconds += seconds
+        total_task_records += 1
+        work_dt = _insights_task_work_date(task)
+        work_date = work_dt.date().isoformat() if work_dt else None
+        work_type = _insights_client_work_type(task)
+        pkey = _insights_client_work_period_key(task)
+        plabel = _insights_client_work_period_label(task)
+        client = clients.setdefault(task.client_id, {
+            "client_id": task.client_id,
+            "client_name": task.client_name,
+            "seconds": 0.0,
+            "task_records": 0,
+            "engagements": {},
+        })
+        client["seconds"] += seconds
+        client["task_records"] += 1
+        engagement_key = f"{work_type}||{pkey}"
+        engagement = client["engagements"].setdefault(engagement_key, {
+            "key": engagement_key,
+            "work_type": work_type,
+            "period": plabel,
+            "period_key": pkey,
+            "seconds": 0.0,
+            "task_records": 0,
+            "first_work_date": None,
+            "last_work_date": None,
+            "tasks": {},
+            "metrics": {},
+        })
+        engagement["seconds"] += seconds
+        engagement["task_records"] += 1
+        if work_date:
+            if engagement["first_work_date"] is None or work_date < engagement["first_work_date"]:
+                engagement["first_work_date"] = work_date
+            if engagement["last_work_date"] is None or work_date > engagement["last_work_date"]:
+                engagement["last_work_date"] = work_date
+
+        task_label = (task.name or "Task").strip() or "Task"
+        task_row = engagement["tasks"].setdefault(task_label, {
+            "task": task_label,
+            "seconds": 0.0,
+            "records": 0,
+        })
+        task_row["seconds"] += seconds
+        task_row["records"] += 1
+
+        metric = _insights_client_work_metric(task)
+        if metric:
+            label, quantity = metric
+            engagement["metrics"][label] = engagement["metrics"].get(label, 0) + quantity
+
+    client_rows = []
+    total_engagements = 0
+    for client in clients.values():
+        engagements = []
+        for engagement in client.pop("engagements").values():
+            engagement["seconds"] = round(engagement["seconds"], 1)
+            engagement["tasks"] = sorted(
+                ({**row, "seconds": round(row["seconds"], 1)} for row in engagement["tasks"].values()),
+                key=lambda row: (-row["seconds"], row["task"].lower()),
+            )
+            engagement["metrics"] = [
+                {"label": label, "quantity": quantity}
+                for label, quantity in sorted(engagement["metrics"].items(), key=lambda item: item[0].lower())
+            ]
+            engagements.append(engagement)
+        engagements.sort(key=lambda row: (-row["seconds"], row["work_type"].lower(), row["period"]))
+        total_engagements += len(engagements)
+        client["seconds"] = round(client["seconds"], 1)
+        client["engagement_count"] = len(engagements)
+        client["engagements"] = engagements
+        client_rows.append(client)
+    client_rows.sort(key=lambda row: (-row["seconds"], row["client_name"].lower()))
+
+    return {
+        "member_id": target.id,
+        "member_name": target.name,
+        "billable_seconds": round(total_seconds, 1),
+        "client_count": len(client_rows),
+        "engagement_count": total_engagements,
+        "task_records": total_task_records,
+        "clients": client_rows,
+    }
 
 
 @app.get("/api/insights")
