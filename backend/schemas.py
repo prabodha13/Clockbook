@@ -318,6 +318,10 @@ class LearningManagementRecordOut(BaseModel):
     article_references: List[LearningReference] = Field(default_factory=list)
 
 
+class LearningManagementCategoryUpdate(BaseModel):
+    category: str = Field(min_length=1, max_length=120)
+
+
 class TrackedMetricOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

@@ -4665,6 +4665,48 @@ def learning_management_report(date_from: str = None, date_to: str = None, perso
     ) for r in records]
 
 
+@app.patch("/api/learning/report/{record_id}/category", response_model=schemas.LearningManagementRecordOut)
+def update_learning_management_category(record_id: str, payload: schemas.LearningManagementCategoryUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    record = db.get(models.LearningRecord, record_id)
+    if not record:
+        raise HTTPException(404, "L&D record not found")
+    if not record.member_id or record.member_id not in allowed_ids:
+        raise HTTPException(403, "That L&D record is outside your management scope")
+
+    requested_category = payload.category.strip()
+    configured = db.query(models.LearningCategory).filter(
+        models.LearningCategory.is_active.is_(True),
+        func.lower(models.LearningCategory.name) == requested_category.lower(),
+    ).first()
+    if not configured:
+        raise HTTPException(400, "Choose an active L&D category")
+
+    previous_category = record.category
+    record.category = configured.name
+    if previous_category != record.category:
+        db.add(models.AuditEvent(
+            tenant_id=current_member.tenant_id,
+            actor_member_id=current_member.id,
+            action="learning_record_category_updated",
+            entity_type="LearningRecord",
+            entity_id=record.id,
+            changes={
+                "category": {"from": previous_category, "to": record.category},
+                "task_id": record.task_id,
+                "member_id": record.member_id,
+            },
+        ))
+    db.commit()
+    db.refresh(record)
+    return schemas.LearningManagementRecordOut(
+        id=record.id, task_id=record.task_id, member_id=record.member_id, member_name=record.member_name or "Unknown",
+        learned_at=record.learned_at, duration_seconds=record.duration_seconds, category=record.category, topic=record.topic,
+        what_i_learned=record.what_i_learned, tdm_references=record.tdm_references or [], article_references=record.article_references or [],
+    )
+
+
 @app.get("/api/tracked-metrics", response_model=list[schemas.TrackedMetricOut])
 def list_tracked_metrics(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     return db.query(models.TrackedMetric).order_by(models.TrackedMetric.name).all()
