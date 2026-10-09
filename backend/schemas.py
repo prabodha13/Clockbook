@@ -760,6 +760,27 @@ class TrackedTotalDiagnosticRow(BaseModel):
         return value.isoformat() + "Z"
 
 
+class TimeIntegrityDailySegment(BaseModel):
+    member_id: str
+    staff_member: str
+    work_date: date
+    task_id: str
+    client: str
+    task: str
+    segment_index: int
+    started_at: datetime
+    ended_at: datetime
+    seconds: float = 0.0
+    source: str = "timer"
+    task_status: str = ""
+
+    @field_serializer("started_at", "ended_at")
+    def serialize_daily_segment_utc(self, value: datetime, _info):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+
+
 class TimeIntegrityAuditSummary(BaseModel):
     total_manual_seconds: float = 0.0
     total_unreconciled_manual_seconds: float = 0.0
@@ -772,6 +793,7 @@ class TimeIntegrityAuditSummary(BaseModel):
 
 class TimeIntegrityAuditResponse(BaseModel):
     rows: List[TimeIntegrityAuditRow] = Field(default_factory=list)
+    daily_segments: List[TimeIntegrityDailySegment] = Field(default_factory=list)
     summary: TimeIntegrityAuditSummary
     tracked_total_diagnostics: List[TrackedTotalDiagnosticRow] = Field(default_factory=list)
 

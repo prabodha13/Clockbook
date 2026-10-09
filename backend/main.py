@@ -7625,6 +7625,70 @@ def time_integrity_audit_report(
         repeated_unreconciled_staff_names=repeated_names,
     )
 
+    # Full retained timer evidence for the selected day/person range. The row-level Segments
+    # column above is intentionally clipped to that immutable audit snapshot; this timeline is
+    # separate so management can reconstruct how a day's tracked total accumulated.
+    if start_date is not None:
+        timeline_from = start_date
+    elif result_rows:
+        timeline_from = min(row.work_date for row in result_rows)
+    else:
+        timeline_from = datetime.utcnow().date()
+    if end_date is not None:
+        timeline_to = end_date
+    elif result_rows:
+        timeline_to = max(row.work_date for row in result_rows)
+    else:
+        timeline_to = timeline_from
+
+    timeline_member_ids = set(member_ids or allowed_ids)
+    timeline_tasks_query = db.query(models.TaskInstance).filter(models.TaskInstance.owner_id.in_(timeline_member_ids))
+    if client_ids:
+        timeline_tasks_query = timeline_tasks_query.filter(models.TaskInstance.client_id.in_(client_ids))
+    timeline_tasks = timeline_tasks_query.all()
+    daily_segments = []
+    now_utc = datetime.utcnow()
+    for task in timeline_tasks:
+        member = members_by_id.get(task.owner_id)
+        if member is None:
+            continue
+        if current_member.role == "admin" and current_member.pod_id:
+            task_scope_pod = task.submitted_pod_id or member.pod_id
+            if task_scope_pod != current_member.pod_id:
+                continue
+        if pod_ids:
+            task_scope_pod = task.submitted_pod_id or member.pod_id
+            if task_scope_pod not in pod_ids:
+                continue
+        for index, seg in enumerate(task.segments or []):
+            if not isinstance(seg, dict) or not seg.get("start"):
+                continue
+            try:
+                seg_start = parse_utc_naive(seg.get("start"))
+                seg_end = parse_utc_naive(seg.get("end")) if seg.get("end") else now_utc
+            except Exception:
+                continue
+            if seg_end <= seg_start:
+                continue
+            local_start_date = _utc_naive_to_local(seg_start, member).date()
+            local_end_date = _utc_naive_to_local(max(seg_start, seg_end - timedelta(microseconds=1)), member).date()
+            slice_date = max(local_start_date, timeline_from)
+            last_date = min(local_end_date, timeline_to)
+            while slice_date <= last_date:
+                day_start, day_end = _local_workday_utc_bounds(slice_date, member)
+                overlap_start = max(seg_start, day_start)
+                overlap_end = min(seg_end, day_end, now_utc)
+                if overlap_end > overlap_start:
+                    daily_segments.append(schemas.TimeIntegrityDailySegment(
+                        member_id=member.id, staff_member=member.name or "", work_date=slice_date,
+                        task_id=task.id, client=task.client_name or "", task=task.name or "",
+                        segment_index=index + 1, started_at=overlap_start, ended_at=overlap_end,
+                        seconds=round((overlap_end - overlap_start).total_seconds(), 3),
+                        source=seg.get("source") or "timer", task_status=task.status or "",
+                    ))
+                slice_date += timedelta(days=1)
+    daily_segments.sort(key=lambda row: (row.work_date, row.started_at, row.staff_member), reverse=True)
+
     diagnostic_query = db.query(models.AuditEvent).filter(
         models.AuditEvent.action == "tracked_total_mismatch_detailed",
         models.AuditEvent.entity_type == "TrackedTotalDiagnostic",
@@ -7666,7 +7730,8 @@ def time_integrity_audit_report(
         ))
 
     return schemas.TimeIntegrityAuditResponse(
-        rows=result_rows, summary=summary, tracked_total_diagnostics=tracked_total_diagnostics
+        rows=result_rows, daily_segments=daily_segments, summary=summary,
+        tracked_total_diagnostics=tracked_total_diagnostics
     )
 
 
