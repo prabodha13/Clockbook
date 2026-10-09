@@ -12,7 +12,7 @@ import logging
 import json
 from urllib.parse import urlencode
 from io import StringIO
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from contextlib import asynccontextmanager
 
@@ -3683,16 +3683,21 @@ def _insights_change(current_value, previous_value):
 @app.get("/api/insights/client-work")
 def get_insights_client_work(
     member_id: str = None,
+    view: str = "recent",
     current_member: models.Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ):
-    """Billable client work accumulated to date for one visible person.
+    """Billable client work for one visible person, grouped by work period.
 
-    This deliberately reuses the existing Insights visibility model: staff can only see
-    themselves, Admins can only see members already in their permitted/pod scope, and
-    Super Admins can see everyone. Only submitted tasks whose configured task type is
-    billable are included. Non-billable internal/admin/help/L&D work never enters this
-    response.
+    Visibility filters choose which work periods are shown, not which task records count
+    inside a shown period. Once a period qualifies (for example September bookkeeping
+    that was worked on again in October), every historical submitted billable task for
+    that same client + work type + recorded period contributes to its total.
+
+    The endpoint deliberately reuses the existing Insights visibility model: staff can
+    only see themselves, Admins can only see members already in their permitted/pod
+    scope, and Super Admins can see everyone. Non-billable internal/admin/help/L&D work
+    never enters this response.
     """
     allowed_ids = _insights_allowed_member_ids(current_member, db)
     target_id = member_id or current_member.id
@@ -3701,6 +3706,18 @@ def get_insights_client_work(
     target = db.get(models.Member, target_id)
     if not target:
         raise HTTPException(404, "Member not found")
+
+    normalized_view = (view or "recent").strip().lower()
+    if normalized_view not in {"recent", "year_to_date", "last_12_months", "all"}:
+        raise HTTPException(400, "Invalid client work view")
+    try:
+        target_zone = ZoneInfo((getattr(target, "timezone_name", None) or "UTC").strip())
+    except (ZoneInfoNotFoundError, ValueError):
+        target_zone = timezone.utc
+    today_local = datetime.now(target_zone).date()
+    recent_cutoff = today_local - timedelta(days=89)
+    year_start = date(today_local.year, 1, 1)
+    last_12_months_cutoff = today_local - timedelta(days=364)
 
     billing_by_type = {
         row.name: bool(row.is_billable)
@@ -3781,9 +3798,32 @@ def get_insights_client_work(
 
     client_rows = []
     total_engagements = 0
+    visible_total_seconds = 0.0
+    visible_task_records = 0
+
+    def engagement_is_visible(engagement):
+        if normalized_view == "all":
+            return True
+        last_work = engagement.get("last_work_date")
+        if not last_work:
+            return False
+        try:
+            last_work_date = date.fromisoformat(last_work)
+        except (TypeError, ValueError):
+            return False
+        if normalized_view == "recent":
+            return last_work_date >= recent_cutoff
+        if normalized_view == "year_to_date":
+            return last_work_date >= year_start
+        return last_work_date >= last_12_months_cutoff
+
     for client in clients.values():
         engagements = []
+        client_seconds = 0.0
+        client_task_records = 0
         for engagement in client.pop("engagements").values():
+            if not engagement_is_visible(engagement):
+                continue
             engagement["seconds"] = round(engagement["seconds"], 1)
             engagement["tasks"] = sorted(
                 ({**row, "seconds": round(row["seconds"], 1)} for row in engagement["tasks"].values()),
@@ -3794,21 +3834,34 @@ def get_insights_client_work(
                 for label, quantity in sorted(engagement["metrics"].items(), key=lambda item: item[0].lower())
             ]
             engagements.append(engagement)
-        engagements.sort(key=lambda row: (-row["seconds"], row["work_type"].lower(), row["period"]))
+            client_seconds += engagement["seconds"]
+            client_task_records += engagement["task_records"]
+        if not engagements:
+            continue
+        engagements.sort(key=lambda row: (row.get("last_work_date") or "", row["work_type"].lower(), row["period"]), reverse=True)
         total_engagements += len(engagements)
-        client["seconds"] = round(client["seconds"], 1)
+        client["seconds"] = round(client_seconds, 1)
+        client["task_records"] = client_task_records
         client["engagement_count"] = len(engagements)
         client["engagements"] = engagements
         client_rows.append(client)
+        visible_total_seconds += client_seconds
+        visible_task_records += client_task_records
     client_rows.sort(key=lambda row: (-row["seconds"], row["client_name"].lower()))
+
 
     return {
         "member_id": target.id,
         "member_name": target.name,
-        "billable_seconds": round(total_seconds, 1),
+        "view": normalized_view,
+        "view_activity_from": (
+            None if normalized_view == "all"
+            else (recent_cutoff if normalized_view == "recent" else year_start if normalized_view == "year_to_date" else last_12_months_cutoff).isoformat()
+        ),
+        "billable_seconds": round(visible_total_seconds, 1),
         "client_count": len(client_rows),
         "engagement_count": total_engagements,
-        "task_records": total_task_records,
+        "task_records": visible_task_records,
         "clients": client_rows,
     }
 
