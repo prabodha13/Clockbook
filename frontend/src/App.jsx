@@ -5781,7 +5781,7 @@ function formatDayHeader(iso) {
   return d.toLocaleDateString(undefined, { weekday: "long", month: "short", day: "numeric" });
 }
 
-function CalendarEventModal({ event, initialStart, initialAllDay = false, members, currentUser, onClose, onSaved, onDeleted }) {
+function CalendarEventModal({ event, initialStart, initialAllDay = false, members, currentUser, onClose, onSaved, onDeleted, onTrackMeeting }) {
   const editing = !!event;
   const initialStartDate = event?.start ? new Date(event.start) : (initialStart || new Date());
   const initialEndDate = event?.end ? new Date(event.end) : new Date(initialStartDate.getTime() + 30 * 60 * 1000);
@@ -5960,8 +5960,19 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
         </div>
         <div className="cb-modal-foot" style={{ justifyContent: editing ? "space-between" : "flex-end" }}>
           {editing && <button className="cb-btn" disabled={busy} onClick={remove} style={{ color: "var(--danger)" }}><Trash2 size={14} />Delete</button>}
-          <div style={{ display: "flex", gap: 8 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
             {editing && event?.html_link && <a className="cb-btn cb-btn-ghost" href={event.html_link} target="_blank" rel="noreferrer">Open in Google</a>}
+            {editing && event?.meet_url && onTrackMeeting && (
+              <button
+                type="button"
+                className="cb-btn cb-btn-primary"
+                disabled={busy}
+                onClick={() => onTrackMeeting(event)}
+                title="Start a ClockBook meeting timer for this calendar meeting"
+              >
+                <Video size={14} />Track meeting
+              </button>
+            )}
             <button className="cb-btn cb-btn-ghost" disabled={busy} onClick={onClose}>Cancel</button>
             <button className="cb-btn cb-btn-primary" disabled={busy} onClick={save}>{busy ? "Saving..." : "Save"}</button>
           </div>
@@ -5971,7 +5982,7 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
   );
 }
 
-function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser }) {
+function CalendarPage({ onConnectCalendar, onQuickMeeting, onTrackMeeting, members, currentUser }) {
   const [state, setState] = useState({ loading: true, connected: false, events: [], error: "" });
   const [weekStart, setWeekStart] = useState(() => {
     const d = new Date();
@@ -6225,6 +6236,10 @@ function CalendarPage({ onConnectCalendar, onQuickMeeting, members, currentUser 
         initialAllDay={!!editor.initialAllDay}
         members={members} currentUser={currentUser}
         onClose={() => setEditor(null)} onSaved={load} onDeleted={load}
+        onTrackMeeting={(eventToTrack) => {
+          setEditor(null);
+          onTrackMeeting?.(eventToTrack);
+        }}
       />}
     </div>
   );
@@ -8202,14 +8217,18 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     <td>{r.role || "none"}</td>
                     <td>{r.task_type || "none"}</td>
                     <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
-                        {isAdmin && r.period_type && (
-                          <button type="button" className="cb-icon-btn" title="Correct submitted period" onClick={() => setPeriodEditRow(r)} style={{ width: 24, minWidth: 24, height: 24 }}>
-                            <Edit3 size={12} />
-                          </button>
-                        )}
-                      </div>
+                      {isAdmin && r.period_type ? (
+                        <button
+                          type="button"
+                          title="Correct submitted period"
+                          onClick={() => setPeriodEditRow(r)}
+                          style={{ display: "block", maxWidth: "100%", padding: 0, border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                        >
+                          {r.period || "none"}
+                        </button>
+                      ) : (
+                        <span style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
+                      )}
                     </td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                     {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
@@ -8287,15 +8306,19 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       <td>{r.role || "none"}</td>
                       <td>{r.task_type || "none"}</td>
                       <td>
-                      <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
-                        {isAdmin && r.period_type && (
-                          <button type="button" className="cb-icon-btn" title="Correct submitted period" onClick={() => setPeriodEditRow(r)} style={{ width: 24, minWidth: 24, height: 24 }}>
-                            <Edit3 size={12} />
+                        {isAdmin && r.period_type ? (
+                          <button
+                            type="button"
+                            title="Correct submitted period"
+                            onClick={() => setPeriodEditRow(r)}
+                            style={{ display: "block", maxWidth: "100%", padding: 0, border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                          >
+                            {r.period || "none"}
                           </button>
+                        ) : (
+                          <span style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
                         )}
-                      </div>
-                    </td>
+                      </td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                       {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                       <td>{r.bank_account || "none"}</td>
@@ -11283,6 +11306,7 @@ function MeetingClientPickerModal({ meetingSummary, clients, onClose, onConfirm 
 
 function MeetingAlertModal({ alert, onDismiss, onPause, onTrackMeeting }) {
   const [busy, setBusy] = useState(false);
+  const hasRunningTask = !!alert?.task;
   return (
     <div className="cb-overlay">
       <div className="cb-modal">
@@ -11291,18 +11315,25 @@ function MeetingAlertModal({ alert, onDismiss, onPause, onTrackMeeting }) {
         </div>
         <div className="cb-modal-body">
           <div style={{ lineHeight: 1.5 }}>
-            <strong>{alert.summary}</strong> looks like it's happening right now on your calendar.
-            Want to pause the timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> while you're in it,
-            or track the meeting itself instead?
+            <strong>{alert.summary}</strong> looks like it's happening right now on your calendar. {hasRunningTask ? (
+              <>
+                Want to pause the timer for <strong>{alert.task.client_name}: {alert.task.name}</strong> while you're in it,
+                or track the meeting itself instead?
+              </>
+            ) : (
+              <>Would you like ClockBook to start tracking the meeting?</>
+            )}
           </div>
         </div>
         <div className="cb-modal-foot" style={{ flexWrap: "wrap" }}>
-          <button className="cb-btn" disabled={busy} onClick={onDismiss}>Keep it running</button>
-          <button className="cb-btn" disabled={busy} onClick={async () => { setBusy(true); await onPause(); }}>
-            Just pause
-          </button>
+          <button className="cb-btn" disabled={busy} onClick={onDismiss}>{hasRunningTask ? "Keep it running" : "Not now"}</button>
+          {hasRunningTask && (
+            <button className="cb-btn" disabled={busy} onClick={async () => { setBusy(true); await onPause(); }}>
+              Just pause
+            </button>
+          )}
           <button className="cb-btn cb-btn-primary" disabled={busy} onClick={onTrackMeeting}>
-            Track this meeting instead
+            {hasRunningTask ? "Track this meeting instead" : "Track this meeting"}
           </button>
         </div>
       </div>
@@ -12961,7 +12992,7 @@ export default function App() {
   // ---------------------------------------------------------------
   // Google Calendar meeting check (optional, per person, entirely separate from the sleep
   // and lock detection above). Only ever runs at all for someone who has connected their own
-  // calendar, and only ever checks while they have a timer of their own running.
+  // calendar. It checks whether or not a normal task timer is currently running.
   // ---------------------------------------------------------------
 
   // Shows a one-time toast for the result of the Google OAuth redirect, then removes the
@@ -12987,8 +13018,7 @@ export default function App() {
   useEffect(() => {
     const iv = setInterval(async () => {
       if (!currentUser || !currentUser.google_calendar_connected) return;
-      const task = runningTaskRef.current;
-      if (!task) return;
+      const task = runningTaskRef.current || null;
       try {
         const { meeting } = await api.getMeetingNow();
         if (meeting && !promptedMeetingIdsRef.current.has(meeting.id)) {
@@ -12997,7 +13027,9 @@ export default function App() {
           const nextMeetingAlert = { task, summary: meeting.summary, meetingId: meeting.id, raisedAt: Date.now() };
           writeSessionJson(PENDING_MEETING_STORAGE_KEY, nextMeetingAlert);
           setMeetingAlert(nextMeetingAlert);
-          const alertText = `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`;
+          const alertText = task
+            ? `${meeting.summary} looks like it's starting now. Pause the timer for ${task.client_name}: ${task.name}?`
+            : `${meeting.summary} looks like it's starting now. Start tracking the meeting in ClockBook?`;
           let sentViaSlack = false;
           try {
             const result = await api.relayNotification(alertText);
@@ -13643,10 +13675,15 @@ export default function App() {
   }
 
   async function trackMeetingAsTask({ clientId = null, internal = false } = {}) {
+    if (idleNoTrackAlertRef.current || showForgottenRecovery) {
+      const message = "Resolve the forgotten-time recovery before starting a meeting timer.";
+      showToast(message, true);
+      throw new Error(message);
+    }
     const { task: existingTask, summary, meetingId } = meetingTrackPrompt;
     const client = clientId ? clients.find((c) => c.id === clientId) : null;
     try {
-      await pauseTask(existingTask.id);
+      if (existingTask?.id) await pauseTask(existingTask.id);
       const created = await api.createTask({
         client_id: internal ? "" : (client ? client.id : ""),
         client_name: internal ? "" : (client ? client.name : ""),
@@ -13821,7 +13858,20 @@ export default function App() {
               />
             )}
             {view === "calendar" && (
-              <CalendarPage onConnectCalendar={connectGoogleCalendar} onQuickMeeting={() => setShowQuickMeeting(true)} members={members} currentUser={effectiveCurrentUser} />
+              <CalendarPage
+                onConnectCalendar={connectGoogleCalendar}
+                onQuickMeeting={() => setShowQuickMeeting(true)}
+                onTrackMeeting={(event) => {
+                  setMeetingTrackPrompt({
+                    task: runningTaskRef.current || null,
+                    summary: event?.summary || "Calendar meeting",
+                    meetingId: event?.id || null,
+                    raisedAt: Date.now(),
+                  });
+                }}
+                members={members}
+                currentUser={effectiveCurrentUser}
+              />
             )}
             {view === "insights" && (
               <InsightsView
@@ -14092,7 +14142,7 @@ export default function App() {
           alert={meetingAlert}
           onDismiss={clearMeetingAlert}
           onPause={async () => {
-            await pauseTask(meetingAlert.task.id);
+            if (meetingAlert.task?.id) await pauseTask(meetingAlert.task.id);
             clearMeetingAlert();
           }}
           onTrackMeeting={() => {
