@@ -299,6 +299,7 @@ export const api = {
   reassignTask: (id, ownerId) =>
     request(`/tasks/${id}/reassign`, { method: "PATCH", body: JSON.stringify({ owner_id: ownerId }) }),
   togglePushed: (id) => request(`/tasks/${id}/toggle-pushed`, { method: "PATCH" }),
+  updateSubmittedTaskPeriod: (id, period) => request(`/tasks/${id}/period`, { method: "PATCH", body: JSON.stringify(period) }),
   deleteTask: (id) => request(`/tasks/${id}`, { method: "DELETE" }),
 };
 

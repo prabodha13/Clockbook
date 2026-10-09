@@ -7672,6 +7672,125 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   </div>;
 }
 
+function SubmittedPeriodCorrectionModal({ row, onClose, onSaved }) {
+  const type = row?.period_type || row?.pay_period_type || "";
+  const weeklyBookkeeping = type === "weekly" && /bookkeep/i.test(`${row?.task || ""} ${row?.task_type || ""} ${row?.template_name || ""}`);
+  const [year, setYear] = useState(row?.period_year != null ? String(row.period_year) : "");
+  const [number, setNumber] = useState(row?.period_number != null ? String(row.period_number) : (row?.pay_period_number != null ? String(row.pay_period_number) : ""));
+  const [start, setStart] = useState(row?.period_start || "");
+  const [end, setEnd] = useState(row?.period_end || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (!row) return null;
+
+  const save = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await api.updateSubmittedTaskPeriod(row.id, {
+        period_year: year ? Number(year) : null,
+        period_number: number ? Number(number) : null,
+        period_start: start || null,
+        period_end: end || null,
+      });
+      await onSaved(saved);
+    } catch (err) {
+      setError(err.message || "Could not update the period");
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="cb-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) onClose(); }}>
+      <div className="cb-modal" style={{ maxWidth: 560 }}>
+        <div className="cb-modal-head">
+          <div>
+            <div className="cb-modal-title">Correct submitted period</div>
+            <div className="cb-hint" style={{ marginTop: 3 }}>{row.client} · {row.task}</div>
+          </div>
+          <button className="cb-icon-btn" onClick={onClose} disabled={busy}><X size={16} /></button>
+        </div>
+        <form onSubmit={save}>
+          <div className="cb-modal-body">
+            <div className="cb-hint" style={{ marginBottom: 12 }}>
+              This changes only the period classification used by Export and Client Work. It does not change duration, segments, work date, task type or notes.
+            </div>
+            <div className="cb-field">
+              <label className="cb-label">Period type</label>
+              <input className="cb-input" value={PERIOD_TYPE_OPTIONS.find((o) => o.value === type)?.label || type || "Not recorded"} disabled />
+            </div>
+            {weeklyBookkeeping ? (
+              <>
+                <div className="cb-field">
+                  <label className="cb-label">Bookkeeping month</label>
+                  <input
+                    type="month"
+                    className="cb-input"
+                    value={start && /^\d{4}-\d{2}/.test(start) ? start.slice(0, 7) : (year && number ? `${year}-${String(number).padStart(2, "0")}` : "")}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setYear(value ? value.slice(0, 4) : "");
+                      setStart(value ? `${value}-01` : "");
+                      setNumber("");
+                    }}
+                    required
+                  />
+                </div>
+                <div className="cb-field">
+                  <label className="cb-label">Week</label>
+                  <select className="cb-select" value={number} onChange={(e) => setNumber(e.target.value)} required>
+                    <option value="">Select week</option>
+                    {[1,2,3,4,5].map((n) => <option key={n} value={n}>Week {n}</option>)}
+                  </select>
+                </div>
+              </>
+            ) : type === "daily" ? (
+              <div className="cb-field">
+                <label className="cb-label">Date</label>
+                <input type="date" className="cb-input" value={start} onChange={(e) => setStart(e.target.value)} required />
+              </div>
+            ) : type === "custom" ? (
+              <div className="cb-field">
+                <label className="cb-label">Custom period</label>
+                <div className="cb-field-row">
+                  <input type="date" className="cb-input" value={start} onChange={(e) => setStart(e.target.value)} required />
+                  <span style={{ color: "var(--ink-faint)", alignSelf: "center" }}>to</span>
+                  <input type="date" className="cb-input" value={end} min={start || undefined} onChange={(e) => setEnd(e.target.value)} required />
+                </div>
+              </div>
+            ) : (
+              <div className="cb-field-row">
+                <div className="cb-field" style={{ flex: 1 }}>
+                  <label className="cb-label">Year</label>
+                  <input type="number" min="1900" max="2100" className="cb-input" value={year} onChange={(e) => setYear(e.target.value)} required />
+                </div>
+                {type && type !== "year" && (
+                  <div className="cb-field" style={{ flex: 1 }}>
+                    <label className="cb-label">Period</label>
+                    <select className="cb-select" value={number} onChange={(e) => setNumber(e.target.value)} required>
+                      <option value="">Select period</option>
+                      {Array.from({ length: periodNumberLimit(type) }, (_, i) => i + 1).map((n) => (
+                        <option key={n} value={n}>{periodNumberLabel(type, n)}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
+            {error && <div className="cb-error" style={{ marginTop: 10 }}>{error}</div>}
+          </div>
+          <div className="cb-modal-foot">
+            <button type="button" className="cb-btn cb-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
+            <button type="submit" className="cb-btn cb-btn-primary" disabled={busy || !type}>{busy ? "Saving…" : "Save correction"}</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
   const canViewTrackedTime = currentUser?.role !== "admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.VIEW_TRACKED_TIME);
   const [pushFilter, setPushFilter] = useState("pending");
@@ -7688,6 +7807,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   const exportTableRef = useRef(null);
   const exportHeaderRef = useRef(null);
   const [floatingExportHeader, setFloatingExportHeader] = useState({ visible: false, left: 0, width: 0, top: 0, columns: [] });
+  const [periodEditRow, setPeriodEditRow] = useState(null);
 
   // Export lists can become large, so keep the client/staff pickers searchable and
   // deterministic. The pseudo "all" option stays at the top; real names are A-Z.
@@ -8081,7 +8201,16 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     <td><ExportTaskCell row={r} /></td>
                     <td>{r.role || "none"}</td>
                     <td>{r.task_type || "none"}</td>
-                    <td>{r.period || "none"}</td>
+                    <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
+                        {isAdmin && r.period_type && (
+                          <button type="button" className="cb-icon-btn" title="Correct submitted period" onClick={() => setPeriodEditRow(r)} style={{ width: 24, minWidth: 24, height: 24 }}>
+                            <Edit3 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                     {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                     <td>{r.bank_account || "none"}</td>
@@ -8157,7 +8286,16 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       <td><ExportTaskCell row={r} child /></td>
                       <td>{r.role || "none"}</td>
                       <td>{r.task_type || "none"}</td>
-                      <td>{r.period || "none"}</td>
+                      <td>
+                      <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+                        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
+                        {isAdmin && r.period_type && (
+                          <button type="button" className="cb-icon-btn" title="Correct submitted period" onClick={() => setPeriodEditRow(r)} style={{ width: 24, minWidth: 24, height: 24 }}>
+                            <Edit3 size={12} />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
                       {canViewTrackedTime && <td className="num cb-mono">{r.adjusted && r.tracked_seconds != null ? formatHM(r.tracked_seconds) : ""}</td>}
                       <td>{r.bank_account || "none"}</td>
@@ -8188,6 +8326,16 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
           </tbody>
         </table>
       </div>
+      {periodEditRow && isAdmin && (
+        <SubmittedPeriodCorrectionModal
+          row={periodEditRow}
+          onClose={() => setPeriodEditRow(null)}
+          onSaved={async () => {
+            setPeriodEditRow(null);
+            await loadRows();
+          }}
+        />
+      )}
     </div>
   );
 }
