@@ -697,6 +697,69 @@ class TimeIntegrityAuditRow(BaseModel):
         return value.isoformat() + "Z"
 
 
+class TrackedTotalBrowserSegment(BaseModel):
+    segment_index: int = Field(ge=1, le=10000)
+    started_at: str = Field(min_length=1, max_length=64)
+    ended_at: Optional[str] = Field(default=None, max_length=64)
+    source: Optional[str] = Field(default=None, max_length=64)
+    seconds: float = Field(default=0.0, ge=0, le=172800)
+
+
+class TrackedTotalBrowserTask(BaseModel):
+    task_id: str = Field(min_length=1, max_length=128)
+    task_name: str = Field(default="", max_length=500)
+    client_name: str = Field(default="", max_length=500)
+    seconds: float = Field(default=0.0, ge=0, le=172800)
+    segments: List[TrackedTotalBrowserSegment] = Field(default_factory=list, max_length=500)
+
+
+class TrackedTotalCheckIn(BaseModel):
+    captured_at: datetime
+    timezone_name: str = Field(min_length=1, max_length=100)
+    browser_total_seconds: float = Field(default=0.0, ge=0, le=172800)
+    tasks: List[TrackedTotalBrowserTask] = Field(default_factory=list, max_length=1000)
+
+
+class TrackedTotalDiagnosticSegment(BaseModel):
+    segment_index: int
+    started_at: str
+    ended_at: Optional[str] = None
+    source: Optional[str] = None
+    seconds: float = 0.0
+    issue: Literal["missing_in_browser", "different_end", "browser_only"]
+    browser_ended_at: Optional[str] = None
+    browser_seconds: Optional[float] = None
+
+
+class TrackedTotalDiagnosticTask(BaseModel):
+    task_id: str
+    task_name: str = ""
+    client_name: str = ""
+    browser_seconds: float = 0.0
+    server_seconds: float = 0.0
+    difference_seconds: float = 0.0
+    segment_differences: List[TrackedTotalDiagnosticSegment] = Field(default_factory=list)
+
+
+class TrackedTotalDiagnosticRow(BaseModel):
+    id: str
+    member_id: str
+    staff_member: str
+    work_date: date
+    captured_at: datetime
+    timezone_name: str = "UTC"
+    browser_total_seconds: float = 0.0
+    server_total_seconds: float = 0.0
+    difference_seconds: float = 0.0
+    task_differences: List[TrackedTotalDiagnosticTask] = Field(default_factory=list)
+
+    @field_serializer("captured_at")
+    def serialize_captured_at_utc(self, value: datetime, _info):
+        if value.tzinfo is not None:
+            value = value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value.isoformat() + "Z"
+
+
 class TimeIntegrityAuditSummary(BaseModel):
     total_manual_seconds: float = 0.0
     total_unreconciled_manual_seconds: float = 0.0
@@ -707,61 +770,8 @@ class TimeIntegrityAuditSummary(BaseModel):
     repeated_unreconciled_staff_names: List[str] = Field(default_factory=list)
 
 
-class TimeIntegrityDailySegment(BaseModel):
-    member_id: str
-    staff_member: str
-    work_date: date
-    task_id: str
-    client: str
-    task: str
-    segment_index: int
-    started_at: datetime
-    ended_at: datetime
-    seconds: float = 0.0
-    source: str = "timer"
-    task_status: str = ""
-
-    @field_serializer("started_at", "ended_at")
-    def serialize_daily_segment_utc(self, value: datetime, _info):
-        if value.tzinfo is not None:
-            value = value.astimezone(timezone.utc).replace(tzinfo=None)
-        return value.isoformat() + "Z"
-
-
-class TrackedTotalDisplayCheck(BaseModel):
-    id: str
-    member_id: str
-    staff_member: str
-    work_date: date
-    captured_at: datetime
-    timezone_name: str = "UTC"
-    displayed_total_seconds: float = 0.0
-    server_total_seconds: float = 0.0
-    difference_seconds: float = 0.0
-    running_task_id: Optional[str] = None
-
-    @field_serializer("captured_at")
-    def serialize_check_utc(self, value: datetime, _info):
-        if value.tzinfo is not None:
-            value = value.astimezone(timezone.utc).replace(tzinfo=None)
-        return value.isoformat() + "Z"
-
-
-class TrackedTotalCheckIn(BaseModel):
-    displayed_total_seconds: float = Field(ge=0, le=86400 * 2)
-
-
-class TrackedTotalCheckOut(BaseModel):
-    work_date: date
-    displayed_total_seconds: float = 0.0
-    server_total_seconds: float = 0.0
-    difference_seconds: float = 0.0
-    mismatch: bool = False
-
-
 class TimeIntegrityAuditResponse(BaseModel):
     rows: List[TimeIntegrityAuditRow] = Field(default_factory=list)
-    daily_segments: List[TimeIntegrityDailySegment] = Field(default_factory=list)
-    display_checks: List[TrackedTotalDisplayCheck] = Field(default_factory=list)
     summary: TimeIntegrityAuditSummary
+    tracked_total_diagnostics: List[TrackedTotalDiagnosticRow] = Field(default_factory=list)
 
