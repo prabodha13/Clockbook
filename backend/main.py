@@ -3782,6 +3782,18 @@ def get_insights_client_work(
     clients = {}
     total_seconds = 0.0
     total_task_records = 0
+
+    def task_is_in_activity_window(work_date_value):
+        if normalized_view == "all":
+            return True
+        if activity_from is None or activity_to is None or not work_date_value:
+            return False
+        try:
+            worked_on = date.fromisoformat(work_date_value)
+        except (TypeError, ValueError):
+            return False
+        return activity_from <= worked_on <= activity_to
+
     for task in tasks:
         seconds = _insights_task_seconds(task)
         if seconds <= 0:
@@ -3790,6 +3802,7 @@ def get_insights_client_work(
         total_task_records += 1
         work_dt = _insights_task_work_date(task)
         work_date = work_dt.date().isoformat() if work_dt else None
+        in_activity_window = task_is_in_activity_window(work_date)
         work_type = _insights_client_work_type(task)
         pkey = _insights_client_work_period_key(task)
         plabel = _insights_client_work_period_label(task)
@@ -3797,10 +3810,13 @@ def get_insights_client_work(
             "client_id": task.client_id,
             "client_name": task.client_name,
             "seconds": 0.0,
+            "range_seconds": 0.0,
             "task_records": 0,
             "engagements": {},
         })
         client["seconds"] += seconds
+        if in_activity_window:
+            client["range_seconds"] += seconds
         client["task_records"] += 1
         engagement_key = f"{work_type}||{pkey}"
         engagement = client["engagements"].setdefault(engagement_key, {
@@ -3809,6 +3825,7 @@ def get_insights_client_work(
             "period": plabel,
             "period_key": pkey,
             "seconds": 0.0,
+            "range_seconds": 0.0,
             "task_records": 0,
             "first_work_date": None,
             "last_work_date": None,
@@ -3817,6 +3834,8 @@ def get_insights_client_work(
             "metrics": {},
         })
         engagement["seconds"] += seconds
+        if in_activity_window:
+            engagement["range_seconds"] += seconds
         engagement["task_records"] += 1
         if work_date:
             engagement["activity_dates"].add(work_date)
@@ -3848,6 +3867,7 @@ def get_insights_client_work(
     client_rows = []
     total_engagements = 0
     visible_total_seconds = 0.0
+    visible_range_seconds = 0.0
     visible_task_records = 0
 
     def engagement_is_visible(engagement):
@@ -3867,12 +3887,14 @@ def get_insights_client_work(
     for client in clients.values():
         engagements = []
         client_seconds = 0.0
+        client_range_seconds = 0.0
         client_task_records = 0
         for engagement in client.pop("engagements").values():
             if not engagement_is_visible(engagement):
                 continue
             engagement.pop("activity_dates", None)
             engagement["seconds"] = round(engagement["seconds"], 1)
+            engagement["range_seconds"] = round(engagement.get("range_seconds", 0.0), 1)
             engagement["tasks"] = sorted(
                 (
                     {
@@ -3894,17 +3916,20 @@ def get_insights_client_work(
             ]
             engagements.append(engagement)
             client_seconds += engagement["seconds"]
+            client_range_seconds += engagement.get("range_seconds", 0.0)
             client_task_records += engagement["task_records"]
         if not engagements:
             continue
         engagements.sort(key=lambda row: (row.get("last_work_date") or "", row["work_type"].lower(), row["period"]), reverse=True)
         total_engagements += len(engagements)
         client["seconds"] = round(client_seconds, 1)
+        client["range_seconds"] = round(client_range_seconds, 1)
         client["task_records"] = client_task_records
         client["engagement_count"] = len(engagements)
         client["engagements"] = engagements
         client_rows.append(client)
         visible_total_seconds += client_seconds
+        visible_range_seconds += client_range_seconds
         visible_task_records += client_task_records
     client_rows.sort(key=lambda row: (-row["seconds"], row["client_name"].lower()))
 
@@ -3916,6 +3941,7 @@ def get_insights_client_work(
         "view_activity_from": activity_from.isoformat() if activity_from else None,
         "view_activity_to": activity_to.isoformat() if activity_to else None,
         "billable_seconds": round(visible_total_seconds, 1),
+        "range_billable_seconds": round(visible_range_seconds, 1),
         "client_count": len(client_rows),
         "engagement_count": total_engagements,
         "task_records": visible_task_records,
