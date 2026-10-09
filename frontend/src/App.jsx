@@ -9350,6 +9350,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const integrityScrollSyncRef = useRef(false);
   const [integrityScrollLeft, setIntegrityScrollLeft] = useState(0);
   const [expandedIntegritySegments, setExpandedIntegritySegments] = useState(() => new Set());
+  const [showDailyTimerTimeline, setShowDailyTimerTimeline] = useState(false);
   const [expandedTrackedDiagnostics, setExpandedTrackedDiagnostics] = useState(() => new Set());
 
   function toggleIntegritySegments(rowId) {
@@ -9461,7 +9462,19 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   }
 
   const rows = data?.rows || [];
+  const dailySegments = data?.daily_segments || [];
   const summary = data?.summary || {};
+  const dailySegmentTotals = (() => {
+    const grouped = new Map();
+    for (const segment of dailySegments) {
+      const key = `${segment.member_id}|${segment.work_date}`;
+      const previous = grouped.get(key) || { memberId: segment.member_id, staff: segment.staff_member, workDate: segment.work_date, seconds: 0, count: 0 };
+      previous.seconds += Math.max(0, Number(segment.seconds || 0));
+      previous.count += 1;
+      grouped.set(key, previous);
+    }
+    return [...grouped.values()].sort((a, b) => b.workDate.localeCompare(a.workDate) || a.staff.localeCompare(b.staff));
+  })();
   const trackedTotalDiagnostics = data?.tracked_total_diagnostics || [];
   const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,95,155,140,140,150,150,150,150,90,110,110,140,180,135];
   const integrityTableWidth = integrityColumnWidths.reduce((total, width) => total + width, 0);
@@ -9650,6 +9663,35 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
           </table>
         </div>
       </div>}
+
+      <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 16, overflow: "hidden" }}>
+        <button type="button" className="cb-btn cb-btn-ghost" onClick={() => setShowDailyTimerTimeline((value) => !value)} style={{ width: "100%", justifyContent: "space-between", borderRadius: 0, padding: "10px 12px" }}>
+          <span><strong>Tracked-time timeline</strong> <span className="cb-hint">{dailySegments.length} exact segment{dailySegments.length === 1 ? "" : "s"}</span></span>
+          {showDailyTimerTimeline ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+        </button>
+        {showDailyTimerTimeline && <div style={{ borderTop: "1px solid var(--line)" }}>
+          {dailySegmentTotals.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 12px", borderBottom: "1px solid var(--line)", background: "var(--paper-soft)" }}>
+            {dailySegmentTotals.map((total) => <div key={`${total.memberId}-${total.workDate}`} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "7px 9px", background: "var(--paper)" }}>
+              <div style={{ fontSize: 12, fontWeight: 700 }}>{total.staff} · {total.workDate}</div>
+              <div className="cb-mono" style={{ marginTop: 2 }}>{fmt(total.seconds)} <span className="cb-hint">({total.count} segments)</span></div>
+            </div>)}
+          </div>}
+          {dailySegments.length === 0 ? <div className="cb-empty">No timer segments match the selected date, person, pod and client filters.</div> : <div className="cb-table-wrap" style={{ border: 0, borderRadius: 0 }}>
+            <table className="cb-table" style={{ minWidth: 1120 }}>
+              <thead><tr><th>Staff member</th><th>Work date</th><th>Client</th><th>Task</th><th>Segment</th><th>Started</th><th>Ended</th><th className="num">Duration</th><th>Source</th><th>Status</th></tr></thead>
+              <tbody>{dailySegments.map((segment) => {
+                const member = members.find((m) => m.id === segment.member_id);
+                const zone = member?.timezone_name || "UTC";
+                return <tr key={`${segment.member_id}-${segment.task_id}-${segment.segment_index}-${segment.started_at}`}>
+                  <td>{segment.staff_member}</td><td>{segment.work_date}</td><td>{segment.client || "—"}</td><td>{segment.task || "—"}</td><td>#{segment.segment_index}</td>
+                  <td>{formatInZone(segment.started_at, zone, true)}</td><td>{formatInZone(segment.ended_at, zone, true)}</td>
+                  <td className="num cb-mono">{fmt(segment.seconds)}</td><td>{segment.source === "forgotten_time_recovery" ? "Recovered time" : "Timer"}</td><td>{segment.task_status || "—"}</td>
+                </tr>;
+              })}</tbody>
+            </table>
+          </div>}
+        </div>}
+      </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
         <div style={{ position: "relative", maxWidth: "100%" }}>
