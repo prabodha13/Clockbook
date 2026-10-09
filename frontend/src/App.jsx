@@ -4194,13 +4194,13 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
             <div style={{ border: "1px solid var(--line)", borderRadius: 10, padding: 14, background: "var(--paper)" }}><div className="cb-group-title" style={{ marginBottom: 10 }}>L&D hours by category</div>{byCategory.map((r) => <div key={r.name} style={{ display: "grid", gridTemplateColumns: "minmax(140px,1fr) 1.4fr 72px", gap: 8, alignItems: "center", marginBottom: 8 }}><span>{r.name}</span><div style={{ height: 8, background: "var(--paper-soft)", borderRadius: 999, overflow: "hidden" }}><div style={{ width: `${Math.max(3, r.seconds / maxCategory * 100)}%`, height: "100%", background: "var(--green)" }} /></div><span className="cb-mono" style={{ textAlign: "right" }}>{formatHM(r.seconds)}</span></div>)}</div>
           </div>}
           <div className="cb-table-wrap">
-            <table className="cb-table" style={{ tableLayout: "fixed", minWidth: 1180, width: "100%" }}>
+            <table className="cb-table" style={{ tableLayout: "fixed", minWidth: 1430, width: "100%" }}>
               <colgroup>
                 <col style={{ width: 120 }} />
                 <col style={{ width: 90 }} />
                 <col style={{ width: 90 }} />
+                <col style={{ width: 210 }} />
                 <col style={{ width: 150 }} />
-                <col style={{ width: 140 }} />
                 <col style={{ width: 430 }} />
                 <col style={{ width: 160 }} />
                 <col style={{ width: 180 }} />
@@ -4210,17 +4210,47 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
                 <td style={{ fontWeight: 650, overflowWrap: "anywhere" }}>{r.member_name}</td>
                 <td>{formatDate(r.learned_at)}</td>
                 <td className="num cb-mono">{formatHM(r.duration_seconds)}</td>
-                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>
-                  {editingLearningRecordId === r.id ? <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
-                    <select className="cb-select" value={editingLearningRecordCategory} onChange={(e) => setEditingLearningRecordCategory(e.target.value)} disabled={savingLearningRecordId === r.id} style={{ minWidth: 120, padding: "5px 7px" }}>
+                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere", verticalAlign: "top" }}>
+                  {editingLearningRecordId === r.id ? <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 26px 26px", alignItems: "center", gap: 4, width: "100%", minWidth: 0 }}>
+                    <select
+                      className="cb-select"
+                      value={editingLearningRecordCategory}
+                      onChange={(e) => setEditingLearningRecordCategory(e.target.value)}
+                      disabled={savingLearningRecordId === r.id}
+                      title={editingLearningRecordCategory}
+                      style={{ width: "100%", minWidth: 0, height: 30, padding: "4px 26px 4px 7px", fontSize: 12 }}
+                    >
                       {!categories.some((c) => c.name === r.category) && <option value={r.category}>{r.category} (current)</option>}
                       {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
                     </select>
-                    <button type="button" className="cb-icon-btn" title="Save category" disabled={savingLearningRecordId === r.id || !editingLearningRecordCategory.trim()} onClick={() => saveLearningRecordCategory(r)}><Check size={13} /></button>
-                    <button type="button" className="cb-icon-btn" title="Cancel" disabled={savingLearningRecordId === r.id} onClick={() => { setEditingLearningRecordId(null); setEditingLearningRecordCategory(""); }}><X size={13} /></button>
-                  </div> : <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span>{r.category}</span>
-                    <button type="button" className="cb-icon-btn" title="Edit category only" onClick={() => { setEditingLearningRecordId(r.id); setEditingLearningRecordCategory(r.category); }}><Edit3 size={12} /></button>
+                    <button
+                      type="button"
+                      className="cb-icon-btn"
+                      title="Save category"
+                      aria-label="Save category"
+                      disabled={savingLearningRecordId === r.id || !editingLearningRecordCategory.trim()}
+                      onClick={() => saveLearningRecordCategory(r)}
+                      style={{ width: 26, height: 26, minWidth: 26, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                    ><Check size={12} /></button>
+                    <button
+                      type="button"
+                      className="cb-icon-btn"
+                      title="Cancel"
+                      aria-label="Cancel category edit"
+                      disabled={savingLearningRecordId === r.id}
+                      onClick={() => { setEditingLearningRecordId(null); setEditingLearningRecordCategory(""); }}
+                      style={{ width: 26, height: 26, minWidth: 26, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                    ><X size={12} /></button>
+                  </div> : <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 26px", alignItems: "start", gap: 5, width: "100%", minWidth: 0 }}>
+                    <span style={{ minWidth: 0, overflowWrap: "anywhere" }}>{r.category}</span>
+                    <button
+                      type="button"
+                      className="cb-icon-btn"
+                      title="Edit category only"
+                      aria-label={`Edit category for ${r.member_name}`}
+                      onClick={() => { setEditingLearningRecordId(r.id); setEditingLearningRecordCategory(r.category); }}
+                      style={{ width: 26, height: 26, minWidth: 26, padding: 0, display: "inline-flex", alignItems: "center", justifyContent: "center" }}
+                    ><Edit3 size={12} /></button>
                   </div>}
                 </td>
                 <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.topic}</td>
