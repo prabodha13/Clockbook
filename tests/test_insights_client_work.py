@@ -42,8 +42,8 @@ def _member(session, tenant_id, role="member", name="User", pod_id=None):
     return member
 
 
-def _submitted_task(session, client, member, *, name, task_type, seconds, field="Year-End Accounts", period_year=2025, period_type="year", submitted_pod_id=None, metric_label="", start_count=None, end_count=None):
-    end = datetime.utcnow().replace(microsecond=0)
+def _submitted_task(session, client, member, *, name, task_type, seconds, field="Year-End Accounts", period_year=2025, period_type="year", submitted_pod_id=None, metric_label="", start_count=None, end_count=None, work_at=None):
+    end = (work_at or datetime.utcnow()).replace(microsecond=0)
     start = end - timedelta(seconds=seconds)
     task = models.TaskInstance(
         client_id=client.id,
@@ -119,5 +119,52 @@ def test_client_work_staff_cannot_view_another_member_but_super_admin_can():
         result = main.get_insights_client_work(member_id=staff_b.id, current_member=super_admin, db=s)
         assert result["member_id"] == staff_b.id
         assert result["billable_seconds"] == 1200
+    finally:
+        s.close()
+
+
+def test_client_work_recent_filters_periods_but_keeps_full_history_inside_visible_period():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s)
+        member = _member(s, tenant.id, name="Staff")
+        client = models.Client(name="Bookkeeping Client", code=f"BK{uuid4().hex[:5]}")
+        s.add(client)
+        s.add(models.TaskTypeOption(name="Billable Bookkeeping", is_billable=True))
+        s.flush()
+
+        now = datetime.utcnow().replace(microsecond=0)
+        # Same September bookkeeping period: one old entry and one recent entry.
+        # Recent view must show the period and include BOTH durations in its total.
+        first_same_period = _submitted_task(
+            s, client, member, name="Bookkeeping", task_type="Billable Bookkeeping", seconds=3600,
+            field="Bookkeeping & VAT", period_year=2026, period_type="month", work_at=now - timedelta(days=140),
+        )
+        recent_same_period = _submitted_task(
+            s, client, member, name="Bookkeeping", task_type="Billable Bookkeeping", seconds=1800,
+            field="Bookkeeping & VAT", period_year=2026, period_type="month", work_at=now - timedelta(days=5),
+        )
+        # Ensure both records share the exact same existing period key.
+        recent_same_period.period_month = 9
+        first_same_period.period_month = 9
+
+        # Different old period with no recent activity should be hidden from Recent.
+        old_period = _submitted_task(
+            s, client, member, name="Bookkeeping", task_type="Billable Bookkeeping", seconds=7200,
+            field="Bookkeeping & VAT", period_year=2025, period_type="month", work_at=now - timedelta(days=200),
+        )
+        old_period.period_month = 8
+        s.commit()
+
+        recent = main.get_insights_client_work(member_id=member.id, view="recent", current_member=member, db=s)
+        assert recent["engagement_count"] == 1
+        assert recent["billable_seconds"] == 5400
+        engagement = recent["clients"][0]["engagements"][0]
+        assert engagement["seconds"] == 5400
+        assert engagement["task_records"] == 2
+
+        all_periods = main.get_insights_client_work(member_id=member.id, view="all", current_member=member, db=s)
+        assert all_periods["engagement_count"] == 2
+        assert all_periods["billable_seconds"] == 12600
     finally:
         s.close()
