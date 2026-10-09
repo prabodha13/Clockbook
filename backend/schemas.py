@@ -514,6 +514,13 @@ class TaskReassign(BaseModel):
     owner_id: str = Field(min_length=1, max_length=128)
 
 
+class TaskPeriodAdminUpdate(BaseModel):
+    period_year: Optional[int] = Field(default=None, ge=1900, le=2100)
+    period_number: Optional[int] = Field(default=None, ge=1, le=53)
+    period_start: Optional[str] = Field(default=None, max_length=32)
+    period_end: Optional[str] = Field(default=None, max_length=32)
+
+
 class AdHocMeetingCreate(BaseModel):
     colleague_id: Optional[str] = Field(default=None, max_length=128)
 

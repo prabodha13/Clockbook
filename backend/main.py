@@ -6143,6 +6143,95 @@ def submit_task(task_id: str, payload: schemas.TaskSubmit, current_member: model
     return task
 
 
+@app.patch("/api/tasks/{task_id}/period", response_model=schemas.TaskOut)
+def admin_update_submitted_task_period(
+    task_id: str,
+    payload: schemas.TaskPeriodAdminUpdate,
+    current_member: models.Member = Depends(get_current_member),
+    db: Session = Depends(get_db),
+):
+    """Correct period metadata on a submitted task without changing time or task history.
+
+    This is deliberately Admin/Super Admin only. The task must already be within the
+    caller's normal management scope. Only the period values can change; work type,
+    duration, segments, owner, notes and every other task field remain untouched.
+    """
+    require_admin(current_member)
+    task = db.get(models.TaskInstance, task_id)
+    _require_task_in_scope(current_member, task, db, owner_can_access=False)
+    if task.status != "submitted":
+        raise HTTPException(400, "Only submitted task periods can be corrected here")
+
+    effective_type = (task.period_type or task.pay_period_type or "").strip()
+    if not effective_type:
+        raise HTTPException(400, "This task does not have a recorded period type to correct")
+
+    period_year = payload.period_year
+    period_number = payload.period_number
+    period_start = (payload.period_start or "").strip() or None
+    period_end = (payload.period_end or "").strip() or None
+
+    configured = _normalise_period_types(task.period_types or [])
+    if not configured:
+        configured = [effective_type]
+    _validate_period_selection(
+        effective_type,
+        period_year,
+        period_number,
+        period_start,
+        period_end,
+        configured,
+        required=True,
+        bookkeeping=is_bookkeeping_task(task),
+    )
+
+    old = {
+        "period_type": task.period_type or task.pay_period_type,
+        "period_year": task.period_year,
+        "period_number": task.period_number or task.pay_period_number,
+        "period_start": task.period_start,
+        "period_end": task.period_end,
+        "period_label": period_label(task),
+    }
+
+    # Preserve the task's existing period type. This correction changes classification
+    # values only, so an Admin cannot turn a Year-End record into a monthly bookkeeping
+    # record from Export.
+    task.period_type = effective_type
+    task.period_year = period_year
+    task.period_number = period_number
+    task.period_start = period_start
+    task.period_end = period_end
+    db.flush()
+
+    new = {
+        "period_type": task.period_type,
+        "period_year": task.period_year,
+        "period_number": task.period_number,
+        "period_start": task.period_start,
+        "period_end": task.period_end,
+        "period_label": period_label(task),
+    }
+    if old != new:
+        db.add(models.AuditEvent(
+            actor_member_id=current_member.id,
+            action="submitted_task_period_corrected",
+            entity_type="TaskInstance",
+            entity_id=task.id,
+            changes={
+                "old": old,
+                "new": new,
+                "submitted_by_id": task.submitted_by_id,
+                "client_id": task.client_id,
+                "client_name": task.client_name,
+                "task_name": task.name,
+            },
+        ))
+    db.commit()
+    db.refresh(task)
+    return task
+
+
 @app.patch("/api/tasks/{task_id}/reassign", response_model=schemas.TaskOut)
 def reassign_task(task_id: str, payload: schemas.TaskReassign, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
