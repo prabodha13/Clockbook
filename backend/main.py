@@ -3830,9 +3830,15 @@ def get_insights_client_work(
             "task": task_label,
             "seconds": 0.0,
             "records": 0,
+            "entries": [],
         })
         task_row["seconds"] += seconds
         task_row["records"] += 1
+        task_row["entries"].append({
+            "task_id": task.id,
+            "work_date": work_date,
+            "seconds": round(seconds, 1),
+        })
 
         metric = _insights_client_work_metric(task)
         if metric:
@@ -3868,7 +3874,18 @@ def get_insights_client_work(
             engagement.pop("activity_dates", None)
             engagement["seconds"] = round(engagement["seconds"], 1)
             engagement["tasks"] = sorted(
-                ({**row, "seconds": round(row["seconds"], 1)} for row in engagement["tasks"].values()),
+                (
+                    {
+                        **row,
+                        "seconds": round(row["seconds"], 1),
+                        "entries": sorted(
+                            row.get("entries", []),
+                            key=lambda entry: (entry.get("work_date") or "", entry.get("task_id") or ""),
+                            reverse=True,
+                        ),
+                    }
+                    for row in engagement["tasks"].values()
+                ),
                 key=lambda row: (-row["seconds"], row["task"].lower()),
             )
             engagement["metrics"] = [
