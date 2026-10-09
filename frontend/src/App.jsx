@@ -6259,8 +6259,17 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const [clientWorkLoading, setClientWorkLoading] = useState(false);
   const [clientWorkClientId, setClientWorkClientId] = useState("");
   const [clientWorkSearch, setClientWorkSearch] = useState("");
-  const [clientWorkView, setClientWorkView] = useState("recent");
+  const [clientWorkView, setClientWorkView] = useState("this_month");
+  const [clientWorkFrom, setClientWorkFrom] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+  });
+  const [clientWorkTo, setClientWorkTo] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  });
   const [expandedClientWorkKey, setExpandedClientWorkKey] = useState("");
+  const [overviewRefreshStarted, setOverviewRefreshStarted] = useState(false);
 
   useEffect(() => {
     if (forceSelfOnly && currentUser?.id) setMemberId(currentUser.id);
@@ -6358,14 +6367,29 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     }
   }, [memberId, dates.from, dates.to, isSuperAdmin, capacityView, capacityPodId]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    if (overviewRefreshStarted) load();
+  }, [overviewRefreshStarted, load]);
+
+  const refreshOverview = useCallback(() => {
+    if (!overviewRefreshStarted) {
+      setOverviewRefreshStarted(true);
+      return;
+    }
+    load();
+  }, [overviewRefreshStarted, load]);
 
   const loadClientWork = useCallback(async () => {
     if (!memberId) return;
     setClientWorkError("");
     setClientWorkLoading(true);
     try {
-      const result = await api.getInsightsClientWork(memberId, clientWorkView);
+      const result = await api.getInsightsClientWork(
+        memberId,
+        clientWorkView,
+        clientWorkView === "custom" ? clientWorkFrom : "",
+        clientWorkView === "custom" ? clientWorkTo : "",
+      );
       setClientWorkData(result);
       setClientWorkClientId((current) => {
         if (current && (result.clients || []).some((client) => client.client_id === current)) return current;
@@ -6378,7 +6402,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     } finally {
       setClientWorkLoading(false);
     }
-  }, [memberId, clientWorkView]);
+  }, [memberId, clientWorkView, clientWorkFrom, clientWorkTo]);
 
   useEffect(() => {
     if (insightsSection === "client_work") loadClientWork();
@@ -6688,23 +6712,40 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ width: 165 }}>
                 <div className="cb-label">Work periods</div>
                 <select className="cb-select" value={clientWorkView} onChange={(e) => setClientWorkView(e.target.value)} style={{ width: "100%" }}>
-                  <option value="recent">Recent activity</option>
-                  <option value="year_to_date">Active this year</option>
-                  <option value="last_12_months">Active in last 12 months</option>
+                  <option value="this_week">This week</option>
+                  <option value="last_week">Last week</option>
+                  <option value="this_month">This month</option>
+                  <option value="last_month">Last month</option>
+                  <option value="last_90_days">Last 90 days</option>
+                  <option value="custom">Custom</option>
                   <option value="all">All periods</option>
                 </select>
               </div>
-              <div className="cb-hint" style={{ alignSelf: "center", paddingBottom: 8, maxWidth: 560 }}>
-                The filter chooses which work periods appear. Once a period appears, its total includes all historical billable entries recorded to that same client, work type and period.
-              </div>
+              {clientWorkView === "custom" && (
+                <>
+                  <div style={{ width: 140 }}>
+                    <div className="cb-label">From</div>
+                    <input type="date" className="cb-input" style={{ width: "100%" }} value={clientWorkFrom} onChange={(e) => setClientWorkFrom(e.target.value)} />
+                  </div>
+                  <div style={{ width: 140 }}>
+                    <div className="cb-label">To</div>
+                    <input type="date" className="cb-input" style={{ width: "100%" }} value={clientWorkTo} onChange={(e) => setClientWorkTo(e.target.value)} />
+                  </div>
+                </>
+              )}
             </>
           )}
           <div>
             <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
-            <button className="cb-btn cb-btn-sm" onClick={insightsSection === "client_work" ? loadClientWork : load} disabled={insightsSection === "client_work" ? clientWorkLoading : isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{(insightsSection === "client_work" ? clientWorkLoading : isLoading) ? "Refreshing…" : "Refresh"}</button>
+            <button className="cb-btn cb-btn-sm" onClick={insightsSection === "client_work" ? loadClientWork : refreshOverview} disabled={insightsSection === "client_work" ? clientWorkLoading : isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{(insightsSection === "client_work" ? clientWorkLoading : isLoading) ? "Refreshing…" : "Refresh"}</button>
           </div>
           {isAdmin && !forceSelfOnly && (
-            <div className="cb-hint" style={{ marginLeft: "auto", alignSelf: "center", paddingTop: 18, whiteSpace: "nowrap" }}>Admins can view insights for staff in their scope.</div>
+            <div className="cb-hint" style={{ marginLeft: "auto", alignSelf: "flex-end", paddingBottom: 9, whiteSpace: "nowrap" }}>Admins can view insights for staff in their scope.</div>
+          )}
+          {insightsSection === "client_work" && (
+            <div className="cb-hint" style={{ flexBasis: "100%", marginTop: -2, lineHeight: 1.4 }}>
+              The selected range decides which work periods appear. Once a period appears, its total includes all historical billable entries recorded to that same client, work type and period.
+            </div>
           )}
         </div>
       </div>
@@ -6718,7 +6759,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
                   {[
-                    ["Your billable client time", formatHM(clientWorkData.billable_seconds || 0), clientWorkView === "all" ? "All recorded billable work" : "Full totals for the work periods shown"],
+                    ["Your billable client time", formatHM(clientWorkData.billable_seconds || 0), clientWorkView === "all" ? "All recorded billable work" : "Full accumulated totals for the work periods shown"],
                     ["Clients", String(clientWorkData.client_count || 0), "Clients with billable time"],
                     ["Work periods", String(clientWorkData.engagement_count || 0), "Work type + recorded period"],
                     ["Submitted task records", String(clientWorkData.task_records || 0), "Billable task completions"],
@@ -6834,7 +6875,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
       )}
 
       {insightsSection === "overview" && error && <div className="cb-error" style={{ marginBottom: 12 }}>{error}</div>}
-      {insightsSection === "overview" && !data && !error && <TableSkeleton rows={6} />}
+      {insightsSection === "overview" && !overviewRefreshStarted && !data && !error && (
+        <div style={{ ...panelStyle, padding: 22 }}>
+          <div className="cb-group-title" style={{ fontSize: 14 }}>Ready when you are</div>
+          <div className="cb-hint" style={{ marginTop: 5 }}>Choose the person and period, then click Refresh to load Overview. After the first refresh, changes to the Overview filters refresh automatically.</div>
+        </div>
+      )}
+      {insightsSection === "overview" && overviewRefreshStarted && !data && !error && <TableSkeleton rows={6} />}
       {insightsSection === "overview" && data && (
         <>
           <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>

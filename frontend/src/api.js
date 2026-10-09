@@ -177,10 +177,12 @@ export const api = {
     if (capacityPodId) q.set("capacity_pod_id", capacityPodId);
     return request(`/insights${q.toString() ? `?${q.toString()}` : ""}`);
   },
-  getInsightsClientWork: (memberId = "", view = "recent") => {
+  getInsightsClientWork: (memberId = "", view = "this_month", dateFrom = "", dateTo = "") => {
     const q = new URLSearchParams();
     if (memberId) q.set("member_id", memberId);
     if (view) q.set("view", view);
+    if (dateFrom) q.set("date_from", dateFrom);
+    if (dateTo) q.set("date_to", dateTo);
     return request(`/insights/client-work${q.toString() ? `?${q.toString()}` : ""}`);
   },
   getDelegationSuggestionExclusions: () => request("/insights/delegation-exclusions"),
