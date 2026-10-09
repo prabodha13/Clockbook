@@ -6761,7 +6761,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
           )}
           {insightsSection === "client_work" && (
             <div className="cb-hint" style={{ flexBasis: "100%", marginTop: -2, lineHeight: 1.4 }}>
-              The selected range decides which work periods appear. Once a period appears, its total includes all historical billable entries recorded to that same client, work type and period.
+              The selected range decides which work periods appear. Recorded this range counts work performed within those dates; accumulated period total includes all historical billable entries linked to the periods shown.
             </div>
           )}
         </div>
@@ -6776,10 +6776,10 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
                   {[
-                    ["Your billable client time", formatHM(clientWorkData.billable_seconds || 0), clientWorkView === "all" ? "All recorded billable work" : "Full accumulated totals for the work periods shown"],
-                    ["Clients", String(clientWorkData.client_count || 0), "Clients with billable time"],
+                    ["Recorded this range", formatHM(clientWorkData.range_billable_seconds || 0), clientWorkView === "all" ? "All recorded billable work" : "Billable client work recorded inside the selected dates"],
+                    ["Accumulated period total", formatHM(clientWorkData.billable_seconds || 0), clientWorkView === "all" ? "All recorded billable work" : "Full historical total for the work periods shown"],
+                    ["Clients", String(clientWorkData.client_count || 0), "Clients with qualifying billable work"],
                     ["Work periods", String(clientWorkData.engagement_count || 0), "Work type + recorded period"],
-                    ["Submitted task records", String(clientWorkData.task_records || 0), "Billable task completions"],
                   ].map(([label, value, detail], i, rows) => (
                     <div key={label} style={{ padding: "15px 18px", borderRight: i < rows.length - 1 ? "1px solid #E7ECF0" : "none" }}>
                       <div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div>
@@ -6823,9 +6823,15 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                             <div className="cb-group-title" style={{ fontSize: 18 }}>{selectedClientWork.client_name}</div>
                             <div className="cb-hint" style={{ marginTop: 4 }}>Full submitted billable time for the work periods currently shown, including earlier entries linked to those periods.</div>
                           </div>
-                          <div style={{ textAlign: "right", flexShrink: 0 }}>
-                            <div className="cb-hint">Total billable time</div>
-                            <div className="cb-serif cb-mono" style={{ fontSize: 24, fontWeight: 750, marginTop: 2 }}>{formatHM(selectedClientWork.seconds || 0)}</div>
+                          <div style={{ display: "flex", gap: 22, flexShrink: 0, textAlign: "right" }}>
+                            <div>
+                              <div className="cb-hint">Recorded this range</div>
+                              <div className="cb-serif cb-mono" style={{ fontSize: 20, fontWeight: 750, marginTop: 2 }}>{formatHM(selectedClientWork.range_seconds || 0)}</div>
+                            </div>
+                            <div>
+                              <div className="cb-hint">Accumulated period total</div>
+                              <div className="cb-serif cb-mono" style={{ fontSize: 24, fontWeight: 750, marginTop: 2 }}>{formatHM(selectedClientWork.seconds || 0)}</div>
+                            </div>
                           </div>
                         </div>
                       </div>
@@ -7687,51 +7693,6 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
   </div>;
 }
 
-function compactExportPeriodLabel(row) {
-  if (!row) return "none";
-  const type = row.period_type || row.pay_period_type || "";
-  const year = row.period_year;
-  const number = row.period_number || row.pay_period_number;
-  const shortYear = year ? String(year).slice(-2) : "";
-
-  if (type === "year") return year ? String(year) : (row.period || "none");
-  if (type === "monthly" && number) {
-    const month = new Date(2000, Number(number) - 1, 1).toLocaleDateString(undefined, { month: "short" });
-    return year ? `${month} ${shortYear}` : month;
-  }
-  if (type === "quarterly" && number) return year ? `Q${number} ${shortYear}` : `Q${number}`;
-  if (type === "bi_monthly" && number) {
-    const start = (Number(number) - 1) * 2;
-    const a = new Date(2000, start, 1).toLocaleDateString(undefined, { month: "short" });
-    const b = new Date(2000, start + 1, 1).toLocaleDateString(undefined, { month: "short" });
-    return year ? `${a}-${b} ${shortYear}` : `${a}-${b}`;
-  }
-  if (type === "fortnightly" && number) return year ? `F${number} ${shortYear}` : `F${number}`;
-  if (type === "weekly" && number) {
-    if (row.period_start && /bookkeep/i.test(`${row.task || ""} ${row.task_type || ""} ${row.template_name || ""}`)) {
-      const monthDate = new Date(`${row.period_start.slice(0, 7)}-01T00:00:00`);
-      const month = Number.isNaN(monthDate.getTime()) ? row.period_start.slice(5, 7) : monthDate.toLocaleDateString(undefined, { month: "short" });
-      const monthYear = row.period_start?.slice(2, 4) || shortYear;
-      return `${month} ${monthYear} W${number}`;
-    }
-    return year ? `W${number} ${shortYear}` : `W${number}`;
-  }
-  if (type === "daily" && row.period_start) {
-    const d = new Date(`${row.period_start}T00:00:00`);
-    if (!Number.isNaN(d.getTime())) return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "2-digit" });
-  }
-  if (type === "custom" && row.period_start && row.period_end) {
-    const start = new Date(`${row.period_start}T00:00:00`);
-    const end = new Date(`${row.period_end}T00:00:00`);
-    if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime())) {
-      const a = start.toLocaleDateString(undefined, { day: "numeric", month: "short" });
-      const b = end.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "2-digit" });
-      return `${a}-${b}`;
-    }
-  }
-  return row.period || "none";
-}
-
 function SubmittedPeriodCorrectionModal({ row, onClose, onSaved }) {
   const type = row?.period_type || row?.pay_period_type || "";
   const weeklyBookkeeping = type === "weekly" && /bookkeep/i.test(`${row?.task || ""} ${row?.task_type || ""} ${row?.template_name || ""}`);
@@ -8265,14 +8226,14 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                       {isAdmin && r.period_type ? (
                         <button
                           type="button"
-                          title={`${r.period || "none"} — click to correct period`}
+                          title="Correct submitted period"
                           onClick={() => setPeriodEditRow(r)}
                           style={{ display: "block", maxWidth: "100%", padding: 0, border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                         >
-                          {compactExportPeriodLabel(r)}
+                          {r.period || "none"}
                         </button>
                       ) : (
-                        <span title={r.period || "none"} style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{compactExportPeriodLabel(r)}</span>
+                        <span style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
                       )}
                     </td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
@@ -8317,7 +8278,7 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                     </td>
                     <td>{g.role || "none"}</td>
                     <td>{g.task_type || "none"}</td>
-                    <td title={g.period || "none"}><span style={{ whiteSpace: "nowrap" }}>{compactExportPeriodLabel(g.rows?.[0])}</span></td>
+                    <td>{g.period || "none"}</td>
                     <td className="num cb-mono" style={{ fontWeight: 600 }}>
                       {formatHM(g.totalSeconds)}
                       {g.anyAdjusted && <span title="At least one of these was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}
@@ -8354,14 +8315,14 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
                         {isAdmin && r.period_type ? (
                           <button
                             type="button"
-                            title={`${r.period || "none"} — click to correct period`}
+                            title="Correct submitted period"
                             onClick={() => setPeriodEditRow(r)}
                             style={{ display: "block", maxWidth: "100%", padding: 0, border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
                           >
-                            {compactExportPeriodLabel(r)}
+                            {r.period || "none"}
                           </button>
                         ) : (
-                          <span title={r.period || "none"} style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{compactExportPeriodLabel(r)}</span>
+                          <span style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
                         )}
                       </td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
