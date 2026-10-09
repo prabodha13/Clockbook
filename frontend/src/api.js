@@ -177,9 +177,10 @@ export const api = {
     if (capacityPodId) q.set("capacity_pod_id", capacityPodId);
     return request(`/insights${q.toString() ? `?${q.toString()}` : ""}`);
   },
-  getInsightsClientWork: (memberId = "") => {
+  getInsightsClientWork: (memberId = "", view = "recent") => {
     const q = new URLSearchParams();
     if (memberId) q.set("member_id", memberId);
+    if (view) q.set("view", view);
     return request(`/insights/client-work${q.toString() ? `?${q.toString()}` : ""}`);
   },
   getDelegationSuggestionExclusions: () => request("/insights/delegation-exclusions"),

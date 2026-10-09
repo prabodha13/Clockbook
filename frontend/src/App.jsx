@@ -6259,6 +6259,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const [clientWorkLoading, setClientWorkLoading] = useState(false);
   const [clientWorkClientId, setClientWorkClientId] = useState("");
   const [clientWorkSearch, setClientWorkSearch] = useState("");
+  const [clientWorkView, setClientWorkView] = useState("recent");
   const [expandedClientWorkKey, setExpandedClientWorkKey] = useState("");
 
   useEffect(() => {
@@ -6364,7 +6365,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     setClientWorkError("");
     setClientWorkLoading(true);
     try {
-      const result = await api.getInsightsClientWork(memberId);
+      const result = await api.getInsightsClientWork(memberId, clientWorkView);
       setClientWorkData(result);
       setClientWorkClientId((current) => {
         if (current && (result.clients || []).some((client) => client.client_id === current)) return current;
@@ -6377,7 +6378,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     } finally {
       setClientWorkLoading(false);
     }
-  }, [memberId]);
+  }, [memberId, clientWorkView]);
 
   useEffect(() => {
     if (insightsSection === "client_work") loadClientWork();
@@ -6683,7 +6684,20 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
             </>
           )}
           {insightsSection === "client_work" && (
-            <div className="cb-hint" style={{ alignSelf: "center", paddingBottom: 8 }}>All submitted billable client work to date, grouped by work type and recorded period.</div>
+            <>
+              <div style={{ width: 165 }}>
+                <div className="cb-label">Work periods</div>
+                <select className="cb-select" value={clientWorkView} onChange={(e) => setClientWorkView(e.target.value)} style={{ width: "100%" }}>
+                  <option value="recent">Recent activity</option>
+                  <option value="year_to_date">Active this year</option>
+                  <option value="last_12_months">Active in last 12 months</option>
+                  <option value="all">All periods</option>
+                </select>
+              </div>
+              <div className="cb-hint" style={{ alignSelf: "center", paddingBottom: 8, maxWidth: 560 }}>
+                The filter chooses which work periods appear. Once a period appears, its total includes all historical billable entries recorded to that same client, work type and period.
+              </div>
+            </>
           )}
           <div>
             <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
@@ -6704,7 +6718,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
                   {[
-                    ["Your billable client time", formatHM(clientWorkData.billable_seconds || 0), "Submitted billable work to date"],
+                    ["Your billable client time", formatHM(clientWorkData.billable_seconds || 0), clientWorkView === "all" ? "All recorded billable work" : "Full totals for the work periods shown"],
                     ["Clients", String(clientWorkData.client_count || 0), "Clients with billable time"],
                     ["Work periods", String(clientWorkData.engagement_count || 0), "Work type + recorded period"],
                     ["Submitted task records", String(clientWorkData.task_records || 0), "Billable task completions"],
@@ -6749,7 +6763,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                         <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
                           <div>
                             <div className="cb-group-title" style={{ fontSize: 18 }}>{selectedClientWork.client_name}</div>
-                            <div className="cb-hint" style={{ marginTop: 4 }}>Your submitted billable time across all recorded work periods.</div>
+                            <div className="cb-hint" style={{ marginTop: 4 }}>Full submitted billable time for the work periods currently shown, including earlier entries linked to those periods.</div>
                           </div>
                           <div style={{ textAlign: "right", flexShrink: 0 }}>
                             <div className="cb-hint">Total billable time</div>
