@@ -177,6 +177,11 @@ export const api = {
     if (capacityPodId) q.set("capacity_pod_id", capacityPodId);
     return request(`/insights${q.toString() ? `?${q.toString()}` : ""}`);
   },
+  getInsightsClientWork: (memberId = "") => {
+    const q = new URLSearchParams();
+    if (memberId) q.set("member_id", memberId);
+    return request(`/insights/client-work${q.toString() ? `?${q.toString()}` : ""}`);
+  },
   getDelegationSuggestionExclusions: () => request("/insights/delegation-exclusions"),
   setDelegationSuggestionExclusions: (exclusions) => request("/insights/delegation-exclusions", { method: "PUT", body: JSON.stringify({ exclusions }) }),
   getLearningCategories: (includeArchived = false) => request(`/learning/categories${includeArchived ? "?include_archived=true" : ""}`),

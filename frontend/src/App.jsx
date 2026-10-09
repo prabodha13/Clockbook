@@ -6253,6 +6253,13 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   const [isLoading, setIsLoading] = useState(false);
   const [capacityView, setCapacityView] = useState("person");
   const [capacityPodId, setCapacityPodId] = useState("");
+  const [insightsSection, setInsightsSection] = useState("overview");
+  const [clientWorkData, setClientWorkData] = useState(null);
+  const [clientWorkError, setClientWorkError] = useState("");
+  const [clientWorkLoading, setClientWorkLoading] = useState(false);
+  const [clientWorkClientId, setClientWorkClientId] = useState("");
+  const [clientWorkSearch, setClientWorkSearch] = useState("");
+  const [expandedClientWorkKey, setExpandedClientWorkKey] = useState("");
 
   useEffect(() => {
     if (forceSelfOnly && currentUser?.id) setMemberId(currentUser.id);
@@ -6351,6 +6358,35 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   }, [memberId, dates.from, dates.to, isSuperAdmin, capacityView, capacityPodId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const loadClientWork = useCallback(async () => {
+    if (!memberId) return;
+    setClientWorkError("");
+    setClientWorkLoading(true);
+    try {
+      const result = await api.getInsightsClientWork(memberId);
+      setClientWorkData(result);
+      setClientWorkClientId((current) => {
+        if (current && (result.clients || []).some((client) => client.client_id === current)) return current;
+        return result.clients?.[0]?.client_id || "";
+      });
+    } catch (err) {
+      setClientWorkError(err.message || "Could not load client work");
+      setClientWorkData(null);
+      setClientWorkClientId("");
+    } finally {
+      setClientWorkLoading(false);
+    }
+  }, [memberId]);
+
+  useEffect(() => {
+    if (insightsSection === "client_work") loadClientWork();
+  }, [insightsSection, loadClientWork]);
+
+  useEffect(() => {
+    setClientWorkClientId("");
+    setExpandedClientWorkKey("");
+  }, [memberId]);
 
   const comparisonPeriodLabel = range === "last_week"
     ? "previous week"
@@ -6579,12 +6615,22 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     })}</div>;
   }
 
+  const clientWorkClients = clientWorkData?.clients || [];
+  const filteredClientWorkClients = clientWorkClients.filter((client) =>
+    !clientWorkSearch.trim() || client.client_name.toLowerCase().includes(clientWorkSearch.trim().toLowerCase())
+  );
+  const selectedClientWork = clientWorkClients.find((client) => client.client_id === clientWorkClientId) || clientWorkClients[0] || null;
+
   return (
     <div style={{ maxWidth: 1460, margin: "0 auto" }}>
       <div style={{ marginBottom: 18 }}>
         <div style={{ marginBottom: 12 }}>
           <div className="cb-page-title cb-serif" style={{ fontSize: 30, lineHeight: 1.05 }}>Insights</div>
           <div className="cb-page-sub" style={{ marginTop: 5 }}>Personal time and workload analysis</div>
+          <div className="cb-tabs" style={{ marginTop: 14, width: "fit-content" }}>
+            <button className={`cb-tab ${insightsSection === "overview" ? "active" : ""}`} onClick={() => setInsightsSection("overview")}>Overview</button>
+            <button className={`cb-tab ${insightsSection === "client_work" ? "active" : ""}`} onClick={() => setInsightsSection("client_work")}>Client Work</button>
+          </div>
         </div>
 
         <div style={{
@@ -6604,37 +6650,44 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               </select>
             </div>
           )}
-          <div style={{ width: 145 }}>
-            <div className="cb-label">Period</div>
-            <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
-              <option value="week_to_date">Week to date</option>
-              <option value="month_to_date">Month to date</option>
-              <option value="year_to_date">Year to date</option>
-              <option value="last_week">Last week</option>
-              <option value="this_month">This month</option>
-              <option value="last_month">Last month</option>
-              <option value="30">Last 30 days</option>
-              <option value="90">Last 3 months</option>
-              <option value="180">Last 6 months</option>
-              <option value="365">Last 12 months</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-          {range === "custom" && (
+          {insightsSection === "overview" && (
             <>
-              <div style={{ width: 140 }}>
-                <div className="cb-label">From</div>
-                <input type="date" className="cb-input" style={{ width: "100%" }} value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+              <div style={{ width: 145 }}>
+                <div className="cb-label">Period</div>
+                <select className="cb-select" value={range} onChange={(e) => setRange(e.target.value)} style={{ width: "100%" }}>
+                  <option value="week_to_date">Week to date</option>
+                  <option value="month_to_date">Month to date</option>
+                  <option value="year_to_date">Year to date</option>
+                  <option value="last_week">Last week</option>
+                  <option value="this_month">This month</option>
+                  <option value="last_month">Last month</option>
+                  <option value="30">Last 30 days</option>
+                  <option value="90">Last 3 months</option>
+                  <option value="180">Last 6 months</option>
+                  <option value="365">Last 12 months</option>
+                  <option value="custom">Custom</option>
+                </select>
               </div>
-              <div style={{ width: 140 }}>
-                <div className="cb-label">To</div>
-                <input type="date" className="cb-input" style={{ width: "100%" }} value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
-              </div>
+              {range === "custom" && (
+                <>
+                  <div style={{ width: 140 }}>
+                    <div className="cb-label">From</div>
+                    <input type="date" className="cb-input" style={{ width: "100%" }} value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
+                  </div>
+                  <div style={{ width: 140 }}>
+                    <div className="cb-label">To</div>
+                    <input type="date" className="cb-input" style={{ width: "100%" }} value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
+                  </div>
+                </>
+              )}
             </>
+          )}
+          {insightsSection === "client_work" && (
+            <div className="cb-hint" style={{ alignSelf: "center", paddingBottom: 8 }}>All submitted billable client work to date, grouped by work type and recorded period.</div>
           )}
           <div>
             <div className="cb-label" style={{ visibility: "hidden" }}>Refresh</div>
-            <button className="cb-btn cb-btn-sm" onClick={load} disabled={isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{isLoading ? "Refreshing…" : "Refresh"}</button>
+            <button className="cb-btn cb-btn-sm" onClick={insightsSection === "client_work" ? loadClientWork : load} disabled={insightsSection === "client_work" ? clientWorkLoading : isLoading} style={{ height: 36, whiteSpace: "nowrap" }}><RotateCcw size={13} />{(insightsSection === "client_work" ? clientWorkLoading : isLoading) ? "Refreshing…" : "Refresh"}</button>
           </div>
           {isAdmin && !forceSelfOnly && (
             <div className="cb-hint" style={{ marginLeft: "auto", alignSelf: "center", paddingTop: 18, whiteSpace: "nowrap" }}>Admins can view insights for staff in their scope.</div>
@@ -6642,9 +6695,133 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
         </div>
       </div>
 
-      {error && <div className="cb-error" style={{ marginBottom: 12 }}>{error}</div>}
-      {!data && !error && <TableSkeleton rows={6} />}
-      {data && (
+      {insightsSection === "client_work" && (
+        <>
+          {clientWorkError && <div className="cb-error" style={{ marginBottom: 12 }}>{clientWorkError}</div>}
+          {!clientWorkData && !clientWorkError && <TableSkeleton rows={6} />}
+          {clientWorkData && (
+            <>
+              <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}>
+                  {[
+                    ["Your billable client time", formatHM(clientWorkData.billable_seconds || 0), "Submitted billable work to date"],
+                    ["Clients", String(clientWorkData.client_count || 0), "Clients with billable time"],
+                    ["Work periods", String(clientWorkData.engagement_count || 0), "Work type + recorded period"],
+                    ["Submitted task records", String(clientWorkData.task_records || 0), "Billable task completions"],
+                  ].map(([label, value, detail], i, rows) => (
+                    <div key={label} style={{ padding: "15px 18px", borderRight: i < rows.length - 1 ? "1px solid #E7ECF0" : "none" }}>
+                      <div className="cb-hint" style={{ fontWeight: 650 }}>{label}</div>
+                      <div className="cb-serif" style={{ fontSize: 25, fontWeight: 700, lineHeight: 1.15, marginTop: 4 }}>{value}</div>
+                      <div className="cb-hint" style={{ marginTop: 5 }}>{detail}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "minmax(250px, .72fr) minmax(0, 2fr)", gap: 14, alignItems: "start", marginBottom: 18 }}>
+                <div style={{ ...panelStyle, padding: 0, overflow: "hidden" }}>
+                  <div style={{ padding: 12, borderBottom: "1px solid #E7ECF0" }}>
+                    <input className="cb-input" value={clientWorkSearch} onChange={(e) => setClientWorkSearch(e.target.value)} placeholder="Search clients…" style={{ width: "100%" }} />
+                  </div>
+                  <div style={{ maxHeight: 620, overflowY: "auto" }}>
+                    {filteredClientWorkClients.length === 0 && <div className="cb-empty" style={{ margin: 14 }}>No billable client work found.</div>}
+                    {filteredClientWorkClients.map((client) => {
+                      const active = selectedClientWork?.client_id === client.client_id;
+                      return (
+                        <button key={client.client_id} onClick={() => { setClientWorkClientId(client.client_id); setExpandedClientWorkKey(""); }} style={{ width: "100%", border: 0, borderBottom: "1px solid #EEF1F4", background: active ? "#F3F7FC" : "#fff", padding: "12px 14px", textAlign: "left", cursor: "pointer", display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 10, alignItems: "center" }}>
+                          <span style={{ minWidth: 0 }}>
+                            <span style={{ display: "block", fontWeight: 700, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{client.client_name}</span>
+                            <span className="cb-hint" style={{ display: "block", marginTop: 3 }}>{client.engagement_count} work period{client.engagement_count === 1 ? "" : "s"}</span>
+                          </span>
+                          <span className="cb-mono" style={{ fontSize: 12.5, fontWeight: 700, whiteSpace: "nowrap" }}>{formatHM(client.seconds || 0)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div style={{ minWidth: 0 }}>
+                  {!selectedClientWork ? (
+                    <div style={panelStyle}><div className="cb-empty">No billable client work to show.</div></div>
+                  ) : (
+                    <>
+                      <div style={{ ...panelStyle, marginBottom: 14 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 16, alignItems: "flex-start" }}>
+                          <div>
+                            <div className="cb-group-title" style={{ fontSize: 18 }}>{selectedClientWork.client_name}</div>
+                            <div className="cb-hint" style={{ marginTop: 4 }}>Your submitted billable time across all recorded work periods.</div>
+                          </div>
+                          <div style={{ textAlign: "right", flexShrink: 0 }}>
+                            <div className="cb-hint">Total billable time</div>
+                            <div className="cb-serif cb-mono" style={{ fontSize: 24, fontWeight: 750, marginTop: 2 }}>{formatHM(selectedClientWork.seconds || 0)}</div>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div style={{ ...panelStyle, padding: 0, overflow: "hidden" }}>
+                        <div style={{ padding: "14px 16px", borderBottom: "1px solid #E7ECF0" }}>
+                          <div className="cb-group-title" style={{ fontSize: 14 }}>Work by period</div>
+                          <div className="cb-hint" style={{ marginTop: 3 }}>Grouped using the task's existing work type and Period selection. Click a row to see the tasks behind the total.</div>
+                        </div>
+                        {(selectedClientWork.engagements || []).length === 0 ? (
+                          <div className="cb-empty" style={{ margin: 16 }}>No billable work periods found.</div>
+                        ) : (
+                          <div>
+                            {(selectedClientWork.engagements || []).map((engagement) => {
+                              const open = expandedClientWorkKey === engagement.key;
+                              return (
+                                <div key={engagement.key} style={{ borderBottom: "1px solid #EEF1F4" }}>
+                                  <button onClick={() => setExpandedClientWorkKey(open ? "" : engagement.key)} style={{ width: "100%", border: 0, background: open ? "#FBFCFE" : "#fff", cursor: "pointer", padding: "12px 16px", textAlign: "left" }}>
+                                    <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1.2fr) minmax(150px,.9fr) 100px 90px 24px", gap: 12, alignItems: "center" }}>
+                                      <div style={{ fontWeight: 700, fontSize: 12.5 }}>{engagement.work_type}</div>
+                                      <div style={{ fontSize: 12, color: engagement.period === "Period not recorded" ? "#8A5A00" : "var(--ink-soft)" }}>{engagement.period}</div>
+                                      <div className="cb-mono" style={{ textAlign: "right", fontWeight: 700 }}>{formatHM(engagement.seconds || 0)}</div>
+                                      <div className="cb-hint" style={{ textAlign: "right" }}>{engagement.task_records} task{engagement.task_records === 1 ? "" : "s"}</div>
+                                      <div style={{ textAlign: "right", color: "var(--ink-soft)", fontSize: 16 }}>{open ? "⌃" : "⌄"}</div>
+                                    </div>
+                                    {(engagement.metrics || []).length > 0 && (
+                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                                        {engagement.metrics.map((metric) => <span key={metric.label} className="cb-chip">{metric.label}: {metric.quantity}</span>)}
+                                      </div>
+                                    )}
+                                  </button>
+                                  {open && (
+                                    <div style={{ padding: "0 16px 14px", background: "#FBFCFE" }}>
+                                      <div className="cb-table-wrap">
+                                        <table className="cb-table">
+                                          <thead><tr><th>Task</th><th className="num">Your time</th><th className="num">Completions</th><th>Worked across</th></tr></thead>
+                                          <tbody>
+                                            {(engagement.tasks || []).map((row) => (
+                                              <tr key={row.task}>
+                                                <td style={{ fontWeight: 650 }}>{row.task}</td>
+                                                <td className="num cb-mono">{formatHM(row.seconds || 0)}</td>
+                                                <td className="num">{row.records}</td>
+                                                <td>{engagement.first_work_date && engagement.last_work_date ? (engagement.first_work_date === engagement.last_work_date ? new Date(`${engagement.first_work_date}T00:00:00`).toLocaleDateString() : `${new Date(`${engagement.first_work_date}T00:00:00`).toLocaleDateString()} – ${new Date(`${engagement.last_work_date}T00:00:00`).toLocaleDateString()}`) : "—"}</td>
+                                              </tr>
+                                            ))}
+                                          </tbody>
+                                        </table>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {insightsSection === "overview" && error && <div className="cb-error" style={{ marginBottom: 12 }}>{error}</div>}
+      {insightsSection === "overview" && !data && !error && <TableSkeleton rows={6} />}
+      {insightsSection === "overview" && data && (
         <>
           <div style={{ ...panelStyle, padding: 0, marginBottom: 14, overflow: "hidden" }}>
             <div style={{ display: "grid", gridTemplateColumns: `repeat(${personCapacity ? 4 : 3}, minmax(0, 1fr))` }}>
