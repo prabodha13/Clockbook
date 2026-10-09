@@ -3683,7 +3683,9 @@ def _insights_change(current_value, previous_value):
 @app.get("/api/insights/client-work")
 def get_insights_client_work(
     member_id: str = None,
-    view: str = "recent",
+    view: str = "this_month",
+    date_from: str = None,
+    date_to: str = None,
     current_member: models.Member = Depends(get_current_member),
     db: Session = Depends(get_db),
 ):
@@ -3707,17 +3709,56 @@ def get_insights_client_work(
     if not target:
         raise HTTPException(404, "Member not found")
 
-    normalized_view = (view or "recent").strip().lower()
-    if normalized_view not in {"recent", "year_to_date", "last_12_months", "all"}:
+    normalized_view = (view or "this_month").strip().lower()
+    # Keep the older view names as API-compatible aliases even though the current
+    # UI uses week/month/custom activity windows. The activity window decides
+    # which work periods appear; it never truncates the historical records that
+    # contribute to a qualifying period's accumulated total.
+    if normalized_view not in {
+        "this_week", "last_week", "this_month", "last_month",
+        "last_90_days", "custom", "all",
+        "recent", "year_to_date", "last_12_months",
+    }:
         raise HTTPException(400, "Invalid client work view")
     try:
         target_zone = ZoneInfo((getattr(target, "timezone_name", None) or "UTC").strip())
     except (ZoneInfoNotFoundError, ValueError):
         target_zone = timezone.utc
     today_local = datetime.now(target_zone).date()
-    recent_cutoff = today_local - timedelta(days=89)
-    year_start = date(today_local.year, 1, 1)
-    last_12_months_cutoff = today_local - timedelta(days=364)
+
+    activity_from = None
+    activity_to = None
+    if normalized_view != "all":
+        if normalized_view in {"recent", "last_90_days"}:
+            activity_from, activity_to = today_local - timedelta(days=89), today_local
+        elif normalized_view == "year_to_date":
+            activity_from, activity_to = date(today_local.year, 1, 1), today_local
+        elif normalized_view == "last_12_months":
+            activity_from, activity_to = today_local - timedelta(days=364), today_local
+        elif normalized_view == "this_week":
+            activity_from = today_local - timedelta(days=today_local.weekday())
+            activity_to = today_local
+        elif normalized_view == "last_week":
+            this_week_start = today_local - timedelta(days=today_local.weekday())
+            activity_to = this_week_start - timedelta(days=1)
+            activity_from = activity_to - timedelta(days=6)
+        elif normalized_view == "this_month":
+            activity_from = date(today_local.year, today_local.month, 1)
+            activity_to = today_local
+        elif normalized_view == "last_month":
+            this_month_start = date(today_local.year, today_local.month, 1)
+            activity_to = this_month_start - timedelta(days=1)
+            activity_from = date(activity_to.year, activity_to.month, 1)
+        elif normalized_view == "custom":
+            if not date_from or not date_to:
+                raise HTTPException(400, "Custom client work view requires date_from and date_to")
+            try:
+                activity_from = date.fromisoformat(date_from)
+                activity_to = date.fromisoformat(date_to)
+            except ValueError:
+                raise HTTPException(400, "Invalid custom client work date")
+            if activity_from > activity_to:
+                raise HTTPException(400, "Client work date_from must be on or before date_to")
 
     billing_by_type = {
         row.name: bool(row.is_billable)
@@ -3771,12 +3812,14 @@ def get_insights_client_work(
             "task_records": 0,
             "first_work_date": None,
             "last_work_date": None,
+            "activity_dates": set(),
             "tasks": {},
             "metrics": {},
         })
         engagement["seconds"] += seconds
         engagement["task_records"] += 1
         if work_date:
+            engagement["activity_dates"].add(work_date)
             if engagement["first_work_date"] is None or work_date < engagement["first_work_date"]:
                 engagement["first_work_date"] = work_date
             if engagement["last_work_date"] is None or work_date > engagement["last_work_date"]:
@@ -3804,18 +3847,16 @@ def get_insights_client_work(
     def engagement_is_visible(engagement):
         if normalized_view == "all":
             return True
-        last_work = engagement.get("last_work_date")
-        if not last_work:
+        if activity_from is None or activity_to is None:
             return False
-        try:
-            last_work_date = date.fromisoformat(last_work)
-        except (TypeError, ValueError):
-            return False
-        if normalized_view == "recent":
-            return last_work_date >= recent_cutoff
-        if normalized_view == "year_to_date":
-            return last_work_date >= year_start
-        return last_work_date >= last_12_months_cutoff
+        for raw_date in engagement.get("activity_dates", set()):
+            try:
+                worked_on = date.fromisoformat(raw_date)
+            except (TypeError, ValueError):
+                continue
+            if activity_from <= worked_on <= activity_to:
+                return True
+        return False
 
     for client in clients.values():
         engagements = []
@@ -3824,6 +3865,7 @@ def get_insights_client_work(
         for engagement in client.pop("engagements").values():
             if not engagement_is_visible(engagement):
                 continue
+            engagement.pop("activity_dates", None)
             engagement["seconds"] = round(engagement["seconds"], 1)
             engagement["tasks"] = sorted(
                 ({**row, "seconds": round(row["seconds"], 1)} for row in engagement["tasks"].values()),
@@ -3854,10 +3896,8 @@ def get_insights_client_work(
         "member_id": target.id,
         "member_name": target.name,
         "view": normalized_view,
-        "view_activity_from": (
-            None if normalized_view == "all"
-            else (recent_cutoff if normalized_view == "recent" else year_start if normalized_view == "year_to_date" else last_12_months_cutoff).isoformat()
-        ),
+        "view_activity_from": activity_from.isoformat() if activity_from else None,
+        "view_activity_to": activity_to.isoformat() if activity_to else None,
         "billable_seconds": round(visible_total_seconds, 1),
         "client_count": len(client_rows),
         "engagement_count": total_engagements,
