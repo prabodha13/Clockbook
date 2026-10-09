@@ -248,3 +248,63 @@ def test_client_work_week_to_date_and_month_to_date_show_full_history_for_qualif
             assert sum(entry["seconds"] for entry in task_row["entries"]) == 5400.0
     finally:
         s.close()
+
+
+def test_admin_can_correct_submitted_period_without_changing_time_and_staff_cannot():
+    import schemas
+
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s)
+        staff = _member(s, tenant.id, name="Staff")
+        admin = _member(s, tenant.id, role="admin", name="Admin")
+        super_admin = _member(s, tenant.id, role="super_admin", name="Super Admin")
+        client = models.Client(name="Period Correction Client", code=f"PC{uuid4().hex[:5]}")
+        s.add(client)
+        s.add(models.TaskTypeOption(name="Billable Year End", is_billable=True))
+        s.flush()
+        task = _submitted_task(
+            s, client, staff, name="Year end", task_type="Billable Year End", seconds=3600,
+            field="Year-End", period_year=2028, period_type="year",
+        )
+        original_segments = list(task.segments)
+        s.commit()
+
+        with pytest.raises(HTTPException) as forbidden:
+            main.admin_update_submitted_task_period(
+                task.id,
+                schemas.TaskPeriodAdminUpdate(period_year=2025),
+                current_member=staff,
+                db=s,
+            )
+        assert forbidden.value.status_code == 403
+
+        updated = main.admin_update_submitted_task_period(
+            task.id,
+            schemas.TaskPeriodAdminUpdate(period_year=2025),
+            current_member=admin,
+            db=s,
+        )
+        assert updated.period_type == "year"
+        assert updated.period_year == 2025
+        assert updated.segments == original_segments
+        assert main.period_label(updated) == "2025"
+
+        event = s.query(models.AuditEvent).filter(
+            models.AuditEvent.action == "submitted_task_period_corrected",
+            models.AuditEvent.entity_id == task.id,
+        ).order_by(models.AuditEvent.created_at.desc()).first()
+        assert event is not None
+        assert event.changes["old"]["period_label"] == "2028"
+        assert event.changes["new"]["period_label"] == "2025"
+
+        # Super Admins use the same endpoint and can correct the value again.
+        updated_again = main.admin_update_submitted_task_period(
+            task.id,
+            schemas.TaskPeriodAdminUpdate(period_year=2026),
+            current_member=super_admin,
+            db=s,
+        )
+        assert updated_again.period_year == 2026
+    finally:
+        s.close()
