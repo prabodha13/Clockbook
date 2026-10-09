@@ -6269,6 +6269,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   });
   const [expandedClientWorkKey, setExpandedClientWorkKey] = useState("");
+  const [expandedClientWorkTaskKey, setExpandedClientWorkTaskKey] = useState("");
   const [overviewRefreshStarted, setOverviewRefreshStarted] = useState(false);
 
   useEffect(() => {
@@ -6411,6 +6412,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
   useEffect(() => {
     setClientWorkClientId("");
     setExpandedClientWorkKey("");
+    setExpandedClientWorkTaskKey("");
   }, [memberId]);
 
   const comparisonPeriodLabel = range === "last_week"
@@ -6712,9 +6714,9 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
               <div style={{ width: 165 }}>
                 <div className="cb-label">Work periods</div>
                 <select className="cb-select" value={clientWorkView} onChange={(e) => setClientWorkView(e.target.value)} style={{ width: "100%" }}>
-                  <option value="this_week">This week</option>
+                  <option value="this_week">Week to date</option>
                   <option value="last_week">Last week</option>
-                  <option value="this_month">This month</option>
+                  <option value="this_month">Month to date</option>
                   <option value="last_month">Last month</option>
                   <option value="last_90_days">Last 90 days</option>
                   <option value="custom">Custom</option>
@@ -6783,7 +6785,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                     {filteredClientWorkClients.map((client) => {
                       const active = selectedClientWork?.client_id === client.client_id;
                       return (
-                        <button key={client.client_id} onClick={() => { setClientWorkClientId(client.client_id); setExpandedClientWorkKey(""); }} style={{ width: "100%", border: 0, borderBottom: "1px solid #EEF1F4", background: active ? "#F3F7FC" : "#fff", padding: "12px 14px", textAlign: "left", cursor: "pointer", display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 10, alignItems: "center" }}>
+                        <button key={client.client_id} onClick={() => { setClientWorkClientId(client.client_id); setExpandedClientWorkKey(""); setExpandedClientWorkTaskKey(""); }} style={{ width: "100%", border: 0, borderBottom: "1px solid #EEF1F4", background: active ? "#F3F7FC" : "#fff", padding: "12px 14px", textAlign: "left", cursor: "pointer", display: "grid", gridTemplateColumns: "minmax(0,1fr) auto", gap: 10, alignItems: "center" }}>
                           <span style={{ minWidth: 0 }}>
                             <span style={{ display: "block", fontWeight: 700, fontSize: 12.5, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{client.client_name}</span>
                             <span className="cb-hint" style={{ display: "block", marginTop: 3 }}>{client.engagement_count} work period{client.engagement_count === 1 ? "" : "s"}</span>
@@ -6826,7 +6828,7 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                               const open = expandedClientWorkKey === engagement.key;
                               return (
                                 <div key={engagement.key} style={{ borderBottom: "1px solid #EEF1F4" }}>
-                                  <button onClick={() => setExpandedClientWorkKey(open ? "" : engagement.key)} style={{ width: "100%", border: 0, background: open ? "#FBFCFE" : "#fff", cursor: "pointer", padding: "12px 16px", textAlign: "left" }}>
+                                  <button onClick={() => { setExpandedClientWorkKey(open ? "" : engagement.key); setExpandedClientWorkTaskKey(""); }} style={{ width: "100%", border: 0, background: open ? "#FBFCFE" : "#fff", cursor: "pointer", padding: "12px 16px", textAlign: "left" }}>
                                     <div style={{ display: "grid", gridTemplateColumns: "minmax(180px,1.2fr) minmax(150px,.9fr) 100px 90px 24px", gap: 12, alignItems: "center" }}>
                                       <div style={{ fontWeight: 700, fontSize: 12.5 }}>{engagement.work_type}</div>
                                       <div style={{ fontSize: 12, color: engagement.period === "Period not recorded" ? "#8A5A00" : "var(--ink-soft)" }}>{engagement.period}</div>
@@ -6844,16 +6846,40 @@ function InsightsView({ members, currentUser, isAdmin, forceSelfOnly = false, po
                                     <div style={{ padding: "0 16px 14px", background: "#FBFCFE" }}>
                                       <div className="cb-table-wrap">
                                         <table className="cb-table">
-                                          <thead><tr><th>Task</th><th className="num">Your time</th><th className="num">Completions</th><th>Worked across</th></tr></thead>
+                                          <thead><tr><th>Task</th><th className="num">Your time</th><th className="num">Completions</th><th>Worked across</th><th style={{ width: 30 }}></th></tr></thead>
                                           <tbody>
-                                            {(engagement.tasks || []).map((row) => (
-                                              <tr key={row.task}>
-                                                <td style={{ fontWeight: 650 }}>{row.task}</td>
-                                                <td className="num cb-mono">{formatHM(row.seconds || 0)}</td>
-                                                <td className="num">{row.records}</td>
-                                                <td>{engagement.first_work_date && engagement.last_work_date ? (engagement.first_work_date === engagement.last_work_date ? new Date(`${engagement.first_work_date}T00:00:00`).toLocaleDateString() : `${new Date(`${engagement.first_work_date}T00:00:00`).toLocaleDateString()} – ${new Date(`${engagement.last_work_date}T00:00:00`).toLocaleDateString()}`) : "—"}</td>
-                                              </tr>
-                                            ))}
+                                            {(engagement.tasks || []).map((row) => {
+                                              const taskKey = `${engagement.key}||${row.task}`;
+                                              const taskOpen = expandedClientWorkTaskKey === taskKey;
+                                              return (
+                                                <Fragment key={row.task}>
+                                                  <tr onClick={() => setExpandedClientWorkTaskKey(taskOpen ? "" : taskKey)} style={{ cursor: "pointer" }}>
+                                                    <td style={{ fontWeight: 650 }}>{row.task}</td>
+                                                    <td className="num cb-mono">{formatHM(row.seconds || 0)}</td>
+                                                    <td className="num">{row.records}</td>
+                                                    <td>{engagement.first_work_date && engagement.last_work_date ? (engagement.first_work_date === engagement.last_work_date ? new Date(`${engagement.first_work_date}T00:00:00`).toLocaleDateString() : `${new Date(`${engagement.first_work_date}T00:00:00`).toLocaleDateString()} – ${new Date(`${engagement.last_work_date}T00:00:00`).toLocaleDateString()}`) : "—"}</td>
+                                                    <td style={{ textAlign: "right", color: "var(--ink-soft)" }}>{taskOpen ? "⌃" : "⌄"}</td>
+                                                  </tr>
+                                                  {taskOpen && (
+                                                    <tr>
+                                                      <td colSpan={5} style={{ padding: 0, background: "#F8FAFC" }}>
+                                                        <div style={{ padding: "8px 12px 10px 28px" }}>
+                                                          <div className="cb-hint" style={{ marginBottom: 6 }}>Historical entries included in this task total</div>
+                                                          <div style={{ display: "grid", gap: 4 }}>
+                                                            {(row.entries || []).map((entry) => (
+                                                              <div key={entry.task_id} style={{ display: "grid", gridTemplateColumns: "minmax(140px, 1fr) auto", gap: 12, alignItems: "center", fontSize: 11.5, padding: "5px 8px", border: "1px solid #E7ECF0", borderRadius: 6, background: "#fff" }}>
+                                                                <span>{entry.work_date ? new Date(`${entry.work_date}T00:00:00`).toLocaleDateString() : "Date unavailable"}</span>
+                                                                <span className="cb-mono" style={{ fontWeight: 700 }}>{formatHM(entry.seconds || 0)}</span>
+                                                              </div>
+                                                            ))}
+                                                          </div>
+                                                        </div>
+                                                      </td>
+                                                    </tr>
+                                                  )}
+                                                </Fragment>
+                                              );
+                                            })}
                                           </tbody>
                                         </table>
                                       </div>
