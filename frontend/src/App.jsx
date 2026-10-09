@@ -531,6 +531,51 @@ function elapsedSecondsToday(task, nowMs, member) {
   return total;
 }
 
+function buildTrackedTotalBrowserSnapshot(tasks, member, capturedMs) {
+  if (!member?.id || !member?.timezone_name) return null;
+  const timeZone = member.timezone_name;
+  const todayKey = workDateKeyInTimeZone(new Date(capturedMs), timeZone);
+  const taskRows = [];
+  let browserTotalSeconds = 0;
+  for (const task of tasks || []) {
+    if (task.owner_id !== member.id) continue;
+    const segments = [];
+    let taskSeconds = 0;
+    for (let index = 0; index < (task.segments || []).length; index += 1) {
+      const seg = task.segments[index];
+      if (!seg?.start || workDateKeyInTimeZone(seg.start, timeZone) !== todayKey) continue;
+      const rawStart = new Date(seg.start).getTime();
+      const rawEnd = seg.end ? new Date(seg.end).getTime() : capturedMs;
+      if (!Number.isFinite(rawStart) || !Number.isFinite(rawEnd) || rawStart >= capturedMs) continue;
+      const seconds = Math.max(0, Math.min(rawEnd, capturedMs) - rawStart) / 1000;
+      if (seconds <= 0) continue;
+      segments.push({
+        segment_index: index + 1,
+        started_at: seg.start,
+        ended_at: seg.end || null,
+        source: seg.source || null,
+        seconds,
+      });
+      taskSeconds += seconds;
+    }
+    if (!segments.length) continue;
+    taskRows.push({
+      task_id: task.id,
+      task_name: task.name || "",
+      client_name: task.client_name || "",
+      seconds: taskSeconds,
+      segments,
+    });
+    browserTotalSeconds += taskSeconds;
+  }
+  return {
+    captured_at: new Date(capturedMs).toISOString(),
+    timezone_name: timeZone,
+    browser_total_seconds: browserTotalSeconds,
+    tasks: taskRows,
+  };
+}
+
 function formatHMS(totalSeconds) {
   const s = Math.max(0, Math.floor(totalSeconds));
   const h = Math.floor(s / 3600);
@@ -9305,10 +9350,19 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const integrityScrollSyncRef = useRef(false);
   const [integrityScrollLeft, setIntegrityScrollLeft] = useState(0);
   const [expandedIntegritySegments, setExpandedIntegritySegments] = useState(() => new Set());
-  const [showDailyTimerTimeline, setShowDailyTimerTimeline] = useState(false);
+  const [expandedTrackedDiagnostics, setExpandedTrackedDiagnostics] = useState(() => new Set());
 
   function toggleIntegritySegments(rowId) {
     setExpandedIntegritySegments((previous) => {
+      const next = new Set(previous);
+      if (next.has(rowId)) next.delete(rowId);
+      else next.add(rowId);
+      return next;
+    });
+  }
+
+  function toggleTrackedDiagnostic(rowId) {
+    setExpandedTrackedDiagnostics((previous) => {
       const next = new Set(previous);
       if (next.has(rowId)) next.delete(rowId);
       else next.add(rowId);
@@ -9407,20 +9461,8 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   }
 
   const rows = data?.rows || [];
-  const dailySegments = data?.daily_segments || [];
-  const displayChecks = data?.display_checks || [];
   const summary = data?.summary || {};
-  const dailySegmentTotals = (() => {
-    const grouped = new Map();
-    for (const segment of dailySegments) {
-      const key = `${segment.member_id}|${segment.work_date}`;
-      const previous = grouped.get(key) || { memberId: segment.member_id, staff: segment.staff_member, workDate: segment.work_date, seconds: 0, count: 0 };
-      previous.seconds += Math.max(0, Number(segment.seconds || 0));
-      previous.count += 1;
-      grouped.set(key, previous);
-    }
-    return [...grouped.values()].sort((a, b) => b.workDate.localeCompare(a.workDate) || a.staff.localeCompare(b.staff));
-  })();
+  const trackedTotalDiagnostics = data?.tracked_total_diagnostics || [];
   const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,95,155,140,140,150,150,150,150,90,110,110,140,180,135];
   const integrityTableWidth = integrityColumnWidths.reduce((total, width) => total + width, 0);
   const integrityHeaders = [
@@ -9556,52 +9598,58 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
         ].map(([label, value]) => <div key={label} style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", padding: "13px 15px" }}><div className="cb-hint">{label}</div><div style={{ fontSize: 22, fontWeight: 750, marginTop: 4 }}>{value}</div>{label.startsWith("Staff with") && (summary.repeated_unreconciled_staff_names || []).length > 0 && <div className="cb-hint" style={{ marginTop: 4 }}>{summary.repeated_unreconciled_staff_names.join(", ")}</div>}</div>)}
       </div>
 
-      {displayChecks.length > 0 && <div style={{ border: "1px solid #e1b84b", background: "#fff8e8", borderRadius: 10, padding: 12, marginBottom: 16 }}>
-        <div style={{ fontWeight: 750, marginBottom: 4 }}>Displayed total differed from server evidence</div>
-        <div className="cb-hint" style={{ marginBottom: 8 }}>ClockBook captured these silently when the total visible in the browser differed from the server's timer segments by at least 30 seconds.</div>
-        <div className="cb-table-wrap" style={{ background: "var(--paper)" }}>
-          <table className="cb-table" style={{ minWidth: 860 }}>
-            <thead><tr><th>Staff member</th><th>Work date</th><th>Captured</th><th className="num">Displayed</th><th className="num">Server</th><th className="num">Difference</th><th>Selected location</th></tr></thead>
-            <tbody>{displayChecks.map((check) => <tr key={check.id}>
-              <td>{check.staff_member}</td><td>{check.work_date}</td>
-              <td>{formatInZone(check.captured_at, check.timezone_name, true)}</td>
-              <td className="num cb-mono">{fmt(check.displayed_total_seconds)}</td>
-              <td className="num cb-mono">{fmt(check.server_total_seconds)}</td>
-              <td className="num cb-mono" style={{ fontWeight: 800 }}>{check.difference_seconds >= 0 ? "+" : "−"}{fmt(Math.abs(check.difference_seconds))}</td>
-              <td>{(check.timezone_name || "UTC").replace(/_/g, " ")}</td>
-            </tr>)}</tbody>
+      {trackedTotalDiagnostics.length > 0 && <div style={{ marginBottom: 18, border: "1px solid var(--line)", borderRadius: 10, overflow: "hidden", background: "var(--paper)" }}>
+        <div style={{ padding: "12px 14px", borderBottom: "1px solid var(--line)", background: "var(--paper-soft)" }}>
+          <div style={{ fontWeight: 750 }}>Tracked total mismatch evidence</div>
+          <div className="cb-hint" style={{ marginTop: 3 }}>Captured only when the browser task/segment snapshot differs from the authoritative server snapshot by at least 30 seconds. Expand a row to see exactly which tasks or segments differed.</div>
+        </div>
+        <div className="cb-table-wrap" style={{ overflowX: "auto" }}>
+          <table className="cb-table" style={{ width: "100%", minWidth: 880 }}>
+            <thead><tr><th>Staff member</th><th>Work date</th><th>Captured</th><th className="num">Browser snapshot</th><th className="num">Server snapshot</th><th className="num">Difference</th><th>Evidence</th></tr></thead>
+            <tbody>{trackedTotalDiagnostics.map((d) => {
+              const expanded = expandedTrackedDiagnostics.has(d.id);
+              const taskDiffs = Array.isArray(d.task_differences) ? d.task_differences : [];
+              return <Fragment key={d.id}>
+                <tr>
+                  <td>{d.staff_member}</td>
+                  <td>{d.work_date}</td>
+                  <td>{formatInZone(d.captured_at, d.timezone_name, true)}</td>
+                  <td className="num cb-mono">{fmt(d.browser_total_seconds)}</td>
+                  <td className="num cb-mono">{fmt(d.server_total_seconds)}</td>
+                  <td className="num cb-mono" style={{ fontWeight: 800 }}>{Number(d.difference_seconds || 0) >= 0 ? "+" : "−"}{fmt(Math.abs(Number(d.difference_seconds || 0)))}</td>
+                  <td>{taskDiffs.length > 0 ? <button type="button" className="cb-btn cb-btn-sm cb-btn-ghost" onClick={() => toggleTrackedDiagnostic(d.id)} style={{ padding: "4px 7px", whiteSpace: "nowrap" }}>
+                    {taskDiffs.length} {taskDiffs.length === 1 ? "task differs" : "tasks differ"}{expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button> : "No task-level difference saved"}</td>
+                </tr>
+                {expanded && taskDiffs.length > 0 && <tr><td colSpan={7} style={{ padding: "0 14px 14px", background: "var(--paper-soft)" }}>
+                  <div style={{ border: "1px solid var(--line)", borderRadius: 8, overflow: "hidden", background: "var(--paper)" }}>
+                    <table className="cb-table" style={{ width: "100%", minWidth: 940 }}>
+                      <thead><tr><th>Client</th><th>Task</th><th className="num">Browser</th><th className="num">Server</th><th className="num">Difference</th><th>Segment evidence</th></tr></thead>
+                      <tbody>{taskDiffs.map((task) => {
+                        const segmentDiffs = Array.isArray(task.segment_differences) ? task.segment_differences : [];
+                        return <tr key={`${d.id}-${task.task_id}`}>
+                          <td>{task.client_name || "—"}</td>
+                          <td>{task.task_name || task.task_id}</td>
+                          <td className="num cb-mono">{fmt(task.browser_seconds)}</td>
+                          <td className="num cb-mono">{fmt(task.server_seconds)}</td>
+                          <td className="num cb-mono">{Number(task.difference_seconds || 0) >= 0 ? "+" : "−"}{fmt(Math.abs(Number(task.difference_seconds || 0)))}</td>
+                          <td style={{ whiteSpace: "normal" }}>{segmentDiffs.length === 0 ? "Task total differed, but no individual segment boundary difference was found." : segmentDiffs.map((seg, idx) => {
+                            const label = seg.issue === "missing_in_browser" ? "Missing in browser" : seg.issue === "browser_only" ? "Browser only" : "Different end/duration";
+                            return <div key={`${task.task_id}-${seg.segment_index}-${idx}`} style={{ marginBottom: idx === segmentDiffs.length - 1 ? 0 : 6 }}>
+                              <strong>{label}</strong> · segment #{seg.segment_index} · {formatInZone(seg.started_at, d.timezone_name, false)} → {seg.ended_at ? formatInZone(seg.ended_at, d.timezone_name, false) : "open"} · server {fmt(seg.seconds)}
+                              {seg.browser_seconds != null ? <> · browser {fmt(seg.browser_seconds)}</> : null}
+                            </div>;
+                          })}</td>
+                        </tr>;
+                      })}</tbody>
+                    </table>
+                  </div>
+                </td></tr>}
+              </Fragment>;
+            })}</tbody>
           </table>
         </div>
       </div>}
-
-      <div style={{ border: "1px solid var(--line)", borderRadius: 10, background: "var(--paper)", marginBottom: 16, overflow: "hidden" }}>
-        <button type="button" className="cb-btn cb-btn-ghost" onClick={() => setShowDailyTimerTimeline((value) => !value)} style={{ width: "100%", justifyContent: "space-between", borderRadius: 0, padding: "10px 12px" }}>
-          <span><strong>Tracked-time timeline</strong> <span className="cb-hint">{dailySegments.length} exact segment{dailySegments.length === 1 ? "" : "s"}</span></span>
-          {showDailyTimerTimeline ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-        </button>
-        {showDailyTimerTimeline && <div style={{ borderTop: "1px solid var(--line)" }}>
-          {dailySegmentTotals.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 12px", borderBottom: "1px solid var(--line)", background: "var(--paper-soft)" }}>
-            {dailySegmentTotals.map((total) => <div key={`${total.memberId}-${total.workDate}`} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "7px 9px", background: "var(--paper)" }}>
-              <div style={{ fontSize: 12, fontWeight: 700 }}>{total.staff} · {total.workDate}</div>
-              <div className="cb-mono" style={{ marginTop: 2 }}>{fmt(total.seconds)} <span className="cb-hint">({total.count} segments)</span></div>
-            </div>)}
-          </div>}
-          {dailySegments.length === 0 ? <div className="cb-empty">No timer segments match the selected date, person, pod and client filters.</div> : <div className="cb-table-wrap" style={{ border: 0, borderRadius: 0 }}>
-            <table className="cb-table" style={{ minWidth: 1120 }}>
-              <thead><tr><th>Staff member</th><th>Work date</th><th>Client</th><th>Task</th><th>Segment</th><th>Started</th><th>Ended</th><th className="num">Duration</th><th>Source</th><th>Status</th></tr></thead>
-              <tbody>{dailySegments.map((segment) => {
-                const member = members.find((m) => m.id === segment.member_id);
-                const zone = member?.timezone_name || "UTC";
-                return <tr key={`${segment.member_id}-${segment.task_id}-${segment.segment_index}-${segment.started_at}`}>
-                  <td>{segment.staff_member}</td><td>{segment.work_date}</td><td>{segment.client || "—"}</td><td>{segment.task || "—"}</td><td>#{segment.segment_index}</td>
-                  <td>{formatInZone(segment.started_at, zone, true)}</td><td>{formatInZone(segment.ended_at, zone, true)}</td>
-                  <td className="num cb-mono">{fmt(segment.seconds)}</td><td>{segment.source === "forgotten_time_recovery" ? "Recovered time" : "Timer"}</td><td>{segment.task_status || "—"}</td>
-                </tr>;
-              })}</tbody>
-            </table>
-          </div>}
-        </div>}
-      </div>
 
       {rows.length === 0 ? <div className="cb-empty">No Time Integrity Audit entries match these filters. Entries are captured prospectively from this feature onward.</div> : <>
         <div style={{ position: "relative", maxWidth: "100%" }}>
@@ -11090,8 +11138,8 @@ export default function App() {
   const [pods, setPods] = useState([]);
   const [templates, setTemplates] = useState([]);
   const [tasks, setTasks] = useState([]);
-  const trackedTotalAuditTasksRef = useRef([]);
-  const trackedTotalAuditUserRef = useRef(null);
+  const tasksRef = useRef([]);
+  const currentUserRef = useRef(null);
   const [timerActionPending, setTimerActionPending] = useState(null);
   const timerActionPendingRef = useRef(null);
   const [view, setView] = useState("dashboard");
@@ -11201,6 +11249,9 @@ export default function App() {
     const iv = setInterval(() => setNow(Date.now() + clockOffsetRef.current), 1000);
     return () => clearInterval(iv);
   }, []);
+
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  useEffect(() => { currentUserRef.current = currentUser; }, [currentUser]);
 
   useEffect(() => {
     if (authState !== "ready" || dataLoading || !currentUser) return;
@@ -11529,51 +11580,6 @@ export default function App() {
     return () => { cancelled = true; clearInterval(iv); };
   }, [authState, currentUser?.id]);
 
-  // Keep a silent proof of what the browser was actually displaying versus the
-  // server-authoritative segment total. This is intentionally management-only evidence.
-  // If a meaningful mismatch is detected, refresh task state immediately so the visible
-  // total self-heals while the backend keeps an append-only discrepancy record.
-  useEffect(() => { trackedTotalAuditTasksRef.current = tasks; }, [tasks]);
-  useEffect(() => { trackedTotalAuditUserRef.current = currentUser; }, [currentUser]);
-  useEffect(() => {
-    if (authState !== "ready" || !currentUser) return;
-    let cancelled = false;
-    let checking = false;
-    const check = async () => {
-      if (cancelled || checking || document.visibilityState === "hidden") return;
-      const member = trackedTotalAuditUserRef.current;
-      if (!member) return;
-      checking = true;
-      try {
-        const nowMs = Date.now() + clockOffsetRef.current;
-        const displayedTotal = trackedTotalAuditTasksRef.current
-          .filter((task) => task.owner_id === member.id)
-          .reduce((sum, task) => sum + elapsedSecondsToday(task, nowMs, member), 0);
-        const result = await api.checkTrackedTotal(displayedTotal);
-        if (!cancelled && result?.mismatch) {
-          const freshTasks = await api.getTasksForTimerReconcile();
-          if (!cancelled) setTasks(freshTasks);
-        }
-      } catch (_) {
-        // Diagnostic/self-healing only. Never interrupt staff time tracking.
-      } finally {
-        checking = false;
-      }
-    };
-    const initial = setTimeout(check, 15000);
-    const iv = setInterval(check, 60000);
-    const onVisible = () => { if (document.visibilityState === "visible") check(); };
-    window.addEventListener("focus", check);
-    document.addEventListener("visibilitychange", onVisible);
-    return () => {
-      cancelled = true;
-      clearTimeout(initial);
-      clearInterval(iv);
-      window.removeEventListener("focus", check);
-      document.removeEventListener("visibilitychange", onVisible);
-    };
-  }, [authState, currentUser?.id]);
-
   useEffect(() => {
     if (authState !== "ready") return;
     (async () => {
@@ -11635,6 +11641,33 @@ export default function App() {
     }, 8000);
     return () => clearInterval(iv);
   }, []);
+
+  // Diagnostic only: preserve the exact browser-side task/segment snapshot when the browser's
+  // Tracked today calculation differs from the server. Nothing here changes timer state.
+  useEffect(() => {
+    if (authState !== "ready") return undefined;
+    let cancelled = false;
+    const capture = async () => {
+      if (cancelled || document.hidden) return;
+      const member = currentUserRef.current;
+      if (!member?.id || !member?.timezone_name) return;
+      const capturedMs = Date.now() + clockOffsetRef.current;
+      const payload = buildTrackedTotalBrowserSnapshot(tasksRef.current, member, capturedMs);
+      if (!payload) return;
+      try {
+        await api.sendTrackedTotalDiagnostic(payload);
+      } catch (_) {
+        // Diagnostics are intentionally silent and must never interrupt time tracking.
+      }
+    };
+    const first = window.setTimeout(capture, 15000);
+    const iv = window.setInterval(capture, 60000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(first);
+      window.clearInterval(iv);
+    };
+  }, [authState, activeWorkspaceId]);
 
   const myRunningTask = currentUser ? tasks.find((t) => t.owner_id === currentUser.id && t.status === "running") : null;
 

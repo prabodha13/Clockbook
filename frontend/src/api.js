@@ -247,10 +247,7 @@ export const api = {
     return request(`/reports/time-integrity-audit${q.toString() ? `?${q.toString()}` : ""}`);
   },
   sendPresenceHeartbeat: () => request("/audit/presence-heartbeat", { method: "POST" }),
-  checkTrackedTotal: (displayedTotalSeconds) => request("/audit/tracked-total-check", {
-    method: "POST",
-    body: JSON.stringify({ displayed_total_seconds: Math.max(0, Number(displayedTotalSeconds || 0)) }),
-  }),
+  sendTrackedTotalDiagnostic: (payload) => request("/audit/tracked-total-check", { method: "POST", body: JSON.stringify(payload) }),
   getKarbonReconciliation: (memberId, dateFrom, dateTo) => { const q = new URLSearchParams(); if (memberId) q.set("member_id", memberId); if (dateFrom) q.set("date_from", dateFrom); if (dateTo) q.set("date_to", dateTo); return request(`/karbon/reconciliation?${q.toString()}`); },
   saveKarbonReconciliationNote: (memberId, date, note) => request("/karbon/reconciliation/note", { method: "PUT", body: JSON.stringify({ member_id: memberId, date, note }) }),
   getIntegrationStatus: () => request("/integrations/status"),
