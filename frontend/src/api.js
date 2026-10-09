@@ -199,6 +199,7 @@ export const api = {
     if (keyword) q.set("keyword", keyword);
     return request(`/learning/report${q.toString() ? `?${q.toString()}` : ""}`);
   },
+  updateLearningReportCategory: (id, category) => request(`/learning/report/${id}/category`, { method: "PATCH", body: JSON.stringify({ category }) }),
   getTasks: () => request("/tasks"),
   getTasksForTimerReconcile: () => request("/tasks", {}, 6000),
   createTask: (task) => request("/tasks", { method: "POST", body: JSON.stringify(task) }),

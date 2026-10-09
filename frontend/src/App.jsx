@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import {
   Clock, Play, Pause, Plus, X, Trash2, Download, Copy,
   ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Building2, LayoutDashboard, ListTree, FileSpreadsheet, Users,
-  CheckCircle2, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
+  CheckCircle2, Check, StickyNote, ClipboardList, LogOut, Settings, RotateCcw,
   Calendar as CalendarIcon, Video, Edit3, Ban, MoreVertical, HeartHandshake, Search, HelpCircle,
   Mail, Lock, Eye, EyeOff, ShieldCheck, GraduationCap, BookOpen, ExternalLink,
 } from "lucide-react";
@@ -4060,6 +4060,9 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
   const [reportRows, setReportRows] = useState([]);
   const [reportBusy, setReportBusy] = useState(false);
   const [reportError, setReportError] = useState("");
+  const [editingLearningRecordId, setEditingLearningRecordId] = useState(null);
+  const [editingLearningRecordCategory, setEditingLearningRecordCategory] = useState("");
+  const [savingLearningRecordId, setSavingLearningRecordId] = useState(null);
 
   const managerMembers = useMemo(() => {
     if (currentUser.role === "super_admin") return members;
@@ -4090,6 +4093,30 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
   const totalSeconds = reportRows.reduce((sum, row) => sum + Number(row.duration_seconds || 0), 0);
   const maxPerson = Math.max(1, ...byPerson.map((r) => r.seconds));
   const maxCategory = Math.max(1, ...byCategory.map((r) => r.seconds));
+
+  async function saveLearningRecordCategory(record) {
+    const nextCategory = editingLearningRecordCategory.trim();
+    if (!nextCategory || savingLearningRecordId) return;
+    if (nextCategory === record.category) {
+      setEditingLearningRecordId(null);
+      setEditingLearningRecordCategory("");
+      return;
+    }
+    setSavingLearningRecordId(record.id);
+    setReportError("");
+    try {
+      const updated = await api.updateLearningReportCategory(record.id, nextCategory);
+      setReportRows((previous) => previous
+        .map((row) => row.id === updated.id ? updated : row)
+        .filter((row) => !reportCategory || String(row.category || "").toLowerCase() === reportCategory.toLowerCase()));
+      setEditingLearningRecordId(null);
+      setEditingLearningRecordCategory("");
+    } catch (err) {
+      setReportError(err.message || "Could not update the L&D category");
+    } finally {
+      setSavingLearningRecordId(null);
+    }
+  }
 
   function ReferenceLinks({ items }) {
     if (!items?.length) return <span style={{ color: "var(--ink-faint)" }}>—</span>;
@@ -4183,7 +4210,19 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
                 <td style={{ fontWeight: 650, overflowWrap: "anywhere" }}>{r.member_name}</td>
                 <td>{formatDate(r.learned_at)}</td>
                 <td className="num cb-mono">{formatHM(r.duration_seconds)}</td>
-                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.category}</td>
+                <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>
+                  {editingLearningRecordId === r.id ? <div style={{ display: "flex", alignItems: "center", gap: 5, minWidth: 0 }}>
+                    <select className="cb-select" value={editingLearningRecordCategory} onChange={(e) => setEditingLearningRecordCategory(e.target.value)} disabled={savingLearningRecordId === r.id} style={{ minWidth: 120, padding: "5px 7px" }}>
+                      {!categories.some((c) => c.name === r.category) && <option value={r.category}>{r.category} (current)</option>}
+                      {categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+                    </select>
+                    <button type="button" className="cb-icon-btn" title="Save category" disabled={savingLearningRecordId === r.id || !editingLearningRecordCategory.trim()} onClick={() => saveLearningRecordCategory(r)}><Check size={13} /></button>
+                    <button type="button" className="cb-icon-btn" title="Cancel" disabled={savingLearningRecordId === r.id} onClick={() => { setEditingLearningRecordId(null); setEditingLearningRecordCategory(""); }}><X size={13} /></button>
+                  </div> : <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span>{r.category}</span>
+                    <button type="button" className="cb-icon-btn" title="Edit category only" onClick={() => { setEditingLearningRecordId(r.id); setEditingLearningRecordCategory(r.category); }}><Edit3 size={12} /></button>
+                  </div>}
+                </td>
                 <td style={{ whiteSpace: "normal", overflowWrap: "anywhere" }}>{r.topic}</td>
                 <td style={{ verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere" }}><LearningTextBlock text={r.what_i_learned} compact /></td>
                 <td style={{ verticalAlign: "top", whiteSpace: "normal", overflowWrap: "anywhere" }}><ReferenceLinks items={r.tdm_references} /></td>
@@ -9351,6 +9390,7 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const [integrityScrollLeft, setIntegrityScrollLeft] = useState(0);
   const [expandedIntegritySegments, setExpandedIntegritySegments] = useState(() => new Set());
   const [showDailyTimerTimeline, setShowDailyTimerTimeline] = useState(false);
+  const [expandedDailyTimelineKeys, setExpandedDailyTimelineKeys] = useState(() => new Set());
   const [expandedTrackedDiagnostics, setExpandedTrackedDiagnostics] = useState(() => new Set());
 
   function toggleIntegritySegments(rowId) {
@@ -9474,6 +9514,17 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       grouped.set(key, previous);
     }
     return [...grouped.values()].sort((a, b) => b.workDate.localeCompare(a.workDate) || a.staff.localeCompare(b.staff));
+  })();
+  const dailySegmentGroups = (() => {
+    const grouped = new Map();
+    for (const total of dailySegmentTotals) {
+      const previous = grouped.get(total.memberId) || { memberId: total.memberId, staff: total.staff, days: [] };
+      previous.days.push(total);
+      grouped.set(total.memberId, previous);
+    }
+    return [...grouped.values()]
+      .map((group) => ({ ...group, days: [...group.days].sort((a, b) => b.workDate.localeCompare(a.workDate)) }))
+      .sort((a, b) => a.staff.localeCompare(b.staff));
   })();
   const trackedTotalDiagnostics = data?.tracked_total_diagnostics || [];
   const integrityColumnWidths = [150,110,170,190,120,110,145,110,110,95,155,140,140,150,150,150,150,90,110,110,140,180,135];
@@ -9670,25 +9721,39 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
           {showDailyTimerTimeline ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
         </button>
         {showDailyTimerTimeline && <div style={{ borderTop: "1px solid var(--line)" }}>
-          {dailySegmentTotals.length > 0 && <div style={{ display: "flex", gap: 8, flexWrap: "wrap", padding: "10px 12px", borderBottom: "1px solid var(--line)", background: "var(--paper-soft)" }}>
-            {dailySegmentTotals.map((total) => <div key={`${total.memberId}-${total.workDate}`} style={{ border: "1px solid var(--line)", borderRadius: 8, padding: "7px 9px", background: "var(--paper)" }}>
-              <div style={{ fontSize: 12, fontWeight: 700 }}>{total.staff} · {total.workDate}</div>
-              <div className="cb-mono" style={{ marginTop: 2 }}>{fmt(total.seconds)} <span className="cb-hint">({total.count} segments)</span></div>
+          {dailySegmentGroups.length === 0 ? <div className="cb-empty">No timer segments match the selected date, person, pod and client filters.</div> : <div style={{ padding: 12, display: "grid", gap: 10 }}>
+            {dailySegmentGroups.map((group) => <div key={group.memberId} style={{ border: "1px solid var(--line)", borderRadius: 9, overflow: "hidden", background: "var(--paper)" }}>
+              <div style={{ padding: "9px 11px", background: "var(--paper-soft)", borderBottom: "1px solid var(--line)", fontWeight: 750 }}>{group.staff}</div>
+              <div>
+                {group.days.map((total, dayIndex) => {
+                  const key = `${total.memberId}|${total.workDate}`;
+                  const expanded = expandedDailyTimelineKeys.has(key);
+                  const daySegments = expanded ? dailySegments.filter((segment) => segment.member_id === total.memberId && segment.work_date === total.workDate) : [];
+                  return <Fragment key={key}>
+                    <button type="button" onClick={() => setExpandedDailyTimelineKeys((previous) => { const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next; })} style={{ width: "100%", display: "grid", gridTemplateColumns: "minmax(120px,1fr) 110px 110px 28px", gap: 10, alignItems: "center", padding: "8px 11px", border: 0, borderBottom: dayIndex < group.days.length - 1 || expanded ? "1px solid var(--line)" : 0, background: "var(--paper)", color: "var(--ink)", cursor: "pointer", textAlign: "left" }}>
+                      <span style={{ fontWeight: 650 }}>{total.workDate}</span>
+                      <span className="cb-mono" style={{ textAlign: "right" }}>{fmt(total.seconds)}</span>
+                      <span className="cb-hint" style={{ textAlign: "right" }}>{total.count} segment{total.count === 1 ? "" : "s"}</span>
+                      <span style={{ display: "flex", justifyContent: "flex-end" }}>{expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</span>
+                    </button>
+                    {expanded && <div className="cb-table-wrap" style={{ border: 0, borderRadius: 0, background: "var(--paper-soft)" }}>
+                      <table className="cb-table" style={{ minWidth: 980 }}>
+                        <thead><tr><th>Client</th><th>Task</th><th>Segment</th><th>Started</th><th>Ended</th><th className="num">Duration</th><th>Source</th><th>Status</th></tr></thead>
+                        <tbody>{daySegments.map((segment) => {
+                          const member = members.find((m) => m.id === segment.member_id);
+                          const zone = member?.timezone_name || "UTC";
+                          return <tr key={`${segment.member_id}-${segment.task_id}-${segment.segment_index}-${segment.started_at}`}>
+                            <td>{segment.client || "—"}</td><td>{segment.task || "—"}</td><td>#{segment.segment_index}</td>
+                            <td>{formatInZone(segment.started_at, zone, true)}</td><td>{formatInZone(segment.ended_at, zone, true)}</td>
+                            <td className="num cb-mono">{fmt(segment.seconds)}</td><td>{segment.source === "forgotten_time_recovery" ? "Recovered time" : "Timer"}</td><td>{segment.task_status || "—"}</td>
+                          </tr>;
+                        })}</tbody>
+                      </table>
+                    </div>}
+                  </Fragment>;
+                })}
+              </div>
             </div>)}
-          </div>}
-          {dailySegments.length === 0 ? <div className="cb-empty">No timer segments match the selected date, person, pod and client filters.</div> : <div className="cb-table-wrap" style={{ border: 0, borderRadius: 0 }}>
-            <table className="cb-table" style={{ minWidth: 1120 }}>
-              <thead><tr><th>Staff member</th><th>Work date</th><th>Client</th><th>Task</th><th>Segment</th><th>Started</th><th>Ended</th><th className="num">Duration</th><th>Source</th><th>Status</th></tr></thead>
-              <tbody>{dailySegments.map((segment) => {
-                const member = members.find((m) => m.id === segment.member_id);
-                const zone = member?.timezone_name || "UTC";
-                return <tr key={`${segment.member_id}-${segment.task_id}-${segment.segment_index}-${segment.started_at}`}>
-                  <td>{segment.staff_member}</td><td>{segment.work_date}</td><td>{segment.client || "—"}</td><td>{segment.task || "—"}</td><td>#{segment.segment_index}</td>
-                  <td>{formatInZone(segment.started_at, zone, true)}</td><td>{formatInZone(segment.ended_at, zone, true)}</td>
-                  <td className="num cb-mono">{fmt(segment.seconds)}</td><td>{segment.source === "forgotten_time_recovery" ? "Recovered time" : "Timer"}</td><td>{segment.task_status || "—"}</td>
-                </tr>;
-              })}</tbody>
-            </table>
           </div>}
         </div>}
       </div>
