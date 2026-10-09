@@ -92,7 +92,13 @@ def test_client_work_is_billable_only_and_aggregates_existing_periods_and_metric
         assert engagement["work_type"] == "Year-End Accounts"
         assert engagement["period"] == "2025"
         assert engagement["seconds"] == 5400
-        assert engagement["tasks"] == [{"task": "Accounts preparation", "seconds": 5400.0, "records": 2}]
+        assert len(engagement["tasks"]) == 1
+        task_row = engagement["tasks"][0]
+        assert task_row["task"] == "Accounts preparation"
+        assert task_row["seconds"] == 5400.0
+        assert task_row["records"] == 2
+        assert len(task_row["entries"]) == 2
+        assert sum(entry["seconds"] for entry in task_row["entries"]) == 5400.0
         assert engagement["metrics"] == [{"label": "Transactions", "quantity": 160}]
     finally:
         s.close()
@@ -205,5 +211,40 @@ def test_client_work_custom_window_selects_period_by_activity_but_keeps_full_per
         assert result["clients"][0]["engagements"][0]["seconds"] == 5400
         assert result["view_activity_from"] == "2026-10-01"
         assert result["view_activity_to"] == "2026-10-09"
+    finally:
+        s.close()
+
+
+def test_client_work_week_to_date_and_month_to_date_show_full_history_for_qualifying_period():
+    s = database.SessionLocal()
+    try:
+        tenant = _tenant(s)
+        member = _member(s, tenant.id, name="Staff")
+        client = models.Client(name="Current Period Client", code=f"CP{uuid4().hex[:5]}")
+        s.add(client)
+        s.add(models.TaskTypeOption(name="Billable Bookkeeping", is_billable=True))
+        s.flush()
+
+        now = datetime.utcnow().replace(microsecond=0)
+        older = _submitted_task(
+            s, client, member, name="Bookkeeping", task_type="Billable Bookkeeping", seconds=3600,
+            field="Bookkeeping & VAT", period_year=2026, period_type="month", work_at=now - timedelta(days=45),
+        )
+        current = _submitted_task(
+            s, client, member, name="Bookkeeping", task_type="Billable Bookkeeping", seconds=1800,
+            field="Bookkeeping & VAT", period_year=2026, period_type="month", work_at=now,
+        )
+        older.period_month = 9
+        current.period_month = 9
+        s.commit()
+
+        for view in ("this_week", "this_month"):
+            result = main.get_insights_client_work(member_id=member.id, view=view, current_member=member, db=s)
+            assert result["engagement_count"] == 1
+            assert result["billable_seconds"] == 5400
+            task_row = result["clients"][0]["engagements"][0]["tasks"][0]
+            assert task_row["records"] == 2
+            assert len(task_row["entries"]) == 2
+            assert sum(entry["seconds"] for entry in task_row["entries"]) == 5400.0
     finally:
         s.close()
