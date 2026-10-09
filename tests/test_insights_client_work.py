@@ -165,6 +165,7 @@ def test_client_work_recent_filters_periods_but_keeps_full_history_inside_visibl
         recent = main.get_insights_client_work(member_id=member.id, view="recent", current_member=member, db=s)
         assert recent["engagement_count"] == 1
         assert recent["billable_seconds"] == 5400
+        assert recent["range_billable_seconds"] == 1800
         engagement = recent["clients"][0]["engagements"][0]
         assert engagement["seconds"] == 5400
         assert engagement["task_records"] == 2
@@ -208,7 +209,10 @@ def test_client_work_custom_window_selects_period_by_activity_but_keeps_full_per
         )
         assert result["engagement_count"] == 1
         assert result["billable_seconds"] == 5400
+        assert result["range_billable_seconds"] == 1800
+        assert result["clients"][0]["range_seconds"] == 1800
         assert result["clients"][0]["engagements"][0]["seconds"] == 5400
+        assert result["clients"][0]["engagements"][0]["range_seconds"] == 1800
         assert result["view_activity_from"] == "2026-10-01"
         assert result["view_activity_to"] == "2026-10-09"
     finally:
@@ -242,6 +246,9 @@ def test_client_work_week_to_date_and_month_to_date_show_full_history_for_qualif
             result = main.get_insights_client_work(member_id=member.id, view=view, current_member=member, db=s)
             assert result["engagement_count"] == 1
             assert result["billable_seconds"] == 5400
+            assert result["range_billable_seconds"] == 1800
+            assert result["clients"][0]["range_seconds"] == 1800
+            assert result["clients"][0]["engagements"][0]["range_seconds"] == 1800
             task_row = result["clients"][0]["engagements"][0]["tasks"][0]
             assert task_row["records"] == 2
             assert len(task_row["entries"]) == 2
