@@ -236,3 +236,69 @@ def test_learning_library_frequency_breaks_equal_relevance_ties():
         assert result[1].member_name == "Single"
     finally:
         s.close()
+
+
+def test_management_ld_report_admin_can_edit_category_only_within_scope():
+    s = database.SessionLocal()
+    try:
+        tenant_id = "tenant_ld_report_category_edit"
+        _tenant(s, tenant_id, "tenant-ld-report-category-edit")
+        admin = _member(s, tenant_id, "admin-ld-edit@example.com", role="admin", name="Admin")
+        staff = _member(s, tenant_id, "staff-ld-edit@example.com", name="Staff")
+        _seed_learning(s, tenant_id)
+        reserved = main._unassigned_client_id(tenant_id)
+        task = models.TaskInstance(
+            client_id=reserved,
+            client_name=main.UNASSIGNED_CLIENT_NAME,
+            name=main.BUILTIN_LEARNING_TASK_TYPE,
+            task_type=main.BUILTIN_LEARNING_TASK_TYPE,
+            owner_id=staff.id,
+            status="submitted",
+            segments=[],
+        )
+        s.add(task); s.flush()
+        record = models.LearningRecord(
+            task_id=task.id,
+            member_id=staff.id,
+            member_name=staff.name,
+            category="Tax",
+            topic="Corporation tax",
+            what_i_learned="Learned filing rules",
+            duration_seconds=1800,
+            learned_at=datetime.utcnow(),
+            tdm_references=[],
+            article_references=[],
+        )
+        s.add(record); s.commit()
+
+        updated = main.update_learning_management_category(
+            record.id,
+            schemas.LearningManagementCategoryUpdate(category="VAT"),
+            current_member=admin,
+            db=s,
+        )
+        assert updated.category == "VAT"
+        assert updated.topic == "Corporation tax"
+        assert updated.what_i_learned == "Learned filing rules"
+        assert updated.duration_seconds == 1800
+
+        stored = s.get(models.LearningRecord, record.id)
+        assert stored.category == "VAT"
+        assert stored.topic == "Corporation tax"
+        assert stored.what_i_learned == "Learned filing rules"
+        audit = s.query(models.AuditEvent).filter(
+            models.AuditEvent.action == "learning_record_category_updated",
+            models.AuditEvent.entity_id == record.id,
+        ).one()
+        assert audit.changes["category"] == {"from": "Tax", "to": "VAT"}
+
+        with pytest.raises(HTTPException) as denied:
+            main.update_learning_management_category(
+                record.id,
+                schemas.LearningManagementCategoryUpdate(category="Tax"),
+                current_member=staff,
+                db=s,
+            )
+        assert denied.value.status_code == 403
+    finally:
+        s.close()
