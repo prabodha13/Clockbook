@@ -2454,6 +2454,32 @@ function SearchableSelect({ options, value, onChange, placeholder, getLabel, get
   );
 }
 
+function TaskTypePeriodSettings({ taskType, onSave }) {
+  const [open, setOpen] = useState(false);
+  const [types, setTypes] = useState(taskType.period_types || []);
+  const [required, setRequired] = useState(!!taskType.period_required);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => { setTypes(taskType.period_types || []); setRequired(!!taskType.period_required); }, [taskType.period_types, taskType.period_required]);
+  async function save() {
+    setSaving(true); setError("");
+    try { await onSave(taskType.id, types, required && types.length > 0); setOpen(false); }
+    catch (err) { setError(err.message); }
+    finally { setSaving(false); }
+  }
+  return <div style={{ position: "relative" }}>
+    <button type="button" className="cb-btn cb-btn-sm" onClick={() => setOpen((v) => !v)}>Period settings</button>
+    {open && <div style={{ position: "absolute", zIndex: 30, right: 0, top: "100%", width: 265, padding: 12, border: "1px solid var(--border)", borderRadius: 9, background: "var(--surface, white)", boxShadow: "0 6px 20px #0002" }}>
+      <div className="cb-label" style={{ marginBottom: 8 }}>Work period types</div>
+      <WorkPeriodTypePicker value={types} onChange={(v) => { setTypes(v); if (!v.length) setRequired(false); }} open={pickerOpen} onOpenChange={setPickerOpen} />
+      <label className="cb-tmpl-task-option-checkbox" style={{ marginTop: 10, display: "flex", gap: 7 }}><input type="checkbox" checked={required} disabled={!types.length} onChange={(e) => setRequired(e.target.checked)} />Require period on completion</label>
+      {error && <div className="cb-error">{error}</div>}
+      <div style={{ display: "flex", gap: 6, marginTop: 10 }}><button type="button" className="cb-btn cb-btn-sm cb-btn-primary" disabled={saving} onClick={save}>Save</button><button type="button" className="cb-btn cb-btn-sm" onClick={() => setOpen(false)}>Cancel</button></div>
+    </div>}
+  </div>;
+}
+
 function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTypes, currentUser, onClose, onCreate, onAddClient, recoveringForgottenTime = false, recoveryAllocationOnly = false }) {
   const [clientMode, setClientMode] = useState(clients.length ? "existing" : "new");
   const [clientId, setClientId] = useState("");
@@ -2474,6 +2500,9 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
   const [role, setRole] = useState("");
   const [taskType, setTaskType] = useState("");
   const [helpedMemberId, setHelpedMemberId] = useState("");
+  const [customPeriod, setCustomPeriod] = useState({ type: "", year: String(new Date().getFullYear()), number: "", start: "", end: "" });
+  const customTaskType = taskTypes.find((t) => t.name === taskType);
+  const customPeriodTypes = customTaskType?.is_billable ? (customTaskType.period_types || []) : [];
 
   const [ownerId, setOwnerId] = useState(currentUser.id);
   const [busy, setBusy] = useState(false);
@@ -2610,7 +2639,13 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
           setBusy(false);
           return;
         }
-        payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId, helped_member_id: taskType === BUILTIN_HELPING_TASK_TYPE ? helpedMemberId : null }];
+        payloads = [{ client_id: cId, client_name: cName, name, role, task_type: taskType, owner_id: ownerId, helped_member_id: taskType === BUILTIN_HELPING_TASK_TYPE ? helpedMemberId : null,
+          period_type: customPeriodTypes.includes(customPeriod.type) ? customPeriod.type : null,
+          period_year: customPeriodTypes.includes(customPeriod.type) && customPeriod.year ? Number(customPeriod.year) : null,
+          period_number: customPeriodTypes.includes(customPeriod.type) && customPeriod.number ? Number(customPeriod.number) : null,
+          period_start: customPeriodTypes.includes(customPeriod.type) ? customPeriod.start || null : null,
+          period_end: customPeriodTypes.includes(customPeriod.type) ? customPeriod.end || null : null,
+        }];
       }
 
       await onCreate(payloads, startImmediately);
@@ -2817,19 +2852,48 @@ function NewTaskModal({ clients, templates, members, bankAccounts, roles, taskTy
             {taskMode === "custom" && (
               <div className="cb-field-row">
                 <div className="cb-field">
-                  <label className="cb-label">Karbon role</label>
+                  <label className="cb-label">Role</label>
                   <select className="cb-select" value={role} onChange={(e) => setRole(e.target.value)}>
                     <option value="">Select a role</option>
                     {roles.map((r) => <option key={r.id} value={r.name}>{r.name}</option>)}
                   </select>
                 </div>
                 <div className="cb-field">
-                  <label className="cb-label">Karbon task type</label>
-                  <select className="cb-select" value={taskType} onChange={(e) => { const value = e.target.value; setTaskType(value); if (value !== BUILTIN_HELPING_TASK_TYPE) setHelpedMemberId(""); }}>
+                  <label className="cb-label">Task Type</label>
+                  <select className="cb-select" value={taskType} onChange={(e) => { const value = e.target.value; setTaskType(value); setCustomPeriod({ type: "", year: String(new Date().getFullYear()), number: "", start: "", end: "" }); if (value !== BUILTIN_HELPING_TASK_TYPE) setHelpedMemberId(""); }}>
                     <option value="">Select a task type</option>
                     {taskTypes.map((t) => <option key={t.id} value={t.name}>{t.name}</option>)}
                   </select>
                 </div>
+              </div>
+            )}
+
+            {taskMode === "custom" && customPeriodTypes.length > 0 && (
+              <div className="cb-field">
+                <label className="cb-label">Work period</label>
+                <div className="cb-hint" style={{ marginBottom: 6 }}>Select a period now, or select it when submitting the task{customTaskType?.period_required ? " (required at completion)" : ""}.</div>
+                <div className="cb-field-row">
+                  <select className="cb-select" value={customPeriod.type} onChange={(e) => setCustomPeriod((p) => ({ ...p, type: e.target.value, number: "", start: "", end: "" }))}>
+                    <option value="">Select later</option>
+                    {customPeriodTypes.map((type) => <option key={type} value={type}>{PERIOD_TYPE_OPTIONS.find((o) => o.value === type)?.label || type}</option>)}
+                  </select>
+                  {customPeriod.type === "weekly" && isBookkeepingWork({ name: customName, task_type: taskType }) ? (
+                    <input type="month" className="cb-input" value={monthInputValue(customPeriod)} onChange={(e) => setCustomPeriod((p) => ({ ...p, year: e.target.value.slice(0, 4), start: e.target.value ? `${e.target.value}-01` : "", number: "" }))} aria-label="Bookkeeping month" />
+                  ) : customPeriod.type && !["daily", "custom"].includes(customPeriod.type) && (
+                    <input type="number" min="2000" max="2100" className="cb-input" style={{ width: 110 }} value={customPeriod.year} onChange={(e) => setCustomPeriod((p) => ({ ...p, year: e.target.value }))} placeholder="Year" />
+                  )}
+                  {customPeriod.type && !["daily", "custom", "year"].includes(customPeriod.type) && (
+                    <select className="cb-select" value={customPeriod.number} onChange={(e) => setCustomPeriod((p) => ({ ...p, number: e.target.value }))}>
+                      <option value="">Select period</option>
+                      {Array.from({ length: customPeriod.type === "weekly" && isBookkeepingWork({ name: customName, task_type: taskType }) ? 5 : periodNumberLimit(customPeriod.type) }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{periodNumberLabel(customPeriod.type, n)}</option>)}
+                    </select>
+                  )}
+                </div>
+                {customPeriod.type === "daily" && <input type="date" className="cb-input" style={{ marginTop: 6 }} value={customPeriod.start} onChange={(e) => setCustomPeriod((p) => ({ ...p, start: e.target.value }))} />}
+                {customPeriod.type === "custom" && <div className="cb-field-row" style={{ marginTop: 6 }}>
+                  <input type="date" className="cb-input" value={customPeriod.start} onChange={(e) => setCustomPeriod((p) => ({ ...p, start: e.target.value }))} />
+                  <input type="date" className="cb-input" min={customPeriod.start || undefined} value={customPeriod.end} onChange={(e) => setCustomPeriod((p) => ({ ...p, end: e.target.value }))} />
+                </div>}
               </div>
             )}
 
@@ -4268,7 +4332,7 @@ function LearningDevelopmentView({ currentUser, members, categories }) {
 
 
 function SettingsView({
-  roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onDeleteTaskType,
+  roles, taskTypes, trackedMetrics, learningCategories = [], onAddRole, onDeleteRole, onAddTaskType, onUpdateTaskTypeBilling, onUpdateTaskTypePeriod, onDeleteTaskType,
   onAddTrackedMetric, onDeleteTrackedMetric, onAddLearningCategory, onUpdateLearningCategory, pods, isSuperAdmin, onAddPod, onDeletePod,
   members = [], currentUser = null, onChangeInsightsPermission, onChangeAdditionalPermissions,
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false, showDemoModeControls = true,
@@ -4925,6 +4989,7 @@ function SettingsView({
                   >
                     {t.is_billable ? "Billable" : "Non-billable"}
                   </button>
+                  {!isBuiltIn && t.is_billable && <TaskTypePeriodSettings taskType={t} onSave={onUpdateTaskTypePeriod} />}
                   {!isBuiltIn && (
                     <button className="cb-icon-btn cb-btn-danger" onClick={() => onDeleteTaskType(t.id)}><Trash2 size={13} /></button>
                   )}
@@ -10347,7 +10412,7 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
   );
 }
 
-function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp }) {
+function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onHelp, recoveryPending = false }) {
   const [busy, setBusy] = useState(false);
   const canClassifyColleagueHelp = (currentUser?.work_arrangement || "office") === "office";
   const [mode, setMode] = useState("main"); // "main" | "helped" | "received"
@@ -10396,7 +10461,7 @@ function SleepAlertModal({ alert, members, currentUser, onDismiss, onResume, onH
           {canClassifyColleagueHelp && <button className="cb-btn" disabled={busy} onClick={() => setMode("received")}>I received help</button>}
           {canClassifyColleagueHelp && <button className="cb-btn" disabled={busy} onClick={() => setMode("helped")}>I helped someone</button>}
           {alert.task && (
-            <button className="cb-btn cb-btn-primary" disabled={busy} onClick={async () => { setBusy(true); await onResume(); }}>
+            <button className="cb-btn cb-btn-primary" disabled={busy || recoveryPending} title={recoveryPending ? "Resolve the forgotten-time recovery before resuming" : undefined} onClick={async () => { setBusy(true); await onResume(); }}>
               Resume timer
             </button>
           )}
@@ -13505,6 +13570,12 @@ export default function App() {
     setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
   }
 
+  async function updateTaskTypePeriod(id, periodTypes, periodRequired) {
+    const current = taskTypes.find((t) => t.id === id);
+    const updated = await api.updateTaskTypePeriod(id, periodTypes, periodRequired, current?.version || 1);
+    setTaskTypes((prev) => prev.map((t) => t.id === id ? updated : t));
+  }
+
   async function deleteTaskType(id) {
     await api.deleteTaskType(id);
     setTaskTypes((prev) => prev.filter((t) => t.id !== id));
@@ -13922,7 +13993,7 @@ export default function App() {
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
-                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onUpdateTaskTypeBilling={updateTaskTypeBilling} onDeleteTaskType={deleteTaskType}
+                onAddRole={addRole} onDeleteRole={deleteRole} onAddTaskType={addTaskType} onUpdateTaskTypeBilling={updateTaskTypeBilling} onUpdateTaskTypePeriod={updateTaskTypePeriod} onDeleteTaskType={deleteTaskType}
                 onAddTrackedMetric={addTrackedMetric} onDeleteTrackedMetric={deleteTrackedMetric}
                 onAddLearningCategory={addLearningCategory} onUpdateLearningCategory={updateLearningCategory}
                 pods={pods} isSuperAdmin={effectiveIsSuperAdmin} onAddPod={addPod} onDeletePod={deletePodHandler}
@@ -14088,6 +14159,7 @@ export default function App() {
       {sleepAlert && (
         <SleepAlertModal
           alert={sleepAlert}
+          recoveryPending={!!idleNoTrackAlert || showForgottenRecovery || forgotToTrackGapMsRef.current != null}
           members={members}
           currentUser={currentUser}
           onDismiss={clearAwayAlert}

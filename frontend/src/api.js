@@ -150,6 +150,7 @@ export const api = {
   getTaskTypes: () => request("/task-types"),
   createTaskType: (name, isBillable = false) => request("/task-types", { method: "POST", body: JSON.stringify({ name, is_billable: !!isBillable }) }),
   updateTaskTypeBilling: (id, isBillable, expectedVersion) => request(`/task-types/${id}/billing`, { method: "PATCH", body: JSON.stringify({ is_billable: !!isBillable, expected_version: expectedVersion }) }),
+  updateTaskTypePeriod: (id, periodTypes, periodRequired, expectedVersion) => request(`/task-types/${id}/period`, { method: "PATCH", body: JSON.stringify({ period_types: periodTypes, period_required: periodRequired, expected_version: expectedVersion }) }),
   deleteTaskType: (id) => request(`/task-types/${id}`, { method: "DELETE" }),
 
   getTrackedMetrics: () => request("/tracked-metrics"),
