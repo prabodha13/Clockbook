@@ -566,6 +566,11 @@ def run_startup_migrations():
                 # billing explicitly from Settings going forward.
                 conn.execute(text("UPDATE task_type_options SET is_billable = TRUE WHERE LOWER(name) LIKE 'billable:%'"))
                 conn.execute(text("UPDATE task_type_options SET is_billable = FALSE WHERE is_billable IS NULL"))
+            if "period_types" not in existing_task_type_columns:
+                conn.execute(text("ALTER TABLE task_type_options ADD COLUMN period_types JSON"))
+                conn.execute(text("UPDATE task_type_options SET period_types = '[]' WHERE period_types IS NULL"))
+            if "period_required" not in existing_task_type_columns:
+                conn.execute(text("ALTER TABLE task_type_options ADD COLUMN period_required BOOLEAN DEFAULT FALSE"))
 
     if "templates" in inspector.get_table_names():
         existing_template_columns = {c["name"] for c in inspector.get_columns("templates")}
@@ -4802,6 +4807,27 @@ def update_task_type_billing(task_type_id: str, payload: schemas.TaskTypeBilling
     return task_type
 
 
+@app.patch("/api/task-types/{task_type_id}/period", response_model=schemas.TaskTypeOut)
+def update_task_type_period(task_type_id: str, payload: schemas.TaskTypePeriodUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    require_admin(current_member)
+    task_type = db.get(models.TaskTypeOption, task_type_id)
+    if not task_type:
+        raise HTTPException(404, "Task type not found")
+    if _is_builtin_task_type_name(task_type.name):
+        raise HTTPException(400, "Built-in task types cannot be changed")
+    _require_expected_version(task_type, payload.expected_version)
+    period_types = _normalise_period_types(payload.period_types)
+    if payload.period_required and not period_types:
+        raise HTTPException(400, "Select at least one work period type")
+    if period_types and not task_type.is_billable:
+        raise HTTPException(400, "Work periods can only be configured for billable task types")
+    task_type.period_types = period_types
+    task_type.period_required = bool(payload.period_required)
+    db.commit()
+    db.refresh(task_type)
+    return task_type
+
+
 @app.delete("/api/task-types/{task_type_id}", status_code=204)
 def delete_task_type(task_type_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
@@ -5392,9 +5418,14 @@ def create_task(payload: schemas.TaskCreate, current_member: models.Member = Dep
     else:
         if payload.source_template_name or payload.source_template_field or payload.source_template_category:
             raise HTTPException(400, "A template task reference is required for template-created work")
-        # Custom/calendar tasks do not get to invent template-only metric or period rules.
+        # Custom tasks inherit configured work-period rules from their task type.
+        # Client-supplied rules must never override these server-owned settings.
         if payload.tracks_number_label or list(payload.period_types or []) or payload.period_required or payload.needs_pay_period:
-            raise HTTPException(400, "Metric and period requirements must come from a standard template")
+            raise HTTPException(400, "Metric and period requirements must come from a configured task type or standard template")
+        configured_type = db.query(models.TaskTypeOption).filter(models.TaskTypeOption.name == task_type).first()
+        if configured_type and configured_type.is_billable:
+            period_types = _normalise_period_types(configured_type.period_types)
+            period_required = bool(configured_type.period_required and period_types)
 
     if bank_account_id:
         account = db.get(models.BankAccount, bank_account_id)

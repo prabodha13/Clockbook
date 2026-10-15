@@ -253,6 +253,8 @@ class TaskTypeOut(BaseModel):
     version: int = 1
     name: str
     is_billable: bool = False
+    period_types: list[str] = Field(default_factory=list)
+    period_required: bool = False
 
 
 class TaskTypeCreate(BaseModel):
@@ -262,6 +264,12 @@ class TaskTypeCreate(BaseModel):
 
 class TaskTypeBillingUpdate(BaseModel):
     is_billable: bool
+    expected_version: int = Field(ge=1)
+
+
+class TaskTypePeriodUpdate(BaseModel):
+    period_types: list[str] = Field(default_factory=list)
+    period_required: bool = False
     expected_version: int = Field(ge=1)
 
 

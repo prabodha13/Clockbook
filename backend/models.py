@@ -310,6 +310,8 @@ class TaskTypeOption(TenantScopedMixin, VersionedMixin, Base):
     id = Column(String, primary_key=True, default=lambda: gen_id("tto"))
     name = Column(String, nullable=False)
     is_billable = Column(Boolean, nullable=False, default=False)
+    period_types = Column(JSON, nullable=False, default=list)
+    period_required = Column(Boolean, nullable=False, default=False)
 
 
 class LearningCategory(TenantScopedMixin, VersionedMixin, Base):
