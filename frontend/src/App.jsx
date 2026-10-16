@@ -10,6 +10,7 @@ import {
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 import { ENGLISH_WORDS_RAW } from "./spellcheckDictionary.js";
 import { userLocalClock, greetingForHour, PerspectiveCard, BirthdayCelebration, useBirthday, BirthdayPreferences, PerspectiveManager, BirthdayWishManager } from "./DashboardEnhancements.jsx";
+import { SeasonalExperience, SeasonalCelebration, SeasonalSettings } from "./SeasonalCelebrations.jsx";
 
 const CLOCKBOOK_SPELLCHECK_WORDS = new Set([
   "clockbook", "karbon", "xero", "brightpay", "brightbooks", "brightbook", "dext", "calamari",
@@ -1819,7 +1820,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null, workspaceLogo = "" }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null, workspaceLogo = "", workspaceId = "" }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -1994,6 +1995,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       </div>
 
       <PerspectiveCard user={currentUser} clock={localClock}/>
+      <SeasonalExperience user={currentUser} workspaceId={workspaceId} logo={workspaceLogo} now={now} birthdayIsOpen={birthday.birthdayOpen}/>
       {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday} workspaceLogo={workspaceLogo} wish={birthday.wish}/>}
       {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
@@ -4336,7 +4338,7 @@ function SettingsView({
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false, showDemoModeControls = true,
   demoAdminPermissions = [], onChangeDemoAdminPermissions = null,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
-  onTestForgottenRecovery = null, onPreviewBirthday = null,
+  onTestForgottenRecovery = null, onPreviewBirthday = null, onPreviewSeasonal = null,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -5227,6 +5229,7 @@ function SettingsView({
 
       {realIsSuperAdmin && viewMode === "super_admin" && <PerspectiveManager />}
       {realIsSuperAdmin && viewMode === "super_admin" && <BirthdayWishManager />}
+      {realIsSuperAdmin && viewMode === "super_admin" && <SeasonalSettings user={currentUser} workspaceId={activeWorkspaceId} onPreview={onPreviewSeasonal}/>}
       {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
@@ -11826,6 +11829,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
   const [birthdayPreview, setBirthdayPreview] = useState(false);
+  const [seasonalPreview, setSeasonalPreview] = useState(null);
   const [showForgottenRecovery, setShowForgottenRecovery] = useState(() => Number(pendingRecoveryOnLoad?.gapMs) > 0);
   const [showForgottenRecoveryPreview, setShowForgottenRecoveryPreview] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
@@ -13924,9 +13928,11 @@ export default function App() {
                 clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
                 onCreateTasks={createTasks}
                 workspaceLogo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""}
+                workspaceId={activeWorkspaceId}
                 timerActionPending={timerActionPending}
               />
             )}
+            {seasonalPreview && <SeasonalCelebration occasion={seasonalPreview} name={(currentUser.name || "there").trim().split(/\s+/)[0]} logo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""} onClose={() => setSeasonalPreview(null)}/>}
             {birthdayPreview && <BirthdayCelebration firstName={(currentUser.name || "there").trim().split(/\s+/)[0]} onClose={() => setBirthdayPreview(false)} workspaceLogo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""} />}
             {view === "templates" && (
               <Templates
@@ -14018,6 +14024,7 @@ export default function App() {
                 onIntegrationChanged={loadIntegrationStatus}
                 onTestForgottenRecovery={() => setShowForgottenRecoveryPreview(true)}
                 onPreviewBirthday={() => setBirthdayPreview(true)}
+                onPreviewSeasonal={setSeasonalPreview}
               />
             )}
           </div>

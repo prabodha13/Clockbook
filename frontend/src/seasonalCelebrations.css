@@ -1,0 +1,16 @@
+.cb-season-snow{position:fixed;inset:0;z-index:15;pointer-events:none;overflow:hidden;opacity:.32;mask-image:linear-gradient(90deg,#000 0%,transparent 24%,transparent 78%,#000 100%)}
+.cb-season-snow span{position:absolute;top:-30px;color:#8ca99b;font-size:13px;animation:cb-season-drift linear infinite;will-change:transform}
+.cb-season-snow-subtle span:nth-child(n+6){display:none}.cb-season-snow-subtle{opacity:.2}
+@keyframes cb-season-drift{from{transform:translate3d(0,-30px,0) rotate(0deg)}to{transform:translate3d(17px,110vh,0) rotate(80deg)}}
+.cb-season-overlay{position:fixed;inset:0;z-index:100005;display:flex;align-items:center;justify-content:center;padding:20px;background:#0f241b88}
+.cb-season-modal{font-family:Inter,system-ui,sans-serif;position:relative;max-width:590px;width:100%;padding:38px 48px 42px;text-align:center;background:#fdfcf7;color:#184633;border-radius:19px;box-shadow:0 25px 85px #07180e6b;border:1px solid #e6e8da;outline:none}
+.cb-season-halloween{background:#fcf7ee;border-color:#e8d9b9}.cb-season-halloween h2{color:#74451f}
+.cb-season-close{position:absolute;right:17px;top:17px;background:transparent;border:0;color:#37604a;cursor:pointer;padding:8px;border-radius:7px}
+.cb-season-close:focus-visible,.cb-season-continue:focus-visible{outline:2px solid #b18c42;outline-offset:3px}
+.cb-season-logo{max-height:50px;max-width:150px;object-fit:contain;margin:0 auto 10px;display:block}
+.cb-season-illustration{font-size:58px;line-height:1.5;margin-bottom:10px}.cb-season-eyebrow{font-size:11px;letter-spacing:.16em;font-weight:700;color:#a28249}
+.cb-season-modal h2{font-family:Georgia,serif;font-size:clamp(28px,5vw,41px);line-height:1.2;margin:13px 0 14px}.cb-season-modal p{font-family:Georgia,serif;font-size:18px;line-height:1.6;color:#536558;margin:0 auto 28px;max-width:450px}
+.cb-season-continue{background:#124b35;color:#fff;border:0;border-radius:8px;padding:13px 24px;font-weight:650;cursor:pointer}
+.cb-season-settings{padding:20px;margin-top:20px}.cb-season-settings label{display:flex;gap:9px;align-items:center;font-size:14px;margin:13px 0}.cb-season-preview-buttons{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+@media(max-width:640px){.cb-season-modal{padding:36px 22px}.cb-season-snow span:nth-child(n+7){display:none}}
+@media(prefers-reduced-motion:reduce){.cb-season-snow{display:none}}
