@@ -67,3 +67,45 @@ def test_pod_assignment_respects_pod_and_tenant():
         assert ex.value.status_code == 404
     finally:
         s.close()
+
+
+def test_explicit_cross_pod_permission_does_not_allow_self_assignment():
+    s = database.SessionLocal()
+    try:
+        tid = 'pod_explicit_cross_scope'
+        tenant(s, tid)
+        pod_a, pod_b = models.Pod(name='Alpha'), models.Pod(name='Beta')
+        s.add_all([pod_a, pod_b]); s.commit()
+        admin = member(s, tid, 'cross-admin@test.local', 'admin', pod_a.id)
+        coworker = member(s, tid, 'cross-coworker@test.local', 'member', pod_b.id)
+        superior = member(s, tid, 'cross-super@test.local', 'super_admin', pod_b.id)
+        # Existing Manage Pods does not permit a pod-scoped Admin to cross pods.
+        with pytest.raises(HTTPException) as denied:
+            update(s, admin, coworker, pod_a.id)
+        assert denied.value.status_code == 403
+        admin.additional_permissions = [main.PERMISSION_ASSIGN_PODS_ACROSS_PODS]
+        s.commit()
+        update(s, admin, coworker, pod_a.id)
+        assert coworker.pod_id == pod_a.id
+        with pytest.raises(HTTPException) as denied:
+            update(s, admin, admin, pod_b.id)
+        assert denied.value.status_code == 403
+        admin.additional_permissions = [main.PERMISSION_CHANGE_OWN_POD]
+        s.commit()
+        update(s, admin, admin, pod_b.id)
+        assert admin.pod_id == pod_b.id
+        # Own-pod permission alone does not permit changing a colleague's pod.
+        with pytest.raises(HTTPException) as denied:
+            update(s, admin, coworker, pod_b.id)
+        assert denied.value.status_code == 403
+        with pytest.raises(HTTPException) as denied:
+            update(s, admin, superior, pod_a.id)
+        assert denied.value.status_code == 403
+        # A user without the delegated permission cannot reassign even themselves.
+        admin.additional_permissions = []
+        s.commit()
+        with pytest.raises(HTTPException) as denied:
+            update(s, admin, admin, pod_a.id)
+        assert denied.value.status_code == 403
+    finally:
+        s.close()
