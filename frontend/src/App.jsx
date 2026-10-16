@@ -10753,7 +10753,6 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
   const [externalGuests, setExternalGuests] = useState("");
   const [clientId, setClientId] = useState("");
   const [duration, setDuration] = useState("30");
-  const [clientSearch, setClientSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
   const [localNow, setLocalNow] = useState(() => Date.now());
   useEffect(() => {
@@ -10772,7 +10771,6 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
   );
   const options = members.filter((m) => m.id !== currentUser.id && (currentUser.role !== "admin" || !currentUser.pod_id || m.pod_id === currentUser.pod_id));
   const matchingMembers = options.filter(m => `${m.name || ""} ${m.email || ""}`.toLowerCase().includes(userSearch.toLowerCase().trim()));
-  const matchingClients = clients.filter(c => c.name !== "Internal Support" && c.name.toLowerCase().includes(clientSearch.toLowerCase().trim()));
   const selectedMembers = options.filter(m => selectedIds.includes(m.id));
   function inviteeLocalTime(member) {
     const zone = member.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -10848,12 +10846,15 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
               </div>
               <div className="cb-field">
                 <label className="cb-label">Client (optional)</label>
-                <input className="cb-input" type="search" value={clientSearch} onChange={e => setClientSearch(e.target.value)} placeholder="Search clients..." aria-label="Search clients" style={{marginBottom:6}} />
-                <select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
-                  <option value="">Internal / no client</option>
-                  {matchingClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                  {clientId && !matchingClients.some(c => c.id === clientId) && clients.find(c => c.id === clientId) && <option value={clientId}>{clients.find(c => c.id === clientId).name}</option>}
-                </select>
+                <SearchableSelect
+                  options={clients.filter(c => c.name !== "Internal Support")}
+                  value={clientId}
+                  onChange={setClientId}
+                  placeholder="Internal / no client"
+                  getLabel={(c) => c.name}
+                  allowClear
+                  clearLabel="Internal / no client"
+                />
               </div>
               <div className="cb-field">
                 <label className="cb-label">Invite Clockbook users</label>
