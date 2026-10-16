@@ -7318,6 +7318,16 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
     return Array.from(byId.values()).sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" }));
   }, [staffOptions, canUseTeamView, currentUser?.id, currentUser?.role, currentUser?.pod_id, currentUser?.additional_permissions]);
 
+  // The individual selector must use the same authorised tenant/pod scope as Team View.
+  // Do not retain a selection if the member list or the user's scope changes.
+  const individualOptions = useMemo(() => canUseTeamView ? teamOptions : [], [canUseTeamView, teamOptions]);
+  useEffect(() => {
+    if (!canUseTeamView || !currentUser?.id) return;
+    if (memberId && !individualOptions.some((m) => m.id === memberId)) {
+      setMemberId(currentUser.id);
+      setData(null);
+    }
+  }, [canUseTeamView, currentUser?.id, memberId, individualOptions]);
   const canSelectTeamMembers = currentUser?.role === "super_admin" && canUseTeamView;
   const sortedTeamPods = useMemo(() => [...(pods || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })), [pods]);
   const podScopedTeamOptions = useMemo(() => {
@@ -7554,7 +7564,7 @@ function KarbonReconciliationView({ members, currentUser, isAdmin, forceSelfOnly
 
     <div style={styles.controlPanel}>
       <div className="cb-toolbar" style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
-        {viewMode === "individual" && canUseTeamView && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={staffOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
+        {viewMode === "individual" && canUseTeamView && <div style={{ width: 240 }}><div className="cb-label">Person</div><SearchableSelect options={individualOptions} value={memberId} onChange={setMemberId} placeholder="Search staff..." getLabel={(m) => m.name} /></div>}
         {viewMode === "team" && canSelectTeamMembers && sortedTeamPods.length > 0 && <div style={{ minWidth: 190 }}>
           <div className="cb-label">Pod</div>
           <select
