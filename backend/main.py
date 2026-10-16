@@ -7746,7 +7746,9 @@ def karbon_reconciliation(member_id: str = None, date_from: str = None, date_to:
     if target_id not in allowed_ids:
         raise HTTPException(403, "You cannot view Karbon time for that person")
     member = db.get(models.Member, target_id)
-    if not member or not member.email:
+    if not member or member.tenant_id != current_member.tenant_id:
+        raise HTTPException(403, "You cannot view Karbon time for that person")
+    if not member.email:
         raise HTTPException(400, "This ClockBook user needs an email address before they can be matched to Karbon")
     try:
         start_date = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else (datetime.utcnow().date() - timedelta(days=datetime.utcnow().weekday()))
@@ -7950,8 +7952,8 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
         raise HTTPException(403, "You cannot add a Karbon reconciliation note for that person")
 
     target = db.get(models.Member, payload.member_id)
-    if not target:
-        raise HTTPException(404, "Staff member not found")
+    if not target or target.tenant_id != current_member.tenant_id:
+        raise HTTPException(403, "You cannot add a Karbon reconciliation note for that person")
 
     note_text = (payload.note or "").strip()
     existing = db.query(models.KarbonReconciliationNote).filter(
