@@ -8985,6 +8985,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
       <div className="cb-card-list">
         {staffDirectoryMembers.map((m) => {
           const podAssignmentOnly = currentUser?.role === "admin" && !!currentUser.pod_id && m.pod_id !== currentUser.pod_id && m.id !== currentUser.id;
+          // Cross-pod assignment visibility does not confer permission to edit staff settings.
           return <div className="cb-row" key={m.id}>
             <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <Avatar member={m} size={28} />
@@ -9001,7 +9002,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {isAdmin && !podAssignmentOnly && (
+              {isAdmin && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     Capacity
@@ -9009,6 +9010,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                       className="cb-input"
                       type="number" min="0" max="168" step="0.5"
                       defaultValue={Number(m.weekly_capacity_hours ?? 40)}
+                      disabled={podAssignmentOnly}
                       onBlur={(e) => {
                         const value = Number(e.target.value);
                         if (Number.isFinite(value) && value >= 0 && value <= 168 && value !== Number(m.weekly_capacity_hours ?? 40)) onChangeCapacity(m.id, value, m.capacity_effective_from);
@@ -9024,6 +9026,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                       className="cb-input"
                       type="date"
                       defaultValue={m.capacity_effective_from || ""}
+                      disabled={podAssignmentOnly}
                       onBlur={(e) => {
                         const value = e.target.value;
                         const currentValue = m.capacity_effective_from || "";
@@ -9035,11 +9038,12 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   </label>
                 </div>
               )}
-              {isAdmin && !podAssignmentOnly && (
+              {isAdmin && (
                 <select
                   className="cb-select"
                   style={{ width: 118, minWidth: 118, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
                   value={m.work_arrangement || "office"}
+                  disabled={podAssignmentOnly}
                   onChange={(e) => onChangeWorkArrangement(m.id, e.target.value)}
                   aria-label={`Work arrangement for ${m.name}`}
                   title="Work arrangement"
@@ -9048,8 +9052,14 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   <option value="remote">Remote</option>
                 </select>
               )}
-              {isAdmin && !podAssignmentOnly && (
+              {isAdmin && (
                 <div style={{ width: 180, minWidth: 180 }}>
+                  {podAssignmentOnly ? (
+                    <input className="cb-input" type="text" disabled readOnly
+                      value={m.timezone_name || "Not set"}
+                      aria-label={`Time zone for ${m.name} (read only)`}
+                      style={{ width: "100%", fontSize: 12.5, padding: "7px 10px" }} />
+                  ) : (
                   <SearchableSelect
                     options={timezoneOptions}
                     value={m.timezone_name || ""}
@@ -9060,6 +9070,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                     allowClear
                     clearLabel="Not set"
                   />
+                  )}
                 </div>
               )}
               {((m.id === currentUser.id ? canChangeOwnPod : mayAssignPod) && pods.length > 0) && (
