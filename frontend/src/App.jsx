@@ -8671,7 +8671,8 @@ function SetCredentialsModal({ memberName, initialEmail, isReset, onClose, onSub
 
 function roleActions(m, currentUser) {
   const isSelf = m.id === currentUser.id;
-  const canTouchSuperTier = isSelf || currentUser.role === "super_admin";
+  // Super Admin actions must never be offered to regular Admins, including on their own entry.
+  const canTouchSuperTier = currentUser.role === "super_admin";
   const actions = [];
   if (m.role === "member") {
     actions.push({ label: "Make admin", target: "admin" });
