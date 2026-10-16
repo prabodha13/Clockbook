@@ -70,3 +70,27 @@ def test_api_routes_precede_frontend_catchall():
         catchall = paths.index("/{full_path:path}")
         assert paths.index("/api/birthday/{member_id}") < catchall
         assert paths.index("/api/perspectives") < catchall
+
+
+def test_changing_birthday_resets_annual_acknowledgement_without_resetting_on_resave():
+    """A temporary test birthday cannot consume the user's real birthday that year."""
+    db = database.SessionLocal()
+    try:
+        member = people(db, "enhancement_birthday_date_change")
+        main.update_birthday(member.id, schemas.BirthdayPreferences(month=10, day=16), current_member=member, db=db)
+        member.birthday_acknowledged_year = 2026
+        db.commit()
+        # Saving preferences without changing the date must not replay the celebration.
+        same = main.update_birthday(member.id, schemas.BirthdayPreferences(month=10, day=16, enabled=True), current_member=member, db=db)
+        assert same["acknowledged_year"] == 2026
+        # Changing the date after a trial run unlocks the real birthday.
+        changed = main.update_birthday(member.id, schemas.BirthdayPreferences(month=12, day=3, enabled=True), current_member=member, db=db)
+        assert changed["acknowledged_year"] is None
+        assert (changed["month"], changed["day"]) == (12, 3)
+        # A subsequent annual acknowledgement still persists when date is unchanged.
+        member.birthday_acknowledged_year = 2026
+        db.commit()
+        same = main.update_birthday(member.id, schemas.BirthdayPreferences(month=12, day=3, enabled=False), current_member=member, db=db)
+        assert same["acknowledged_year"] == 2026
+    finally:
+        db.close()
