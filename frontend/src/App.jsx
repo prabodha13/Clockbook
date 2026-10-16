@@ -13052,11 +13052,13 @@ export default function App() {
   const noTrackSinceRef = useRef(idleNoTrackAlert?.since ? Number(idleNoTrackAlert.since) : Date.now());
   const noTrackCountdownScopeRef = useRef("");
   const noTrackSnoozeUntilRef = useRef(0);
+  const [noTrackSnoozeUntil, setNoTrackSnoozeUntilState] = useState(0);
   const noTrackSnoozeScopeRef = useRef("");
 
   function setNoTrackSnoozeUntil(untilMs) {
     const until = Number(untilMs);
     noTrackSnoozeUntilRef.current = Number.isFinite(until) && until > Date.now() ? until : 0;
+    setNoTrackSnoozeUntilState(noTrackSnoozeUntilRef.current);
     const key = noTrackSnoozeStorageKey();
     if (!key) return;
     try {
@@ -13120,6 +13122,24 @@ export default function App() {
     }
   }, [idleNoTrackAlert]);
 
+  // Snooze only postpones the reminder: retain the pending recovery slices so that
+  // freezeNoTrackWindow/resumeNoTrackWindow still exclude screen-locked Away time.
+  // Restore visibility at expiry even when no new no-track countdown is running.
+  useEffect(() => {
+    if (!noTrackSnoozeUntil) return;
+    const expire = () => {
+      if (Date.now() >= noTrackSnoozeUntilRef.current) setNoTrackSnoozeUntil(0);
+    };
+    const timeout = setTimeout(expire, Math.max(0, noTrackSnoozeUntil - Date.now()));
+    window.addEventListener("focus", expire);
+    document.addEventListener("visibilitychange", expire);
+    return () => {
+      clearTimeout(timeout);
+      window.removeEventListener("focus", expire);
+      document.removeEventListener("visibilitychange", expire);
+    };
+  }, [noTrackSnoozeUntil]);
+
   // Persist the pre-10-minute countdown too, not just the reminder that appears after
   // the threshold. The key is scoped to this workspace and member, so refresh/redeploy keeps
   // the countdown while an intentional workspace switch cannot inherit it.
@@ -13133,11 +13153,13 @@ export default function App() {
       noTrackSnoozeScopeRef.current = scope;
       // Never carry a previous user/workspace's snooze into the new scope.
       noTrackSnoozeUntilRef.current = 0;
+      setNoTrackSnoozeUntilState(0);
       try {
         const snoozeKey = noTrackSnoozeStorageKey();
         const savedUntil = Number(sessionStorage.getItem(snoozeKey));
         if (Number.isFinite(savedUntil) && savedUntil > Date.now()) {
           noTrackSnoozeUntilRef.current = savedUntil;
+          setNoTrackSnoozeUntilState(savedUntil);
         } else if (snoozeKey) {
           sessionStorage.removeItem(snoozeKey);
         }
@@ -13213,7 +13235,7 @@ export default function App() {
   // current too. The popup already uses alert.since as a live start point; this mirrors that
   // into the OS notification once per minute without creating a stack of notifications.
   useEffect(() => {
-    if (!idleNoTrackAlert) {
+    if (!idleNoTrackAlert || noTrackSnoozeUntil > Date.now()) {
       if (noTrackBrowserNotificationRef.current) {
         noTrackBrowserNotificationRef.current.close();
         noTrackBrowserNotificationRef.current = null;
@@ -13229,7 +13251,7 @@ export default function App() {
     // refreshing it one minute later so it moves to 11m, 12m, 13m, and so on.
     const iv = setInterval(refreshBrowserNotification, 60 * 1000);
     return () => clearInterval(iv);
-  }, [idleNoTrackAlert]);
+  }, [idleNoTrackAlert, noTrackSnoozeUntil]);
 
   useEffect(() => {
     const CHECK_MS = 15000;
@@ -14473,17 +14495,17 @@ export default function App() {
           }}
         />
       )}
-      {idleNoTrackAlert && !sleepAlert && (
+      {idleNoTrackAlert && !sleepAlert && noTrackSnoozeUntil <= Date.now() && !isScreenLockedRef.current && (
         <IdleNoTrackModal
           alert={idleNoTrackAlert}
           members={members}
           currentUser={currentUser}
           onSnooze={(snoozeMs) => {
+            // Keep the unanswered recovery reminder (and its accumulated eligible slices).
+            // Clearing it here caused a later screen lock to bypass freezeNoTrackWindow,
+            // allowing recorded Away time into the proposed recovery interval.
             setNoTrackSnoozeUntil(Date.now() + snoozeMs);
-            setNoTrackCountdownStart(Date.now());
-            noTrackHandledRef.current = false;
-            idleNoTrackAlertRef.current = null;
-            setIdleNoTrackAlert(null);
+            noTrackHandledRef.current = true;
           }}
           onStartNew={async (liveGapMs, includeLostTime = true, windowEndMs = Date.now(), recoveryWindows = []) => {
             forgotToTrackGapMsRef.current = includeLostTime ? liveGapMs : null;
