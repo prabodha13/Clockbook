@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 import { ENGLISH_WORDS_RAW } from "./spellcheckDictionary.js";
-import { userLocalClock, greetingForHour, PerspectiveCard, BirthdayCelebration, useBirthday, BirthdayPreferences, PerspectiveManager } from "./DashboardEnhancements.jsx";
+import { userLocalClock, greetingForHour, PerspectiveCard, BirthdayCelebration, useBirthday, BirthdayPreferences, PerspectiveManager, BirthdayWishManager } from "./DashboardEnhancements.jsx";
 
 const CLOCKBOOK_SPELLCHECK_WORDS = new Set([
   "clockbook", "karbon", "xero", "brightpay", "brightbooks", "brightbook", "dext", "calamari",
@@ -1961,7 +1961,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       <div className="cb-page-head" style={{ alignItems: "flex-start", gap: 18, paddingBottom: 16 }}>
         <div style={{ minWidth: 220, paddingTop: 2 }}>
           <div className="cb-page-title cb-serif">{birthday.isBirthday ? `Happy Birthday, ${firstName}! 🎉` : `${greetingForHour(localClock.hour)}, ${firstName} ${localClock.hour >= 5 && localClock.hour < 12 ? "☀️" : localClock.hour >= 17 || localClock.hour < 5 ? "🌙" : ""}`}</div>
-          <div className="cb-page-sub">{birthday.isBirthday ? "Wishing you a wonderful year filled with happiness, growth, and meaningful moments." : localClock.date}</div>
+          <div className="cb-page-sub">{birthday.isBirthday ? (birthday.wish || "Wishing you a wonderful year filled with happiness, growth, and meaningful moments.") : localClock.date}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {canUseTeamView && (
@@ -1994,7 +1994,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       </div>
 
       <PerspectiveCard user={currentUser} clock={localClock}/>
-      {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday} workspaceLogo={workspaceLogo}/>}
+      {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday} workspaceLogo={workspaceLogo} wish={birthday.wish}/>}
       {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
           <table className="cb-table">
@@ -5226,6 +5226,7 @@ function SettingsView({
       )}
 
       {realIsSuperAdmin && viewMode === "super_admin" && <PerspectiveManager />}
+      {realIsSuperAdmin && viewMode === "super_admin" && <BirthdayWishManager />}
       {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
