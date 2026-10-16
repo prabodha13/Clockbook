@@ -5944,10 +5944,44 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
   const [selectedIds, setSelectedIds] = useState([]);
   const [externalGuests, setExternalGuests] = useState("");
   const [createMeet, setCreateMeet] = useState(false);
+  const [inviteSearch, setInviteSearch] = useState("");
+  const [availability, setAvailability] = useState(null);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const availabilityRequestRef = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const inviteOptions = (members || []).filter((m) => m.id !== currentUser?.id);
+  const inviteOptions = (members || []).filter(m => m.id !== currentUser?.id && (currentUser?.role !== "admin" || !currentUser?.pod_id || m.pod_id === currentUser.pod_id));
+  const matchedInvitees = inviteOptions.filter(m => `${m.name || ""} ${m.email || ""}`.toLowerCase().includes(inviteSearch.trim().toLowerCase()));
+  const selectedInvitees = inviteOptions.filter(m => selectedIds.includes(m.id));
+  const proposedStart = !allDay && startValue ? new Date(startValue) : null;
+  const proposedEnd = !allDay && endValue ? new Date(endValue) : null;
+  const validSlot = proposedStart && proposedEnd && Number.isFinite(proposedStart.getTime()) && Number.isFinite(proposedEnd.getTime()) && proposedEnd > proposedStart;
+  const slotKey = `${startValue}|${endValue}|${allDay}|${selectedIds.join(",")}`;
+  useEffect(() => { availabilityRequestRef.current += 1; setAvailability(null); setCheckingAvailability(false); }, [slotKey]);
+  function inviteeMeetingTime(member) {
+    if (!validSlot) return "Select valid meeting times";
+    const zone = member.timezone_name;
+    if (!zone) return "Time zone not configured";
+    try {
+      const fmt = new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZoneName: "short" });
+      return `${fmt.format(proposedStart)} – ${fmt.format(proposedEnd)}`;
+    } catch (_) { return "Time zone unavailable"; }
+  }
+  async function checkScheduledAvailability() {
+    if (!validSlot || !selectedIds.length) return;
+    const requestId = ++availabilityRequestRef.current;
+    setCheckingAvailability(true);
+    setAvailability(null);
+    try {
+      const response = await api.checkCalendarAvailability({ attendee_member_ids: selectedIds, start: proposedStart.toISOString(), end: proposedEnd.toISOString() });
+      if (requestId === availabilityRequestRef.current) setAvailability(response);
+    } catch (err) {
+      if (requestId === availabilityRequestRef.current) setAvailability({ error: err.message || "Calendar availability could not be checked" });
+    } finally {
+      if (requestId === availabilityRequestRef.current) setCheckingAvailability(false);
+    }
+  }
 
   function toggleMember(id) {
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -6061,15 +6095,30 @@ function CalendarEventModal({ event, initialStart, initialAllDay = false, member
           {!editing && <>
             <div className="cb-field">
               <label className="cb-label">Invite Clockbook users</label>
+              <input className="cb-input" type="search" value={inviteSearch} onChange={e => setInviteSearch(e.target.value)} placeholder="Search by name or email..." aria-label="Search meeting invitees" style={{marginBottom: 7}} />
               <div style={{ border: "1px solid var(--line)", borderRadius: 9, padding: 8, maxHeight: 150, overflowY: "auto" }}>
-                {inviteOptions.length === 0 && <div className="cb-hint">No other Clockbook users yet.</div>}
-                {inviteOptions.map((m) => (
+                {matchedInvitees.length === 0 && <div className="cb-hint">No matching users.</div>}
+                {matchedInvitees.map((m) => (
                   <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "5px 4px", opacity: m.email ? 1 : 0.5 }}>
                     <input type="checkbox" disabled={!m.email} checked={selectedIds.includes(m.id)} onChange={() => toggleMember(m.id)} />
                     <span>{m.name}</span><span className="cb-hint" style={{ marginLeft: "auto" }}>{m.email || "No email"}</span>
                   </label>
                 ))}
               </div>
+              {selectedInvitees.length > 0 && <div style={{marginTop: 9}}>
+                <div className="cb-label">Meeting time for invitees</div>
+                {selectedInvitees.map(m => <div key={m.id} className="cb-hint" style={{marginBottom: 5}}>{m.name}: {inviteeMeetingTime(m)}</div>)}
+                <div className="cb-hint">Times use saved employee time zones. External guests are not included.</div>
+              </div>}
+              {!allDay && <div style={{marginTop: 10}}>
+                <button type="button" className="cb-btn cb-btn-ghost" disabled={!validSlot || selectedIds.length === 0 || checkingAvailability} onClick={checkScheduledAvailability}>
+                  {checkingAvailability ? "Checking calendars..." : "Check availability"}
+                </button>
+                {availability && <div className="cb-hint" style={{marginTop: 8}} aria-live="polite">
+                  {availability.error || (availability.members || []).map(m => `${m.name}: ${m.status === "busy" ? "Busy" : m.status === "free" ? "No conflict in checked calendar" : "Availability unknown"}`).join(" · ")}
+                  {!availability.error && <div>Only calendars accessible to the organiser are checked. External guests and inaccessible calendars cannot be verified.</div>}
+                </div>}
+              </div>}
             </div>
             <div className="cb-field">
               <label className="cb-label">External guests</label>
@@ -10706,8 +10755,6 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
   const [duration, setDuration] = useState("30");
   const [clientSearch, setClientSearch] = useState("");
   const [userSearch, setUserSearch] = useState("");
-  const [availability, setAvailability] = useState(null);
-  const [checkingAvailability, setCheckingAvailability] = useState(false);
   const [localNow, setLocalNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = setInterval(() => setLocalNow(Date.now()), 60000);
@@ -10727,24 +10774,12 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
   const matchingMembers = options.filter(m => `${m.name || ""} ${m.email || ""}`.toLowerCase().includes(userSearch.toLowerCase().trim()));
   const matchingClients = clients.filter(c => c.name !== "Internal Support" && c.name.toLowerCase().includes(clientSearch.toLowerCase().trim()));
   const selectedMembers = options.filter(m => selectedIds.includes(m.id));
-  useEffect(() => { setAvailability(null); }, [selectedIds, duration]);
   function inviteeLocalTime(member) {
     const zone = member.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
     try {
       return new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(localNow);
     } catch (_) { return "Time zone unavailable"; }
   }
-  async function checkAvailability() {
-    setCheckingAvailability(true);
-    try {
-      const result = await api.checkQuickMeetingAvailability(selectedIds, Number(duration));
-      setAvailability(result);
-    } catch (err) {
-      setAvailability({ error: err.message || "Calendar availability could not be checked" });
-    } finally { setCheckingAvailability(false); }
-  }
-
-
   function toggleMember(id) {
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   }
@@ -10857,15 +10892,6 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
                 </div>
                 <div className="cb-hint">Times use each member's saved IANA time zone. External guests are not included.</div>
               </div>}
-              <div className="cb-field">
-                <button type="button" className="cb-btn cb-btn-ghost" disabled={checkingAvailability} onClick={checkAvailability}>
-                  {checkingAvailability ? "Checking calendars..." : "Check meeting availability"}
-                </button>
-                {availability && <div className="cb-hint" style={{marginTop:8}} aria-live="polite">
-                  {availability.error || (availability.members || []).map(m => `${m.name}: ${m.status === "busy" ? "Busy" : m.status === "free" ? "No conflict in checked calendar" : "Availability unknown"}`).join(" · ")}
-                  {!availability.error && <div>Only calendars accessible to the organiser are checked. Other meetings may not be visible.</div>}
-                </div>}
-              </div>
               {error && <div className="cb-error">{error}</div>}
               {error && error.toLowerCase().includes("reconnect") && (
                 <div style={{ marginTop: 10 }}><button className="cb-btn cb-btn-ghost" onClick={onReconnectCalendar}>Reconnect Google Calendar</button></div>
