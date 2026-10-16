@@ -294,8 +294,9 @@ export const api = {
   pauseTask: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }),
   pauseTaskInteractive: (id, endAt) => request(`/tasks/${id}/pause`, { method: "POST", body: JSON.stringify(endAt ? { end_at: endAt } : {}) }, 8000),
   resetTask: (id) => request(`/tasks/${id}/reset`, { method: "POST" }),
-  getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy) =>
-    request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`),
+  getExportOptions: () => request("/export/options"),
+  getExportRows: (clientId, pushed, dateFrom, dateTo, submittedBy, podId) =>
+    request(`/export?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy, podId)}`),
   submitTask: (id, note, endCount, adjustedSeconds, role, taskType, clientId, period, learning = null) =>
     request(`/tasks/${id}/submit`, {
       method: "POST",
@@ -317,24 +318,25 @@ export const api = {
   deleteTask: (id) => request(`/tasks/${id}`, { method: "DELETE" }),
 };
 
-function exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy) {
+function exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy, podId) {
   const params = new URLSearchParams({ client_id: clientId, pushed });
   if (dateFrom) params.set("date_from", dateFrom);
   if (dateTo) params.set("date_to", dateTo);
   if (submittedBy) params.set("submitted_by", submittedBy);
+  if (podId && podId !== "all") params.set("pod_id", podId);
   return params.toString();
 }
 
-export function exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy) {
-  return `${BASE}/export.csv?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy)}`;
+export function exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy, podId) {
+  return `${BASE}/export.csv?${exportQueryParams(clientId, pushed, dateFrom, dateTo, submittedBy, podId)}`;
 }
 
 // Export now requires a login, and a plain browser navigation cannot carry the
 // Authorization header, so the CSV is fetched here and turned into a real download
 // instead of just pointing the browser at the URL.
-export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filename, submittedBy) {
+export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filename, submittedBy, podId) {
   const token = getToken();
-  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy), {
+  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy, podId), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`Request failed (${res.status})`);
@@ -349,9 +351,9 @@ export async function downloadCsvFile(clientId, pushed, dateFrom, dateTo, filena
   URL.revokeObjectURL(url);
 }
 
-export async function fetchCsvText(clientId, pushed, dateFrom, dateTo, submittedBy) {
+export async function fetchCsvText(clientId, pushed, dateFrom, dateTo, submittedBy, podId) {
   const token = getToken();
-  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy), {
+  const res = await fetch(exportCsvUrl(clientId, pushed, dateFrom, dateTo, submittedBy, podId), {
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`Request failed (${res.status})`);

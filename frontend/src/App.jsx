@@ -7946,17 +7946,39 @@ function SubmittedPeriodCorrectionModal({ row, onClose, onSaved }) {
   );
 }
 
-function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
+function ExportView({ members, clients, pods = [], isAdmin, currentUser, forceSelfOnly = false, onTogglePushed, onDeleteTask }) {
   const canViewTrackedTime = currentUser?.role !== "admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.VIEW_TRACKED_TIME);
   const [pushFilter, setPushFilter] = useState("pending");
   const [clientFilter, setClientFilter] = useState("all");
+  const [exportPermittedClients, setExportPermittedClients] = useState([]);
   const [staffFilter, setStaffFilter] = useState("all");
+  const [podFilter, setPodFilter] = useState("all");
+  const isSuperAdminExport = currentUser?.role === "super_admin";
+  const canSelectExportPod = isAdmin && !forceSelfOnly && (isSuperAdminExport || !currentUser?.pod_id);
+  const permittedExportMembers = useMemo(() => members.filter((member) =>
+    isSuperAdminExport || (
+      (member.role !== "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS)) &&
+      (!currentUser?.pod_id || String(member.pod_id || "") === String(currentUser.pod_id))
+    )
+  ), [members, currentUser, isSuperAdminExport]);
+  const podFilteredExportMembers = useMemo(() => podFilter === "all"
+    ? permittedExportMembers
+    : permittedExportMembers.filter((member) => String(member.pod_id || "") === String(podFilter)),
+  [permittedExportMembers, podFilter]);
+  const exportPodOptions = useMemo(() => {
+    const ids = new Set(permittedExportMembers.map((member) => String(member.pod_id || "")).filter(Boolean));
+    return [{ id: "all", name: "All permitted pods" }, ...pods.filter((pod) => ids.has(String(pod.id)))];
+  }, [permittedExportMembers, pods]);
+
   const [datePreset, setDatePreset] = useState("this_week");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [copiedId, setCopiedId] = useState(null);
   const [rows, setRows] = useState([]);
   const effectiveStaffFilter = forceSelfOnly && currentUser?.id ? String(currentUser.id) : staffFilter;
+  const exportVisibleStaffIds = useMemo(() => new Set(podFilteredExportMembers.map((m) => String(m.id))), [podFilteredExportMembers]);
+  useEffect(() => { if (staffFilter !== "all" && !exportVisibleStaffIds.has(String(staffFilter))) setStaffFilter("all"); }, [staffFilter, exportVisibleStaffIds]);
+  useEffect(() => { if (podFilter !== "all" && !exportPodOptions.some((p) => String(p.id) === String(podFilter))) setPodFilter("all"); }, [podFilter, exportPodOptions]);
   const [loadError, setLoadError] = useState("");
   const [expandedGroups, setExpandedGroups] = useState(() => new Set());
   const exportTableRef = useRef(null);
@@ -7968,12 +7990,25 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   // deterministic. The pseudo "all" option stays at the top; real names are A-Z.
   const exportClientOptions = useMemo(() => [
     { id: "all", name: "All clients" },
-    ...[...clients].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
-  ], [clients]);
+    ...[...exportPermittedClients].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
+  ], [exportPermittedClients]);
   const exportStaffOptions = useMemo(() => [
     { id: "all", name: "All staff" },
-    ...[...members].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
-  ], [members]);
+    ...[...podFilteredExportMembers].sort((a, b) => (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" })),
+  ], [podFilteredExportMembers]);
+
+  useEffect(() => {
+    let active = true;
+    api.getExportOptions().then((result) => {
+      if (active) setExportPermittedClients(result.clients || []);
+    }).catch(() => { if (active) setExportPermittedClients([]); });
+    return () => { active = false; };
+  }, [currentUser?.id]);
+  useEffect(() => {
+    if (clientFilter !== "all" && !exportPermittedClients.some((c) => String(c.id) === String(clientFilter))) {
+      setClientFilter("all");
+    }
+  }, [clientFilter, exportPermittedClients]);
 
   const dateRange = useMemo(() => {
     if (datePreset === "custom") return dateRangeForCustom(customFrom, customTo);
@@ -7984,13 +8019,13 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
     try {
       const fromIso = dateRange ? dateRange.fromIso : null;
       const toIso = dateRange ? dateRange.toIso : null;
-      const data = await api.getExportRows(clientFilter, pushFilter, fromIso, toIso, effectiveStaffFilter);
+      const data = await api.getExportRows(clientFilter, pushFilter, fromIso, toIso, effectiveStaffFilter, podFilter);
       setRows(data);
       setLoadError("");
     } catch (err) {
       setLoadError(err.message || "Could not load the export");
     }
-  }, [clientFilter, pushFilter, effectiveStaffFilter, dateRange]);
+  }, [clientFilter, pushFilter, effectiveStaffFilter, dateRange, podFilter]);
 
   useEffect(() => { loadRows(); }, [loadRows]);
 
@@ -8150,12 +8185,12 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
   async function downloadCSV() {
     const fromIso = dateRange ? dateRange.fromIso : null;
     const toIso = dateRange ? dateRange.toIso : null;
-    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`, effectiveStaffFilter);
+    await downloadCsvFile(clientFilter, pushFilter, fromIso, toIso, `karbon-time-export-${new Date().toISOString().slice(0, 10)}.csv`, effectiveStaffFilter, podFilter);
   }
   async function copyCSV() {
     const fromIso = dateRange ? dateRange.fromIso : null;
     const toIso = dateRange ? dateRange.toIso : null;
-    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso, effectiveStaffFilter);
+    const text = await fetchCsvText(clientFilter, pushFilter, fromIso, toIso, effectiveStaffFilter, podFilter);
     copyToClipboard(text);
   }
 
@@ -8232,6 +8267,12 @@ function ExportView({ members, clients, isAdmin, currentUser, forceSelfOnly = fa
             getLabel={(c) => c.name}
           />
         </div>
+        {canSelectExportPod && (
+          <div style={{ width: 190, minWidth: 190 }}>
+            <SearchableSelect options={exportPodOptions} value={podFilter} onChange={setPodFilter}
+              placeholder="Filter by pod" getLabel={(p) => p.name} />
+          </div>
+        )}
         {isAdmin && !forceSelfOnly && (
           <div style={{ width: 220, minWidth: 220 }}>
             <SearchableSelect
@@ -14040,7 +14081,7 @@ export default function App() {
             )}
             {view === "export" && (
               <ExportView
-                members={members} clients={clients} isAdmin={isAdmin}
+                members={members} clients={clients} pods={pods} isAdmin={isAdmin}
                 currentUser={effectiveCurrentUser}
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
                 onTogglePushed={togglePushed} onDeleteTask={deleteTask}
