@@ -1610,7 +1610,7 @@ def revoke_workspace_sessions(current_member: models.Member = Depends(get_curren
     notices, and the next authenticated request must require a fresh login.
     """
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can revoke all workspace sessions")
+        raise HTTPException(403, "You do not have permission to revoke workspace sessions")
     count = db.query(models.Session).delete(synchronize_session=False)
     db.commit()
     _log_event("workspace_sessions_revoked", tenant_id=current_member.tenant_id, count=count)
@@ -2758,7 +2758,7 @@ def create_member(payload: schemas.MemberCreate, current_member: models.Member =
 def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     require_admin(current_member)
     if payload.role not in ("admin", "member", "super_admin"):
-        raise HTTPException(400, "Role must be admin, member, or super_admin")
+        raise HTTPException(400, "Invalid role")
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
@@ -2769,7 +2769,7 @@ def update_member_role(member_id: str, payload: schemas.MemberRoleUpdate, curren
     # ordinary Admin/Staff roles, but only an existing super admin can grant, remove, or
     # otherwise touch super-admin status.
     if current_member.role != "super_admin" and (payload.role == "super_admin" or member.role == "super_admin"):
-        raise HTTPException(403, "Only a super admin can manage super admin access")
+        raise HTTPException(403, "You do not have permission to manage this account")
     if is_admin_or_above(member.role) and not is_admin_or_above(payload.role):
         admin_count = db.query(models.Member).filter(models.Member.role.in_(["admin", "super_admin"])).count()
         if admin_count <= 1:
@@ -2813,7 +2813,7 @@ def update_member_capacity(member_id: str, payload: schemas.MemberCapacityUpdate
 @app.patch("/api/members/{member_id}/insights-permission", response_model=schemas.MemberOut)
 def update_member_insights_permission(member_id: str, payload: schemas.MemberInsightsPermissionUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can manage leave and capacity insights access")
+        raise HTTPException(403, "You do not have permission to manage leave and capacity insights access")
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
@@ -2833,12 +2833,12 @@ def update_member_insights_permission(member_id: str, payload: schemas.MemberIns
 @app.patch("/api/members/{member_id}/additional-permissions", response_model=schemas.MemberOut)
 def update_member_additional_permissions(member_id: str, payload: schemas.MemberAdditionalPermissionsUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can manage additional permissions")
+        raise HTTPException(403, "You do not have permission to manage additional permissions")
     member = db.get(models.Member, member_id)
     if not member:
         raise HTTPException(404, "Member not found")
     if member.role == "super_admin":
-        raise HTTPException(400, "Super Admins already have full access")
+        raise HTTPException(400, "This account already has full access")
     _require_expected_version(member, payload.expected_version)
     requested = {str(item) for item in payload.permissions}
     unknown = requested - ALL_DELEGATABLE_PERMISSIONS
@@ -2971,7 +2971,7 @@ def delete_member(member_id: str, current_member: models.Member = Depends(get_cu
     if not _member_in_admin_scope(current_member, member):
         raise HTTPException(403, "You cannot delete that person")
     if member.role == "super_admin" and current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can delete a super admin")
+        raise HTTPException(403, "You do not have permission to delete this account")
     if is_admin_or_above(member.role):
         admin_count = db.query(models.Member).filter(models.Member.role.in_(["admin", "super_admin"])).count()
         if admin_count <= 1:
@@ -4332,7 +4332,7 @@ def get_insights(
         selected_capacity_pod = None
         if capacity_pod_id:
             if current_member.role != "super_admin":
-                raise HTTPException(403, "Only super admins can view capacity by pod")
+                raise HTTPException(403, "You do not have permission to view capacity by pod")
             selected_capacity_pod = db.get(models.Pod, capacity_pod_id)
             if not selected_capacity_pod:
                 raise HTTPException(404, "Pod not found")
@@ -6427,7 +6427,7 @@ def invariant_diagnostics(current_member: models.Member = Depends(get_current_me
     it exposes operational record identifiers. Repair remains an explicit separate action.
     """
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a Super Admin can run invariant diagnostics")
+        raise HTTPException(403, "You do not have permission to run invariant diagnostics")
 
     findings = []
     running_by_owner = {}
@@ -7494,7 +7494,7 @@ def _karbon_credentials(db: Session):
         access_key = (os.environ.get("KARBON_ACCESS_KEY") or "").strip()
         if token and access_key:
             return token, access_key, "environment"
-    raise HTTPException(503, "Karbon is not connected. A Super Admin can connect it in Settings > Integrations.")
+    raise HTTPException(503, "Karbon is not connected. An authorised Admin can connect it in Settings > Integrations.")
 
 
 def _karbon_headers(db: Session):
@@ -8279,7 +8279,7 @@ def audit_changes(
     db: Session = Depends(get_db),
 ):
     if current_member.role != "super_admin":
-        raise HTTPException(403, "Only a super admin can view the change audit")
+        raise HTTPException(403, "You do not have permission to view the change audit")
     limit = max(1, min(int(limit), 500))
     query = db.query(models.AuditEvent)
     if entity_type:
