@@ -1044,7 +1044,13 @@ PERMISSION_MANAGE_AUDIT_RECORDING = "manage_audit_recording"
 PERMISSION_MANAGE_SUPER_ADMINS = "manage_super_admins"
 PERMISSION_VIEW_TRACKED_TIME = "view_tracked_time"
 PERMISSION_TIME_INTEGRITY_AUDIT = "view_time_integrity_audit"
+PERMISSION_PERSPECTIVES = "manage_daily_perspectives"
+PERMISSION_BIRTHDAY_WISHES = "manage_birthday_wishes"
+PERMISSION_SEASONAL = "manage_seasonal_celebrations"
 DELEGATABLE_ADMIN_PERMISSIONS = {
+    PERMISSION_SEASONAL,
+    PERMISSION_BIRTHDAY_WISHES,
+    PERMISSION_PERSPECTIVES,
     PERMISSION_REPORT_HELP,
     PERMISSION_REPORT_OVERRIDES,
     PERMISSION_REPORT_AUDIT,
@@ -8713,18 +8719,45 @@ def _birthday_wish_for_member(db, member):
     return rows[(offset + local_year) % len(rows)].text
 
 
+
+# Seasonal preferences use the existing tenant-scoped settings table; no migration needed.
+SEASONAL_FIELDS = ("halloween", "christmas", "yearend", "newyear", "snow")
+
+def _seasonal_settings(db, tenant_id):
+    rows = db.query(models.TenantSetting).filter(models.TenantSetting.tenant_id == tenant_id, models.TenantSetting.key.in_(["seasonal_" + k for k in SEASONAL_FIELDS])).all()
+    values = {r.key.removeprefix("seasonal_"): r.value == "true" for r in rows}
+    return {k: values.get(k, True) for k in SEASONAL_FIELDS}
+
+@app.get("/api/seasonal/settings")
+def get_seasonal_settings(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    return _seasonal_settings(db, current_member.tenant_id)
+
+@app.put("/api/seasonal/settings")
+def update_seasonal_settings(payload: dict, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    _require_delegated_admin_permission(current_member, PERMISSION_SEASONAL)
+    if set(payload) != set(SEASONAL_FIELDS) or any(type(value) is not bool for value in payload.values()):
+        raise HTTPException(422, "Expected boolean values for all seasonal preferences")
+    rows = db.query(models.TenantSetting).filter(models.TenantSetting.tenant_id == current_member.tenant_id, models.TenantSetting.key.in_(["seasonal_" + k for k in SEASONAL_FIELDS])).all()
+    existing = {r.key: r for r in rows}
+    for k, value in payload.items():
+        key = "seasonal_" + k
+        if key in existing:
+            existing[key].value = str(value).lower()
+        else:
+            db.add(models.TenantSetting(tenant_id=current_member.tenant_id, key=key, value=str(value).lower()))
+    db.commit()
+    return _seasonal_settings(db, current_member.tenant_id)
+
 @app.get("/api/birthday-wishes/manage")
 def manage_birthday_wishes(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin only")
+    _require_delegated_admin_permission(current_member, PERMISSION_BIRTHDAY_WISHES)
     _ensure_tenant_birthday_wishes(db, current_member.tenant_id)
     return [{"id": r.id, "text": r.text, "enabled": r.enabled} for r in db.query(models.BirthdayWish).filter(models.BirthdayWish.tenant_id == current_member.tenant_id).order_by(models.BirthdayWish.id).all()]
 
 
 @app.post("/api/birthday-wishes/manage", status_code=201)
 def create_birthday_wish(payload: schemas.BirthdayWishSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin only")
+    _require_delegated_admin_permission(current_member, PERMISSION_BIRTHDAY_WISHES)
     _ensure_tenant_birthday_wishes(db, current_member.tenant_id)
     row = models.BirthdayWish(tenant_id=current_member.tenant_id, text=payload.text.strip(), enabled=payload.enabled)
     db.add(row)
@@ -8734,8 +8767,7 @@ def create_birthday_wish(payload: schemas.BirthdayWishSave, current_member: mode
 
 @app.patch("/api/birthday-wishes/manage/{wish_id}")
 def edit_birthday_wish(wish_id: str, payload: schemas.BirthdayWishSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin only")
+    _require_delegated_admin_permission(current_member, PERMISSION_BIRTHDAY_WISHES)
     row = db.query(models.BirthdayWish).filter(models.BirthdayWish.id == wish_id, models.BirthdayWish.tenant_id == current_member.tenant_id).first()
     if row is None:
         raise HTTPException(404, "Birthday wish not found")
@@ -8752,15 +8784,13 @@ def get_perspectives(current_member: models.Member = Depends(get_current_member)
 
 @app.get("/api/perspectives/manage")
 def manage_perspectives(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin only")
+    _require_delegated_admin_permission(current_member, PERMISSION_PERSPECTIVES)
     _ensure_tenant_perspectives(db, current_member.tenant_id)
     return [{"id": row.id, "text": row.text, "enabled": row.enabled} for row in db.query(models.DailyPerspective).filter(models.DailyPerspective.tenant_id == current_member.tenant_id).order_by(models.DailyPerspective.id).all()]
 
 @app.post("/api/perspectives/manage", status_code=201)
 def create_perspective(payload: schemas.PerspectiveSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin only")
+    _require_delegated_admin_permission(current_member, PERMISSION_PERSPECTIVES)
     row = models.DailyPerspective(tenant_id=current_member.tenant_id, text=payload.text.strip(), enabled=payload.enabled)
     db.add(row)
     db.commit()
@@ -8768,8 +8798,7 @@ def create_perspective(payload: schemas.PerspectiveSave, current_member: models.
 
 @app.patch("/api/perspectives/manage/{perspective_id}")
 def edit_perspective(perspective_id: str, payload: schemas.PerspectiveSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    if current_member.role != "super_admin":
-        raise HTTPException(403, "Super Admin only")
+    _require_delegated_admin_permission(current_member, PERMISSION_PERSPECTIVES)
     row = db.query(models.DailyPerspective).filter(models.DailyPerspective.id == perspective_id, models.DailyPerspective.tenant_id == current_member.tenant_id).first()
     if not row:
         raise HTTPException(404, "Perspective not found")
