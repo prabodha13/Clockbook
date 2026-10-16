@@ -2103,18 +2103,35 @@ def delete_calendar_event(event_id: str, current_member: models.Member = Depends
         raise HTTPException(502, "Could not delete the Google Calendar event")
 
 
-@app.post("/api/calendar/quick-meeting/availability")
+@app.post("/api/calendar/availability")
+@app.post("/api/calendar/quick-meeting/availability", include_in_schema=False)
 def quick_meeting_availability(payload: dict, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     """Best-effort immediate Google free/busy check. Unknown is never reported as free."""
     member_ids = payload.get("attendee_member_ids", []) if isinstance(payload, dict) else []
     if not isinstance(member_ids, list) or len(member_ids) > 100:
         raise HTTPException(400, "Invalid attendees")
-    try:
-        duration = int(payload.get("duration_minutes", 30))
-    except (ValueError, TypeError, AttributeError):
-        raise HTTPException(400, "Invalid meeting duration")
-    if not 5 <= duration <= 240:
-        raise HTTPException(400, "Invalid meeting duration")
+    if "start" in payload or "end" in payload:
+        try:
+            start = datetime.fromisoformat(str(payload["start"]).replace("Z", "+00:00"))
+            end = datetime.fromisoformat(str(payload["end"]).replace("Z", "+00:00"))
+            if start.tzinfo is None or end.tzinfo is None:
+                raise ValueError("Missing timezone")
+            start = start.astimezone(timezone.utc).replace(tzinfo=None)
+            end = end.astimezone(timezone.utc).replace(tzinfo=None)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise HTTPException(400, "Invalid scheduled meeting time")
+        if end <= start or end - start > timedelta(hours=24):
+            raise HTTPException(400, "Meeting end must follow start and be within 24 hours")
+    else:
+        # Compatibility with clients that were deployed before Schedule Meeting checks.
+        try:
+            duration = int(payload.get("duration_minutes", 30))
+        except (ValueError, TypeError, AttributeError):
+            raise HTTPException(400, "Invalid meeting duration")
+        if not 5 <= duration <= 240:
+            raise HTTPException(400, "Invalid meeting duration")
+        start = datetime.utcnow().replace(microsecond=0)
+        end = start + timedelta(minutes=duration)
     people = []
     for member_id in dict.fromkeys(member_ids):
         member = db.query(models.Member).filter(
@@ -2125,7 +2142,6 @@ def quick_meeting_availability(payload: dict, current_member: models.Member = De
         if current_member.role == "admin" and current_member.pod_id and member.pod_id != current_member.pod_id:
             raise HTTPException(403, "One or more invitees are not available")
         people.append(member)
-    now = datetime.utcnow().replace(microsecond=0)
     result = {m.id: {"id": m.id, "name": m.name, "status": "unknown"} for m in people}
     access_token = get_google_access_token(current_member, db)
     if access_token and people:
@@ -2135,7 +2151,7 @@ def quick_meeting_availability(payload: dict, current_member: models.Member = De
                 response = httpx.post(
                     "https://www.googleapis.com/calendar/v3/freeBusy",
                     headers={"Authorization": f"Bearer {access_token}"},
-                    json={"timeMin": now.isoformat() + "Z", "timeMax": (now + timedelta(minutes=duration)).isoformat() + "Z",
+                    json={"timeMin": start.isoformat() + "Z", "timeMax": end.isoformat() + "Z",
                           "items": [{"id": email} for email in emails]},
                     timeout=8,
                 )
