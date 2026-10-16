@@ -4772,11 +4772,18 @@ def delete_pod(pod_id: str, current_member: models.Member = Depends(get_current_
 def update_member_pod(member_id: str, payload: schemas.MemberPodUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_PODS, "You do not have permission to change pod assignments")
     member = db.get(models.Member, member_id)
-    if not member:
+    if not member or member.tenant_id != current_member.tenant_id:
         raise HTTPException(404, "Member not found")
+    if not _member_in_admin_scope(current_member, member):
+        raise HTTPException(403, "You cannot manage that person")
+    # An admin assigned to a pod cannot move themselves or its members out of
+    # that pod: doing so could bypass their existing pod-scoped access rules.
+    if current_member.role == "admin" and current_member.pod_id and payload.pod_id != current_member.pod_id:
+        raise HTTPException(403, "You cannot change assignments outside your pod")
     _require_expected_version(member, payload.expected_version)
     if payload.pod_id:
-        if not db.get(models.Pod, payload.pod_id):
+        pod = db.get(models.Pod, payload.pod_id)
+        if not pod or pod.tenant_id != current_member.tenant_id:
             raise HTTPException(404, "Pod not found")
     member.pod_id = payload.pod_id
     db.commit()
