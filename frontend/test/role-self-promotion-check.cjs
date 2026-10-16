@@ -1,0 +1,11 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'App.jsx'), 'utf8');
+const fn = source.match(/function roleActions\(m, currentUser\) \{([\s\S]*?)\n\}/);
+assert.ok(fn, 'roleActions exists');
+assert.match(fn[1], /const canTouchSuperTier = currentUser\.role === "super_admin";/);
+assert.doesNotMatch(fn[1], /isSelf\s*\|\|\s*currentUser\.role\s*===\s*"super_admin"/);
+const backend = fs.readFileSync(path.join(__dirname, '..', '..', 'backend', 'main.py'), 'utf8');
+assert.match(backend, /if current_member\.role != "super_admin" and \(payload\.role == "super_admin" or member\.role == "super_admin"\):\s*raise HTTPException\(403,/);
+console.log('Role actions and backend Super Admin promotion guard verified.');
