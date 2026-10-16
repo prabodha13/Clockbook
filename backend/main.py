@@ -2711,7 +2711,7 @@ def revoke_tenant_invitation(invitation_id: str, current_member: models.Member =
 
 @app.get("/api/members", response_model=list[schemas.MemberOut])
 def list_members(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    return db.query(models.Member).all()
+    return db.query(models.Member).filter(models.Member.tenant_id == current_member.tenant_id).all()
 
 
 @app.post("/api/members", response_model=schemas.MemberOut, status_code=201)
