@@ -1819,7 +1819,7 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null }) {
+function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null, workspaceLogo = "" }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
@@ -1994,7 +1994,7 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       </div>
 
       <PerspectiveCard user={currentUser} clock={localClock}/>
-      {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday}/>}
+      {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday} workspaceLogo={workspaceLogo}/>}
       {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
           <table className="cb-table">
@@ -13922,10 +13922,11 @@ export default function App() {
                 onAdHocMeeting={() => setShowAdHocMeeting(true)} onManualHelp={() => setShowManualHelp(true)} onLearningDevelopment={() => setShowLearningDevelopmentTask(true)}
                 clients={clients} templates={templates} roles={roles} taskTypes={taskTypes} bankAccounts={bankAccounts}
                 onCreateTasks={createTasks}
+                workspaceLogo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""}
                 timerActionPending={timerActionPending}
               />
             )}
-            {birthdayPreview && <BirthdayCelebration firstName={(currentUser.name || "there").trim().split(/\s+/)[0]} onClose={() => setBirthdayPreview(false)} />}
+            {birthdayPreview && <BirthdayCelebration firstName={(currentUser.name || "there").trim().split(/\s+/)[0]} onClose={() => setBirthdayPreview(false)} workspaceLogo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""} />}
             {view === "templates" && (
               <Templates
                 templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}

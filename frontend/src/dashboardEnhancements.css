@@ -5,3 +5,15 @@
 @media(max-width:780px){.cb-perspective.is-expanded .cb-perspective-message{max-width:100%}.cb-perspective-details{opacity:.17!important;width:50%}.cb-perspective-message{flex-wrap:wrap}.cb-perspective.is-compact .cb-perspective-message{gap:4px}.cb-birthday-modal{flex-direction:column;max-height:95vh;overflow-y:auto}.cb-birthday-copy{width:100%;padding:38px 27px 20px}.cb-birthday-art{width:100%;height:230px;margin:0}.cb-birthday-copy h2{font-size:36px}.cb-birthday-copy p{font-size:16px}.cb-perspective-editor{flex-wrap:wrap}.cb-perspective-editor textarea{min-width:100%}}@media(prefers-reduced-motion:reduce){.cb-perspective,.cb-perspective-details,.cb-birthday-modal,.cb-birthday-particles i{animation:none!important;transition:none!important}.cb-birthday-particles{display:none}}
 
 .cb-birthday-settings-backdrop{position:fixed;inset:0;z-index:99995;display:flex;align-items:center;justify-content:center;padding:20px;background:#11251c85}.cb-birthday-settings-backdrop .cb-birthday-settings{width:min(490px,100%);background:#fff;box-shadow:0 18px 60px #11251c50;padding:26px}.cb-birthday-settings-backdrop .cb-birthday-settings strong{display:block;font-size:19px;margin-bottom:10px}
+
+/* Follow-up: scoped birthday controls and compact settings manager. */
+.cb-birthday-settings-backdrop .cb-birthday-save{display:inline-flex!important;align-items:center;justify-content:center;min-width:132px;min-height:38px;padding:9px 18px;background:#0e4c33;color:white;border:1px solid #0e4c33;border-radius:7px;font-size:14px;font-weight:600;cursor:pointer;visibility:visible!important;opacity:1}
+.cb-birthday-settings-backdrop .cb-birthday-save:disabled{opacity:.55;cursor:wait}
+.cb-birthday-settings-backdrop .cb-birthday-actions{display:flex;gap:12px;align-items:center;margin-top:14px}
+.cb-perspective-manager-toggle{display:flex;align-items:center;justify-content:space-between;cursor:pointer;font-weight:650;color:#184b35;list-style:none}
+.cb-perspective-manager-toggle::-webkit-details-marker{display:none}
+.cb-perspective-manager[open] .cb-perspective-manager-toggle svg{transform:rotate(180deg)}
+.cb-birthday-workspace-logo{display:block;object-fit:contain;object-position:left center;max-width:145px;max-height:42px;width:auto;height:auto;margin:-19px 0 17px}
+/* The image artwork already includes a close glyph: cover it with one accessible functional control. */
+.cb-birthday-close{top:8px;right:0;width:49px;height:53px;border-radius:0 19px 0 12px;background:#f5f7f0;box-shadow:-8px 4px 12px #f5f7f080}
+@media(max-width:780px){.cb-birthday-workspace-logo{margin:0 0 12px;max-height:35px}.cb-birthday-close{top:6px;right:0}}
