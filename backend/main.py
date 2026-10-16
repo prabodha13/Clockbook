@@ -3477,18 +3477,18 @@ def _insights_allowed_member_ids(current_member: models.Member, db: Session):
     if current_member.role == "member":
         return {current_member.id}
     if current_member.role == "super_admin":
-        return {m.id for m in db.query(models.Member.id).all()}
+        return {m.id for m in db.query(models.Member.id).filter(models.Member.tenant_id == current_member.tenant_id).all()}
     # Match the existing admin visibility model used by Dashboard / Export. By default,
     # regular admins do not see Super Admin data. A Super Admin can explicitly delegate
     # Manage Super Admins, which adds Super Admin accounts to the admin's normal read scope
     # without allowing role/security changes to those accounts. Pod scope still applies to
     # ordinary members; Super Admins are included explicitly because they are commonly podless.
-    query = db.query(models.Member.id).filter(models.Member.role != "super_admin")
+    query = db.query(models.Member.id).filter(models.Member.tenant_id == current_member.tenant_id, models.Member.role != "super_admin")
     if current_member.pod_id:
         query = query.filter(models.Member.pod_id == current_member.pod_id)
     allowed = {m.id for m in query.all()}
     if _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS):
-        allowed.update(m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all())
+        allowed.update(m.id for m in db.query(models.Member.id).filter(models.Member.tenant_id == current_member.tenant_id, models.Member.role == "super_admin").all())
     return allowed
 
 
