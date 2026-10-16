@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 440 165" role="img" aria-label="Quiet green hills, trees, a winding path and morning sunlight">
+<defs><linearGradient id="h" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#f4f9f4"/><stop offset="1" stop-color="#dcefe6"/></linearGradient></defs>
+<circle cx="285" cy="67" r="41" fill="#f7e5b5" opacity=".86"/>
+<path d="M0 143 Q60 73 149 110 Q214 50 298 120 Q367 55 440 112 L440 165H0Z" fill="#d7eae0"/>
+<path d="M0 161Q99 111 174 139Q250 84 320 130Q384 111 440 136V165H0" fill="#accfbd"/>
+<path d="M176 165 Q244 143 239 122 Q223 111 252 96 Q268 90 278 83 Q254 104 268 115 Q285 134 228 165Z" fill="#fafcf3"/>
+<g fill="#7ab398"><path d="M70 133V72" stroke="#739e8a" stroke-width="6"/><ellipse cx="69" cy="77" rx="19" ry="32"/><ellipse cx="55" cy="91" rx="17" ry="22"/><ellipse cx="81" cy="94" rx="17" ry="24"/><path d="M374 133V58" stroke="#739e8a" stroke-width="6"/><ellipse cx="373" cy="61" rx="22" ry="39"/><ellipse cx="355" cy="88" rx="14" ry="26"/><ellipse cx="388" cy="83" rx="15" ry="23"/></g>
+<g fill="#98cbb1"><ellipse cx="130" cy="125" rx="10" ry="19"/><ellipse cx="142" cy="128" rx="9" ry="16"/><ellipse cx="332" cy="137" rx="8" ry="16"/></g>
+</svg>
