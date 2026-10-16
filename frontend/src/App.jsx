@@ -1888,9 +1888,9 @@ function Dashboard({ tasks, now, currentUser, members, pods = [], isAdmin, force
         : members.filter((member) => (canSeeSuperAdmins || member.role !== "super_admin") && (member.role === "super_admin" || !currentUser.pod_id || member.pod_id === currentUser.pod_id)))
     : [];
 
-  // Admins without a pod assignment (including Super Admins) can narrow Team View
-  // to one of the pods already represented in their permitted team members.
-  const canFilterTeamPods = canUseTeamView && !currentUser.pod_id && !forceSelfOnly;
+  // Super Admins can filter Team View regardless of their assigned pod.
+  // Other Admins can filter only when they have no assigned pod.
+  const canFilterTeamPods = canUseTeamView && !forceSelfOnly && (isSuperAdmin || !currentUser.pod_id);
   const teamPodOptions = (pods || []).filter((pod) => teamMembers.some((member) => String(member.pod_id || "") === String(pod.id)));
   const filteredTeamMembers = canFilterTeamPods && teamPodFilter
     ? teamMembers.filter((member) => String(member.pod_id || "") === teamPodFilter)
