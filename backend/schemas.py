@@ -51,6 +51,12 @@ class BirthdayPreferences(BaseModel):
 
 class BirthdayOut(BirthdayPreferences):
     acknowledged_year: Optional[int] = None
+    wish: Optional[str] = None
+
+
+class BirthdayWishSave(BaseModel):
+    text: str = Field(min_length=10, max_length=350)
+    enabled: bool = True
 
 
 class PerspectiveSave(BaseModel):

@@ -128,6 +128,14 @@ class DailyPerspective(TenantScopedMixin, VersionedMixin, Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
+class BirthdayWish(TenantScopedMixin, VersionedMixin, Base):
+    __tablename__ = "birthday_wishes"
+    id = Column(String, primary_key=True, default=lambda: gen_id("birthday_wish"))
+    text = Column(String(350), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
 class TenantInvitation(TenantScopedMixin, VersionedMixin, Base):
     __tablename__ = "tenant_invitations"
     __table_args__ = (

@@ -8637,9 +8637,11 @@ def get_birthday(member_id: str, current_member: models.Member = Depends(get_cur
         raise HTTPException(404, "Member not found")
     if member.id != current_member.id and (current_member.role not in ("admin", "super_admin") or not _member_in_admin_scope(current_member, member)):
         raise HTTPException(403, "Birthday information is private")
+    wish = _birthday_wish_for_member(db, member)
     return {"month": member.birthday_month, "day": member.birthday_day,
             "enabled": member.show_birthday_celebration is not False,
-            "acknowledged_year": member.birthday_acknowledged_year if member.id == current_member.id else None}
+            "acknowledged_year": member.birthday_acknowledged_year if member.id == current_member.id else None,
+            "wish": wish if member.id == current_member.id else None}
 
 @app.put("/api/birthday/{member_id}", response_model=schemas.BirthdayOut)
 def update_birthday(member_id: str, payload: schemas.BirthdayPreferences, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
@@ -8681,6 +8683,67 @@ def acknowledge_birthday(current_member: models.Member = Depends(get_current_mem
     current_member.birthday_acknowledged_year = today.year
     db.commit()
     return get_birthday(current_member.id, current_member, db)
+
+def _ensure_tenant_birthday_wishes(db, tenant_id):
+    from birthday_wish_content import BIRTHDAY_WISHES
+    if db.query(models.BirthdayWish.id).filter(models.BirthdayWish.tenant_id == tenant_id).first() is not None:
+        return
+    for text_value in BIRTHDAY_WISHES:
+        db.add(models.BirthdayWish(tenant_id=tenant_id, text=text_value, enabled=True))
+    db.commit()
+
+
+def _birthday_wish_for_member(db, member):
+    import hashlib
+    from datetime import datetime as _datetime
+    _ensure_tenant_birthday_wishes(db, member.tenant_id)
+    rows = db.query(models.BirthdayWish).filter(
+        models.BirthdayWish.tenant_id == member.tenant_id,
+        models.BirthdayWish.enabled == True,
+    ).order_by(models.BirthdayWish.id).all()
+    if not rows:
+        return "Wishing you a wonderful year filled with happiness, growth, and meaningful moments."
+    try:
+        from zoneinfo import ZoneInfo
+        local_year = _datetime.now(ZoneInfo(member.timezone_name or "UTC")).year
+    except Exception:
+        local_year = _datetime.utcnow().year
+    # Consecutive years use different wishes when at least two are enabled.
+    offset = int.from_bytes(hashlib.sha256(str(member.id).encode()).digest()[:4], "big") % len(rows)
+    return rows[(offset + local_year) % len(rows)].text
+
+
+@app.get("/api/birthday-wishes/manage")
+def manage_birthday_wishes(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin only")
+    _ensure_tenant_birthday_wishes(db, current_member.tenant_id)
+    return [{"id": r.id, "text": r.text, "enabled": r.enabled} for r in db.query(models.BirthdayWish).filter(models.BirthdayWish.tenant_id == current_member.tenant_id).order_by(models.BirthdayWish.id).all()]
+
+
+@app.post("/api/birthday-wishes/manage", status_code=201)
+def create_birthday_wish(payload: schemas.BirthdayWishSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin only")
+    _ensure_tenant_birthday_wishes(db, current_member.tenant_id)
+    row = models.BirthdayWish(tenant_id=current_member.tenant_id, text=payload.text.strip(), enabled=payload.enabled)
+    db.add(row)
+    db.commit()
+    return {"id": row.id, "text": row.text, "enabled": row.enabled}
+
+
+@app.patch("/api/birthday-wishes/manage/{wish_id}")
+def edit_birthday_wish(wish_id: str, payload: schemas.BirthdayWishSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin only")
+    row = db.query(models.BirthdayWish).filter(models.BirthdayWish.id == wish_id, models.BirthdayWish.tenant_id == current_member.tenant_id).first()
+    if row is None:
+        raise HTTPException(404, "Birthday wish not found")
+    row.text = payload.text.strip()
+    row.enabled = payload.enabled
+    db.commit()
+    return {"id": row.id, "text": row.text, "enabled": row.enabled}
+
 
 @app.get("/api/perspectives")
 def get_perspectives(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
