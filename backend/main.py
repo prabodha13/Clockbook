@@ -1035,6 +1035,8 @@ PERMISSION_REPORT_HELP = "report_help"
 PERMISSION_REPORT_OVERRIDES = "report_manual_overrides"
 PERMISSION_REPORT_AUDIT = "report_audit"
 PERMISSION_MANAGE_PODS = "manage_pods"
+PERMISSION_ASSIGN_PODS_ACROSS_PODS = "assign_pods_across_pods"
+PERMISSION_CHANGE_OWN_POD = "change_own_pod"
 PERMISSION_ADD_STAFF_MANUALLY = "add_staff_manually"
 PERMISSION_MANAGE_LEARNING_CATEGORIES = "manage_learning_categories"
 PERMISSION_MANAGE_DELEGATION_EXCLUSIONS = "manage_delegation_exclusions"
@@ -1055,6 +1057,8 @@ DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_REPORT_OVERRIDES,
     PERMISSION_REPORT_AUDIT,
     PERMISSION_MANAGE_PODS,
+    PERMISSION_ASSIGN_PODS_ACROSS_PODS,
+    PERMISSION_CHANGE_OWN_POD,
     PERMISSION_ADD_STAFF_MANUALLY,
     PERMISSION_MANAGE_LEARNING_CATEGORIES,
     PERMISSION_MANAGE_DELEGATION_EXCLUSIONS,
@@ -4836,16 +4840,26 @@ def delete_pod(pod_id: str, current_member: models.Member = Depends(get_current_
 
 @app.patch("/api/members/{member_id}/pod", response_model=schemas.MemberOut)
 def update_member_pod(member_id: str, payload: schemas.MemberPodUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_PODS, "You do not have permission to change pod assignments")
+    if current_member.role not in ("admin", "super_admin"):
+        raise HTTPException(403, "You do not have permission to change pod assignments")
     member = db.get(models.Member, member_id)
     if not member or member.tenant_id != current_member.tenant_id:
         raise HTTPException(404, "Member not found")
-    if not _member_in_admin_scope(current_member, member):
-        raise HTTPException(403, "You cannot manage that person")
-    # An admin assigned to a pod cannot move themselves or its members out of
-    # that pod: doing so could bypass their existing pod-scoped access rules.
-    if current_member.role == "admin" and current_member.pod_id and payload.pod_id != current_member.pod_id:
-        raise HTTPException(403, "You cannot change assignments outside your pod")
+    is_self = member.id == current_member.id
+    cross_pod = _has_permission(current_member, PERMISSION_ASSIGN_PODS_ACROSS_PODS)
+    own_pod = _has_permission(current_member, PERMISSION_CHANGE_OWN_POD)
+    manage_pods = _has_permission(current_member, PERMISSION_MANAGE_PODS)
+    if is_self:
+        # The broad staff-assignment delegation must never grant self-reassignment.
+        if not own_pod:
+            raise HTTPException(403, "You do not have permission to change your own pod")
+    else:
+        if not (cross_pod or manage_pods):
+            raise HTTPException(403, "You do not have permission to change pod assignments")
+        if not (cross_pod and member.role != "super_admin") and not _member_in_admin_scope(current_member, member):
+            raise HTTPException(403, "You cannot manage that person")
+        if current_member.role == "admin" and current_member.pod_id and not cross_pod and payload.pod_id != current_member.pod_id:
+            raise HTTPException(403, "You cannot change assignments outside your pod")
     _require_expected_version(member, payload.expected_version)
     if payload.pod_id:
         pod = db.get(models.Pod, payload.pod_id)
