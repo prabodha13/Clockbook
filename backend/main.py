@@ -8517,7 +8517,10 @@ def _hide_tracked_time_for_member(rows, member):
 
 
 def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submitted_by=None, exclude_owner_ids=None, include_owner_ids=None, submitted_pod_id=None):
-    query = db.query(models.TaskInstance).filter(models.TaskInstance.status == "submitted")
+    query = db.query(models.TaskInstance).filter(
+        models.TaskInstance.tenant_id == _current_tenant_id(db),
+        models.TaskInstance.status == "submitted",
+    )
     if client_id and client_id != "all":
         query = query.filter(models.TaskInstance.client_id == client_id)
     if submitted_by and submitted_by != "all":
@@ -8536,7 +8539,7 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
     to_dt = parse_utc_naive(date_to)
     tasks = query.order_by(models.TaskInstance.submitted_at.desc()).all()
 
-    members = {m.id: m.name for m in db.query(models.Member).all()}
+    members = {m.id: m.name for m in db.query(models.Member).filter(models.Member.tenant_id == _current_tenant_id(db)).all()}
     rows = []
     for t in tasks:
         work_started_at = _insights_task_work_date(t)
@@ -8600,24 +8603,53 @@ def build_export_rows(db, client_id, pushed, date_from=None, date_to=None, submi
     return rows
 
 
-@app.get("/api/export")
-def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    exclude_owner_ids = None
-    include_owner_ids = None
-    submitted_pod_id = None
+def _export_scope(db: Session, current_member: models.Member, submitted_by: str, pod_id: str = "all"):
+    """Restrict both export representations to this workspace and authorised submitters."""
+    tenant_id = current_member.tenant_id
+    allowed = db.query(models.Member.id).filter(models.Member.tenant_id == tenant_id)
     if current_member.role == "member":
-        submitted_by = current_member.id
+        allowed = allowed.filter(models.Member.id == current_member.id)
     elif current_member.role == "admin":
-        can_see_super_admins = _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS)
-        super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
-        if not can_see_super_admins:
-            exclude_owner_ids = super_admin_ids
         if current_member.pod_id:
-            include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
-            if can_see_super_admins:
-                include_owner_ids = list(dict.fromkeys(include_owner_ids + super_admin_ids))
-            submitted_pod_id = current_member.pod_id
-    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
+            allowed = allowed.filter(models.Member.pod_id == current_member.pod_id)
+        if not _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS):
+            allowed = allowed.filter(models.Member.role != "super_admin")
+    if pod_id and pod_id != "all":
+        if current_member.role == "member" or (current_member.role == "admin" and current_member.pod_id and str(current_member.pod_id) != str(pod_id)):
+            raise HTTPException(403, "Pod is outside your export access scope")
+        allowed = allowed.filter(models.Member.pod_id == pod_id)
+    ids = [row.id for row in allowed.all()]
+    if submitted_by and submitted_by != "all" and submitted_by not in ids:
+        raise HTTPException(403, "Staff member is outside your export access scope")
+    return ids
+
+
+@app.get("/api/export/options")
+def get_export_options(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Only show client choices backed by exportable work in the authorised scope."""
+    allowed_ids = _export_scope(db, current_member, "all")
+    client_ids = [row.client_id for row in db.query(models.TaskInstance.client_id).filter(
+        models.TaskInstance.tenant_id == current_member.tenant_id,
+        models.TaskInstance.status == "submitted",
+        models.TaskInstance.submitted_by_id.in_(allowed_ids),
+    ).distinct().all()]
+    return {"clients": [
+        {"id": client.id, "name": client.name}
+        for client in db.query(models.Client).filter(
+            models.Client.tenant_id == current_member.tenant_id,
+            models.Client.id.in_(client_ids),
+        ).order_by(models.Client.name).all()
+    ]}
+
+
+@app.get("/api/export")
+def get_export(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", pod_id: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    allowed_ids = _export_scope(db, current_member, submitted_by, pod_id)
+    rows = build_export_rows(
+        db, client_id, pushed, date_from, date_to, submitted_by,
+        include_owner_ids=allowed_ids,
+        submitted_pod_id=current_member.pod_id if current_member.role == "admin" else None,
+    )
     return _hide_tracked_time_for_member(rows, current_member)
 
 
@@ -8631,23 +8663,13 @@ def _csv_safe_text(value):
 
 
 @app.get("/api/export.csv")
-def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    exclude_owner_ids = None
-    include_owner_ids = None
-    submitted_pod_id = None
-    if current_member.role == "member":
-        submitted_by = current_member.id
-    elif current_member.role == "admin":
-        can_see_super_admins = _has_permission(current_member, PERMISSION_MANAGE_SUPER_ADMINS)
-        super_admin_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.role == "super_admin").all()]
-        if not can_see_super_admins:
-            exclude_owner_ids = super_admin_ids
-        if current_member.pod_id:
-            include_owner_ids = [m.id for m in db.query(models.Member.id).filter(models.Member.pod_id == current_member.pod_id).all()]
-            if can_see_super_admins:
-                include_owner_ids = list(dict.fromkeys(include_owner_ids + super_admin_ids))
-            submitted_pod_id = current_member.pod_id
-    rows = build_export_rows(db, client_id, pushed, date_from, date_to, submitted_by, exclude_owner_ids, include_owner_ids, submitted_pod_id)
+def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: str = None, date_to: str = None, submitted_by: str = "all", pod_id: str = "all", current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    allowed_ids = _export_scope(db, current_member, submitted_by, pod_id)
+    rows = build_export_rows(
+        db, client_id, pushed, date_from, date_to, submitted_by,
+        include_owner_ids=allowed_ids,
+        submitted_pod_id=current_member.pod_id if current_member.role == "admin" else None,
+    )
     can_view_tracked_time = current_member.role != "admin" or _has_permission(current_member, PERMISSION_VIEW_TRACKED_TIME)
     rows = _hide_tracked_time_for_member(rows, current_member)
     buffer = StringIO()
