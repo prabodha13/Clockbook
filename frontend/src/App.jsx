@@ -8801,7 +8801,17 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
   const [birthdayMemberId, setBirthdayMemberId] = useState(null);
   const [invitations, setInvitations] = useState([]);
   const [invitationMessage, setInvitationMessage] = useState("");
-  const settingUpMember = members.find((m) => m.id === settingUpId);
+  // Staff directory visibility follows the existing tenant-scoped member list and
+  // the current Admin pod scope. Never broaden Super Admin or unassigned Admin access.
+  const staffDirectoryMembers = useMemo(() => {
+    if (currentUser?.role !== "admin" || !currentUser?.pod_id) return members;
+    return members.filter((m) => m.pod_id === currentUser.pod_id && m.role !== "super_admin");
+  }, [members, currentUser?.role, currentUser?.pod_id]);
+  const settingUpMember = staffDirectoryMembers.find((m) => m.id === settingUpId);
+  useEffect(() => {
+    if (settingUpId && !staffDirectoryMembers.some((m) => m.id === settingUpId)) setSettingUpId(null);
+    if (birthdayMemberId && !staffDirectoryMembers.some((m) => m.id === birthdayMemberId)) setBirthdayMemberId(null);
+  }, [staffDirectoryMembers, settingUpId, birthdayMemberId]);
 
   const loadInvitations = useCallback(async () => {
     if (!isAdmin) { setInvitations([]); return; }
@@ -8908,7 +8918,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
         </div>
       )}
       <div className="cb-card-list">
-        {members.map((m) => (
+        {staffDirectoryMembers.map((m) => (
           <div className="cb-row" key={m.id}>
             <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <Avatar member={m} size={28} />
@@ -9030,7 +9040,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
           </div>
         ))}
       </div>
-      {birthdayMemberId && <BirthdayPreferences key={birthdayMemberId} member={members.find(m => m.id === birthdayMemberId) || currentUser} onClose={() => setBirthdayMemberId(null)} />}
+      {birthdayMemberId && <BirthdayPreferences key={birthdayMemberId} member={staffDirectoryMembers.find(m => m.id === birthdayMemberId)} onClose={() => setBirthdayMemberId(null)} />}
       {settingUpMember && (
         <SetCredentialsModal
           memberName={settingUpMember.name}
