@@ -8843,7 +8843,7 @@ function StaffRowMenu({ items }) {
   );
 }
 
-function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onChangeWorkArrangement, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
+function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onAddMember, onManualAddMember, invitationRefreshKey = 0, onChangeRole, onChangeCapacity, onChangeTimezone, onChangeWorkArrangement, onSetCredentials, onDeleteMember, onConnectCalendar, onDisconnectCalendar, pods, onAssignPod, onConnectSlack, onDisconnectSlack, onTestSlack, onChangeNotificationChannel }) {
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
@@ -8853,9 +8853,17 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
   // Staff directory visibility follows the existing tenant-scoped member list and
   // the current Admin pod scope. Never broaden Super Admin or unassigned Admin access.
   const staffDirectoryMembers = useMemo(() => {
-    if (currentUser?.role !== "admin" || !currentUser?.pod_id) return members;
-    return members.filter((m) => m.pod_id === currentUser.pod_id && m.role !== "super_admin");
-  }, [members, currentUser?.role, currentUser?.pod_id]);
+    const scoped = currentUser?.role === "admin" && currentUser?.pod_id
+      ? members.filter((m) => m.pod_id === currentUser.pod_id && m.role !== "super_admin")
+      : members;
+    // In Super Admin's simulated Admin view only, show a self entry for
+    // notification/birthday preferences without exposing other Super Admins.
+    if (!isDemoAdminMode || !currentUser) return scoped;
+    // The real Super Admin is excluded from the simulated Admin's ordinary
+    // staff scope; add back only the current user's safe preference entry.
+    const safeScoped = scoped.filter((m) => m.role !== "super_admin");
+    return [{ ...currentUser, __demo_self_entry: true }, ...safeScoped.filter((m) => m.id !== currentUser.id)];
+  }, [members, currentUser, isDemoAdminMode]);
   const settingUpMember = staffDirectoryMembers.find((m) => m.id === settingUpId);
   useEffect(() => {
     if (settingUpId && !staffDirectoryMembers.some((m) => m.id === settingUpId)) setSettingUpId(null);
@@ -8984,7 +8992,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {isAdmin && (
+              {isAdmin && !m.__demo_self_entry && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     Capacity
@@ -9018,7 +9026,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                   </label>
                 </div>
               )}
-              {isAdmin && (
+              {isAdmin && !m.__demo_self_entry && (
                 <select
                   className="cb-select"
                   style={{ width: 118, minWidth: 118, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
@@ -9031,7 +9039,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                   <option value="remote">Remote</option>
                 </select>
               )}
-              {isAdmin && (
+              {isAdmin && !m.__demo_self_entry && (
                 <div style={{ width: 180, minWidth: 180 }}>
                   <SearchableSelect
                     options={timezoneOptions}
@@ -9045,7 +9053,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                   />
                 </div>
               )}
-              {(currentUser.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS)) && pods.length > 0 && (
+              {!m.__demo_self_entry && (currentUser.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS)) && pods.length > 0 && (
                 <select
                   className="cb-select"
                   style={{ width: 150, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
@@ -9056,7 +9064,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                   {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               )}
-              {currentUser.role === "admin" && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) && (
+              {currentUser.role === "admin" && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) && !m.__demo_self_entry && (
                 <div
                   className="cb-select"
                   title="Pod assignments require authorised Admin access"
@@ -9075,7 +9083,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                     { label: "Notifications", onClick: () => setShowSlackSettings(true) },
                     { label: "My birthday", onClick: () => setBirthdayMemberId(m.id) },
                   ] : []),
-                  ...(isAdmin ? [
+                  ...(isAdmin && !m.__demo_self_entry ? [
                     { label: "Birthday preferences", onClick: () => setBirthdayMemberId(m.id) },
                     { label: m.email ? "Reset password" : "Set up login", onClick: () => setSettingUpId(m.id) },
                     ...roleActions(m, currentUser).map((action) => ({
@@ -14296,6 +14304,7 @@ export default function App() {
             {view === "staff" && (
               <StaffView
                 members={members} currentUser={effectiveCurrentUser} isAdmin={isAdmin}
+                isDemoAdminMode={realIsSuperAdmin && effectiveRole === "admin"}
                 onAddMember={() => setShowAddMember(true)} onManualAddMember={() => setShowManualAddMember(true)} invitationRefreshKey={invitationRefreshKey} onChangeRole={changeMemberRole}
                 onChangeCapacity={changeMemberCapacity}
                 onChangeTimezone={changeMemberTimezone}
