@@ -10674,12 +10674,45 @@ function InitialTimezoneModal({ currentUser, onConfirm }) {
   );
 }
 
+// Remove genuinely tracked intervals from an unsubmitted recovery proposal. This does
+// not alter tracked segments or weaken backend overlap/away validation.
+function eligibleRecoverySlices(rawWindows, tasks, memberId, clockOffsetMs) {
+  if (!Array.isArray(rawWindows) || !rawWindows.length) return null;
+  const occupied = (tasks || []).filter(t => t.owner_id === memberId).flatMap(t =>
+    (t.segments || []).filter(seg => seg?.start).map(seg => [
+      Date.parse(seg.start) - clockOffsetMs,
+      seg.end ? Date.parse(seg.end) - clockOffsetMs : Date.now(),
+    ])
+  ).filter(([a,b]) => Number.isFinite(a) && Number.isFinite(b) && b > a);
+  const result = [];
+  for (const w of rawWindows) {
+    let slices = [{ start: Number(w.start), end: Number(w.end) }];
+    for (const [a,b] of occupied) {
+      slices = slices.flatMap(({start,end}) => {
+        if (b <= start || a >= end) return [{start,end}];
+        return [{start, end: Math.min(a,end)}, {start: Math.max(b,start), end}].filter(x => x.end > x.start);
+      });
+    }
+    result.push(...slices);
+  }
+  return result.filter(w => w.end > w.start).sort((a,b) => a.start - b.start);
+}
+
 function QuickMeetingModal({ members, currentUser, clients, calendarConnected, onClose, onCreate, onReconnectCalendar }) {
   const [summary, setSummary] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);
   const [externalGuests, setExternalGuests] = useState("");
   const [clientId, setClientId] = useState("");
   const [duration, setDuration] = useState("30");
+  const [clientSearch, setClientSearch] = useState("");
+  const [userSearch, setUserSearch] = useState("");
+  const [availability, setAvailability] = useState(null);
+  const [checkingAvailability, setCheckingAvailability] = useState(false);
+  const [localNow, setLocalNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setLocalNow(Date.now()), 60000);
+    return () => clearInterval(timer);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [result, setResult] = useState(null);
@@ -10690,7 +10723,27 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
       ? crypto.randomUUID()
       : `qm-${Date.now()}-${Math.random().toString(36).slice(2)}`
   );
-  const options = members.filter((m) => m.id !== currentUser.id);
+  const options = members.filter((m) => m.id !== currentUser.id && (currentUser.role !== "admin" || !currentUser.pod_id || m.pod_id === currentUser.pod_id));
+  const matchingMembers = options.filter(m => `${m.name || ""} ${m.email || ""}`.toLowerCase().includes(userSearch.toLowerCase().trim()));
+  const matchingClients = clients.filter(c => c.name !== "Internal Support" && c.name.toLowerCase().includes(clientSearch.toLowerCase().trim()));
+  const selectedMembers = options.filter(m => selectedIds.includes(m.id));
+  useEffect(() => { setAvailability(null); }, [selectedIds, duration]);
+  function inviteeLocalTime(member) {
+    const zone = member.timezone_name || Intl.DateTimeFormat().resolvedOptions().timeZone;
+    try {
+      return new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: "short", hour: "numeric", minute: "2-digit", timeZoneName: "short" }).format(localNow);
+    } catch (_) { return "Time zone unavailable"; }
+  }
+  async function checkAvailability() {
+    setCheckingAvailability(true);
+    try {
+      const result = await api.checkQuickMeetingAvailability(selectedIds, Number(duration));
+      setAvailability(result);
+    } catch (err) {
+      setAvailability({ error: err.message || "Calendar availability could not be checked" });
+    } finally { setCheckingAvailability(false); }
+  }
+
 
   function toggleMember(id) {
     setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -10760,16 +10813,19 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
               </div>
               <div className="cb-field">
                 <label className="cb-label">Client (optional)</label>
+                <input className="cb-input" type="search" value={clientSearch} onChange={e => setClientSearch(e.target.value)} placeholder="Search clients..." aria-label="Search clients" style={{marginBottom:6}} />
                 <select className="cb-select" value={clientId} onChange={(e) => setClientId(e.target.value)}>
                   <option value="">Internal / no client</option>
-                  {clients.filter((c) => c.name !== "Internal Support").map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {matchingClients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  {clientId && !matchingClients.some(c => c.id === clientId) && clients.find(c => c.id === clientId) && <option value={clientId}>{clients.find(c => c.id === clientId).name}</option>}
                 </select>
               </div>
               <div className="cb-field">
                 <label className="cb-label">Invite Clockbook users</label>
+                <input className="cb-input" type="search" value={userSearch} onChange={e => setUserSearch(e.target.value)} placeholder="Search users by name or email..." aria-label="Search invitees" style={{marginBottom:6}} />
                 <div style={{ border: "1px solid var(--line)", borderRadius: 8, padding: 8, maxHeight: 180, overflowY: "auto" }}>
-                  {options.length === 0 && <div className="cb-hint">No other Clockbook users yet.</div>}
-                  {options.map((m) => (
+                  {matchingMembers.length === 0 && <div className="cb-hint">No matching users.</div>}
+                  {matchingMembers.map((m) => (
                     <label key={m.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", cursor: m.email ? "pointer" : "not-allowed", opacity: m.email ? 1 : 0.55 }}>
                       <input type="checkbox" checked={selectedIds.includes(m.id)} disabled={!m.email} onChange={() => toggleMember(m.id)} />
                       <span>{m.name}</span>
@@ -10791,6 +10847,24 @@ function QuickMeetingModal({ members, currentUser, clients, calendarConnected, o
                   <option value="45">45 minutes</option>
                   <option value="60">60 minutes</option>
                 </select>
+              </div>
+              {selectedMembers.length > 0 && <div className="cb-field">
+                <label className="cb-label">Local times for invitees (meeting starts now)</label>
+                <div style={{border:"1px solid var(--line)", borderRadius:8, padding:9}}>
+                  {selectedMembers.map(m => <div key={m.id} style={{display:"flex", justifyContent:"space-between", gap:10, marginBottom:5, flexWrap:"wrap"}}>
+                    <span>{m.name}</span><span className="cb-hint">{inviteeLocalTime(m)} · {m.timezone_name || "Browser time zone fallback"}</span>
+                  </div>)}
+                </div>
+                <div className="cb-hint">Times use each member's saved IANA time zone. External guests are not included.</div>
+              </div>}
+              <div className="cb-field">
+                <button type="button" className="cb-btn cb-btn-ghost" disabled={checkingAvailability} onClick={checkAvailability}>
+                  {checkingAvailability ? "Checking calendars..." : "Check meeting availability"}
+                </button>
+                {availability && <div className="cb-hint" style={{marginTop:8}} aria-live="polite">
+                  {availability.error || (availability.members || []).map(m => `${m.name}: ${m.status === "busy" ? "Busy" : m.status === "free" ? "No conflict in checked calendar" : "Availability unknown"}`).join(" · ")}
+                  {!availability.error && <div>Only calendars accessible to the organiser are checked. Other meetings may not be visible.</div>}
+                </div>}
               </div>
               {error && <div className="cb-error">{error}</div>}
               {error && error.toLowerCase().includes("reconnect") && (
@@ -13870,7 +13944,7 @@ export default function App() {
     }
   }
 
-  async function recoverForgottenTimeBatch(allocations, recoveredSeconds) {
+  async function recoverForgottenTimeBatch(allocations, recoveredSeconds, eligibleWindows = null) {
     const token = getToken();
     const response = await fetch("/api/tasks/recover-time/batch", {
       method: "POST",
@@ -13879,8 +13953,8 @@ export default function App() {
         total_seconds: recoveredSeconds,
         allocations,
         window_end_at: new Date((forgotToTrackWindowEndMsRef.current || Date.now()) + clockOffsetRef.current).toISOString(),
-        recovery_windows: Array.isArray(forgotToTrackWindowsRef.current)
-          ? forgotToTrackWindowsRef.current.map((w) => ({
+        recovery_windows: Array.isArray(eligibleWindows || forgotToTrackWindowsRef.current)
+          ? (eligibleWindows || forgotToTrackWindowsRef.current).map((w) => ({
               start: new Date(w.start + clockOffsetRef.current).toISOString(),
               end: new Date(w.end + clockOffsetRef.current).toISOString(),
             }))
@@ -14069,6 +14143,7 @@ export default function App() {
     return <div className="cb-root" spellCheck={false}><InitialTimezoneModal currentUser={currentUser} onConfirm={confirmInitialTimezone} /></div>;
   }
 
+  const recoveryEligibleWindows = eligibleRecoverySlices(forgotToTrackWindowsRef.current, tasks, effectiveCurrentUser.id, clockOffsetRef.current);
   return (
     <div className="cb-root" spellCheck={false}>
       <div className="cb-shell">
@@ -14277,7 +14352,7 @@ export default function App() {
       )}
       {showForgottenRecovery && forgotToTrackGapMsRef.current != null && !sleepAlert && (
         <ForgottenTimeRecoveryModal
-          gapMs={forgotToTrackGapMsRef.current}
+          gapMs={recoveryEligibleWindows ? recoveryEligibleWindows.reduce((acc,w) => acc + (w.end-w.start), 0) : forgotToTrackGapMsRef.current}
           tasks={tasks}
           currentUser={effectiveCurrentUser}
           clients={clients} templates={templates} members={members} bankAccounts={bankAccounts}
@@ -14291,7 +14366,7 @@ export default function App() {
             return created;
           }}
           onRecoverSplit={async (allocations, recoveredSeconds) => {
-            const updatedTasks = await recoverForgottenTimeBatch(allocations, recoveredSeconds);
+            const updatedTasks = await recoverForgottenTimeBatch(allocations, recoveredSeconds, recoveryEligibleWindows);
             for (const updated of updatedTasks) mergeTask(updated);
             const recoveredGap = forgotToTrackGapMsRef.current;
             forgotToTrackGapMsRef.current = null;
