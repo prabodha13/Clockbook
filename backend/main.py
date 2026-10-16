@@ -7616,6 +7616,54 @@ def disconnect_karbon_integration(expected_version: int | None = None, current_m
 
 
 
+@app.get("/api/team/leave-today")
+def team_leave_today(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Pod-scoped, privacy-minimal approved leave indicator for Team View.
+
+    Never expose leave reasons or request details. A failed or missing integration
+    means unknown, not 'not on leave'.
+    """
+    if current_member.role not in ("admin", "super_admin"):
+        raise HTTPException(403, "Team leave status requires Admin access")
+    query = db.query(models.Member).filter(models.Member.tenant_id == current_member.tenant_id)
+    if current_member.role == "admin":
+        query = query.filter(models.Member.role != "super_admin")
+        if current_member.pod_id:
+            query = query.filter(models.Member.pod_id == current_member.pod_id)
+    visible = query.all()
+    result = {m.id: "unknown" for m in visible}
+    try:
+        credentials = _calamari_credentials(db)
+    except HTTPException:
+        credentials = None
+    if not credentials:
+        return {"statuses": result, "connected": False}
+    zone_name = (current_member.timezone_name or "UTC").strip()
+    try:
+        today = datetime.now(ZoneInfo(zone_name)).date().isoformat()
+    except (ZoneInfoNotFoundError, ValueError):
+        today = datetime.now(timezone.utc).date().isoformat()
+    emails = {(m.email or "").strip().lower(): m.id for m in visible if (m.email or "").strip()}
+    for m in visible:
+        if (m.email or "").strip():
+            result[m.id] = "not_on_leave"
+    try:
+        rows = _calamari_post(credentials[0], credentials[1], "leave/request/v1/find-advanced", {"from": today, "to": today}) or []
+    except HTTPException:
+        return {"statuses": {key: "unknown" for key in result}, "connected": False}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("status") or "").upper() not in ("ACCEPTED", "APPROVED"):
+            continue
+        if str(row.get("absenceCategory") or "").upper() != "TIMEOFF":
+            continue
+        member_id = emails.get(str(row.get("employeeEmail") or "").strip().lower())
+        if member_id and str(row.get("from") or "")[:10] <= today <= str(row.get("to") or "")[:10]:
+            result[member_id] = "on_leave"
+    return {"statuses": result, "connected": True}
+
+
 @app.get("/api/integrations/calamari")
 def get_calamari_integration(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
     _require_delegated_admin_permission(current_member, PERMISSION_MANAGE_INTEGRATIONS, "You do not have permission to manage integrations")
