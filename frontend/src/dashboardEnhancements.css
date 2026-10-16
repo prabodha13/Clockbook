@@ -17,3 +17,18 @@
 /* The image artwork already includes a close glyph: cover it with one accessible functional control. */
 .cb-birthday-close{top:8px;right:0;width:49px;height:53px;border-radius:0 19px 0 12px;background:#f5f7f0;box-shadow:-8px 4px 12px #f5f7f080}
 @media(max-width:780px){.cb-birthday-workspace-logo{margin:0 0 12px;max-height:35px}.cb-birthday-close{top:6px;right:0}}
+/* Birthday preferences are portaled outside cb-root; apply the app form styling locally. */
+.cb-birthday-settings-backdrop,.cb-birthday-settings-backdrop *{box-sizing:border-box}
+.cb-birthday-settings-backdrop .cb-birthday-settings{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#18332a;padding:28px;border-radius:14px;max-height:calc(100vh - 40px);overflow-y:auto}
+.cb-birthday-settings-backdrop .cb-birthday-settings>strong{font-family:inherit;font-size:19px;line-height:1.4;font-weight:700;letter-spacing:-.02em;margin-bottom:8px}
+.cb-birthday-settings-backdrop .cb-hint{font-family:inherit;font-size:13px;line-height:1.55;color:#62756b;margin:0 0 22px}
+.cb-birthday-settings-backdrop .cb-birthday-date{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin:0 0 22px}
+.cb-birthday-settings-backdrop .cb-birthday-date label{min-width:0;display:flex;flex-direction:column;gap:8px;font-family:inherit;font-size:13px;font-weight:600;color:#30483b}
+.cb-birthday-settings-backdrop .cb-birthday-date select{display:block;width:100%;min-width:0;max-width:none;min-height:42px;padding:9px 32px 9px 12px;font:400 14px/1.4 Inter,ui-sans-serif,system-ui,sans-serif;color:#233a30;background-color:#fff;border:1px solid #cbd9d2;border-radius:8px;outline:none;cursor:pointer}
+.cb-birthday-settings-backdrop .cb-birthday-date select:focus{border-color:#14734c;box-shadow:0 0 0 3px #16794e20}
+.cb-birthday-settings-backdrop .cb-birthday-checkbox{font-family:inherit;font-size:14px;line-height:1.4;color:#30483b;gap:10px;margin-bottom:23px;cursor:pointer}
+.cb-birthday-settings-backdrop .cb-birthday-checkbox input{width:16px;height:16px;accent-color:#0e6946}
+.cb-birthday-settings-backdrop .cb-birthday-actions{border-top:1px solid #e7eee9;padding-top:20px;margin-top:0;gap:12px}
+.cb-birthday-settings-backdrop .cb-birthday-actions button{font-family:inherit;font-size:14px;min-height:40px}
+.cb-birthday-settings-backdrop .cb-birthday-actions .cb-btn{padding:9px 18px;border:1px solid #d1ded6;border-radius:7px;background:#fff;color:#2e4739;cursor:pointer}
+@media(max-width:420px){.cb-birthday-settings-backdrop .cb-birthday-settings{padding:20px}.cb-birthday-settings-backdrop .cb-birthday-date{gap:10px}}
