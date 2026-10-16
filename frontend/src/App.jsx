@@ -12904,6 +12904,12 @@ export default function App() {
   const NO_TRACK_THRESHOLD_MS = 10 * 60 * 1000;
   const NO_TRACK_PENDING_KEY = "clockbook_pending_no_track_alert";
   const NO_TRACK_COUNTDOWN_KEY_BASE = "clockbook_no_track_countdown_since";
+  const NO_TRACK_SNOOZE_KEY_BASE = "clockbook_no_track_snooze_until";
+
+  function noTrackSnoozeStorageKey() {
+    if (!activeWorkspaceId || !currentUser?.id) return null;
+    return `${NO_TRACK_SNOOZE_KEY_BASE}:${activeWorkspaceId}:${currentUser.id}`;
+  }
 
   function noTrackCountdownStorageKey() {
     if (!activeWorkspaceId || !currentUser?.id) return null;
@@ -12935,6 +12941,18 @@ export default function App() {
   const noTrackSinceRef = useRef(idleNoTrackAlert?.since ? Number(idleNoTrackAlert.since) : Date.now());
   const noTrackCountdownScopeRef = useRef("");
   const noTrackSnoozeUntilRef = useRef(0);
+  const noTrackSnoozeScopeRef = useRef("");
+
+  function setNoTrackSnoozeUntil(untilMs) {
+    const until = Number(untilMs);
+    noTrackSnoozeUntilRef.current = Number.isFinite(until) && until > Date.now() ? until : 0;
+    const key = noTrackSnoozeStorageKey();
+    if (!key) return;
+    try {
+      if (noTrackSnoozeUntilRef.current) sessionStorage.setItem(key, String(noTrackSnoozeUntilRef.current));
+      else sessionStorage.removeItem(key);
+    } catch (_) { /* Continue with the in-memory deadline if storage is unavailable. */ }
+  }
   const noTrackHandledRef = useRef(!!idleNoTrackAlert);
   const idleNoTrackAlertRef = useRef(idleNoTrackAlert);
   const forgotToTrackGapMsRef = useRef(Number(pendingRecoveryOnLoad?.gapMs) > 0 ? Number(pendingRecoveryOnLoad.gapMs) : null);
@@ -12999,6 +13017,21 @@ export default function App() {
     const storageKey = noTrackCountdownStorageKey();
     if (!storageKey) return;
     const scope = `${activeWorkspaceId}:${currentUser.id}`;
+
+    if (noTrackSnoozeScopeRef.current !== scope) {
+      noTrackSnoozeScopeRef.current = scope;
+      // Never carry a previous user/workspace's snooze into the new scope.
+      noTrackSnoozeUntilRef.current = 0;
+      try {
+        const snoozeKey = noTrackSnoozeStorageKey();
+        const savedUntil = Number(sessionStorage.getItem(snoozeKey));
+        if (Number.isFinite(savedUntil) && savedUntil > Date.now()) {
+          noTrackSnoozeUntilRef.current = savedUntil;
+        } else if (snoozeKey) {
+          sessionStorage.removeItem(snoozeKey);
+        }
+      } catch (_) { /* Storage is optional; do not interrupt recovery. */ }
+    }
 
     if (noTrackCountdownScopeRef.current !== scope) {
       noTrackCountdownScopeRef.current = scope;
@@ -13137,6 +13170,7 @@ export default function App() {
       // recovery window across the away period or create a second reminder behind it.
       if (idleNoTrackAlertRef.current) return;
       if (nowTick < noTrackSnoozeUntilRef.current) return;
+      if (noTrackSnoozeUntilRef.current) setNoTrackSnoozeUntil(0);
       if (noTrackHandledRef.current) return;
       if (nowTick - noTrackSinceRef.current < NO_TRACK_THRESHOLD_MS) return;
       noTrackHandledRef.current = true;
@@ -14333,7 +14367,7 @@ export default function App() {
           members={members}
           currentUser={currentUser}
           onSnooze={(snoozeMs) => {
-            noTrackSnoozeUntilRef.current = Date.now() + snoozeMs;
+            setNoTrackSnoozeUntil(Date.now() + snoozeMs);
             setNoTrackCountdownStart(Date.now());
             noTrackHandledRef.current = false;
             idleNoTrackAlertRef.current = null;
