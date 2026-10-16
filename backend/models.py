@@ -105,6 +105,10 @@ class Member(TenantScopedMixin, VersionedMixin, Base):
     work_arrangement = Column(String, nullable=False, default="office")
     can_view_leave_capacity_insights = Column(Boolean, default=False)
     staff_tour_completed = Column(Boolean, default=False)
+    birthday_month = Column(Integer, nullable=True)
+    birthday_day = Column(Integer, nullable=True)
+    show_birthday_celebration = Column(Boolean, nullable=False, default=True)
+    birthday_acknowledged_year = Column(Integer, nullable=True)
     additional_permissions = Column(JSON, default=list)
 
     @property
@@ -114,6 +118,14 @@ class Member(TenantScopedMixin, VersionedMixin, Base):
     @property
     def slack_connected(self):
         return bool(self.slack_user_id)
+
+
+class DailyPerspective(TenantScopedMixin, VersionedMixin, Base):
+    __tablename__ = "daily_perspectives"
+    id = Column(String, primary_key=True, default=lambda: gen_id("perspective"))
+    text = Column(String(500), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
 
 
 class TenantInvitation(TenantScopedMixin, VersionedMixin, Base):

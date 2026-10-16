@@ -43,6 +43,22 @@ class MemberOut(BaseModel):
     staff_tour_completed: bool = False
 
 
+class BirthdayPreferences(BaseModel):
+    month: Optional[int] = Field(default=None, ge=1, le=12)
+    day: Optional[int] = Field(default=None, ge=1, le=31)
+    enabled: bool = True
+
+
+class BirthdayOut(BirthdayPreferences):
+    acknowledged_year: Optional[int] = None
+
+
+class PerspectiveSave(BaseModel):
+    text: str = Field(min_length=10, max_length=500)
+    enabled: bool = True
+
+
+
 class PodOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: str

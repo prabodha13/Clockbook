@@ -544,6 +544,16 @@ def run_startup_migrations():
             if "staff_tour_completed" not in existing_columns:
                 conn.execute(text("ALTER TABLE members ADD COLUMN staff_tour_completed BOOLEAN DEFAULT FALSE"))
                 conn.execute(text("UPDATE members SET staff_tour_completed = FALSE WHERE staff_tour_completed IS NULL"))
+            # Optional birthday fields, kept outside the shared MemberOut API.
+            for column, definition in (
+                ("birthday_month", "INTEGER"),
+                ("birthday_day", "INTEGER"),
+                ("show_birthday_celebration", "BOOLEAN DEFAULT TRUE"),
+                ("birthday_acknowledged_year", "INTEGER"),
+            ):
+                if column not in existing_columns:
+                    conn.execute(text(f"ALTER TABLE members ADD COLUMN {column} {definition}"))
+            conn.execute(text("UPDATE members SET show_birthday_celebration = TRUE WHERE show_birthday_celebration IS NULL"))
 
     if "google_oauth_states" in inspector.get_table_names():
         existing_google_state_columns = {c["name"] for c in inspector.get_columns("google_oauth_states")}
@@ -1720,7 +1730,7 @@ def google_oauth_callback(code: str = None, state: str = None, error: str = None
         return RedirectResponse(url="/?calendar=error")
 
     db.info["tenant_id"] = tenant_id
-    member = db.query(models.Member).filter(models.Member.id == member_id).first()
+    member = db.query(models.Member).filter(models.Member.id == member_id, models.Member.tenant_id == current_member.tenant_id).first()
     if member:
         try:
             member.google_refresh_token = "enc:v1:" + _encrypt_secret(refresh_token)
@@ -8616,6 +8626,106 @@ def get_export_csv(client_id: str = "all", pushed: str = "pending", date_from: s
     )
 
 
+
+# Optional birthday metadata is deliberately NOT exposed through the shared MemberOut
+# endpoint. Employees see only their own information; administrators can view a
+# colleague's information only through this individually authorised endpoint.
+@app.get("/api/birthday/{member_id}", response_model=schemas.BirthdayOut)
+def get_birthday(member_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    member = db.query(models.Member).filter(models.Member.id == member_id, models.Member.tenant_id == current_member.tenant_id).first()
+    if member is None:
+        raise HTTPException(404, "Member not found")
+    if member.id != current_member.id and (current_member.role not in ("admin", "super_admin") or not _member_in_admin_scope(current_member, member)):
+        raise HTTPException(403, "Birthday information is private")
+    return {"month": member.birthday_month, "day": member.birthday_day,
+            "enabled": member.show_birthday_celebration is not False,
+            "acknowledged_year": member.birthday_acknowledged_year if member.id == current_member.id else None}
+
+@app.put("/api/birthday/{member_id}", response_model=schemas.BirthdayOut)
+def update_birthday(member_id: str, payload: schemas.BirthdayPreferences, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    member = db.query(models.Member).filter(models.Member.id == member_id, models.Member.tenant_id == current_member.tenant_id).first()
+    if member is None:
+        raise HTTPException(404, "Member not found")
+    if member.id != current_member.id and (current_member.role not in ("admin", "super_admin") or not _member_in_admin_scope(current_member, member)):
+        raise HTTPException(403, "Cannot edit that birthday")
+    if (payload.month is None) != (payload.day is None):
+        raise HTTPException(400, "Enter both month and day or leave both blank")
+    if payload.month is not None:
+        try:
+            date(2000, payload.month, payload.day)
+        except ValueError:
+            raise HTTPException(400, "Enter a valid birthday")
+    if (member.birthday_month, member.birthday_day) != (payload.month, payload.day):
+        member.birthday_acknowledged_year = None
+    member.birthday_month = payload.month
+    member.birthday_day = payload.day
+    member.show_birthday_celebration = payload.enabled
+    db.commit()
+    return get_birthday(member_id, current_member, db)
+
+@app.post("/api/birthday/acknowledge", response_model=schemas.BirthdayOut)
+def acknowledge_birthday(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # The client's local date chooses which year to acknowledge; this endpoint
+    # only permits a currently eligible birthday in the member's stored zone.
+    zone = ZoneInfo(current_member.timezone_name) if current_member.timezone_name else timezone.utc
+    today = datetime.now(zone).date()
+    month, day = current_member.birthday_month, current_member.birthday_day
+    if month is None or day is None or current_member.show_birthday_celebration is False:
+        raise HTTPException(400, "No birthday celebration is available")
+    match = (today.month, today.day) == (month, day)
+    # February 29 is celebrated February 28 in non-leap years.
+    if month == 2 and day == 29:
+        match = today.month == 2 and today.day == (29 if (today.year % 4 == 0 and (today.year % 100 != 0 or today.year % 400 == 0)) else 28)
+    if not match:
+        raise HTTPException(400, "No birthday celebration is due today")
+    current_member.birthday_acknowledged_year = today.year
+    db.commit()
+    return get_birthday(current_member.id, current_member, db)
+
+@app.get("/api/perspectives")
+def get_perspectives(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    _ensure_tenant_perspectives(db, current_member.tenant_id)
+    return [{"id": row.id, "text": row.text, "enabled": row.enabled} for row in db.query(models.DailyPerspective).filter(models.DailyPerspective.tenant_id == current_member.tenant_id, models.DailyPerspective.enabled == True).order_by(models.DailyPerspective.id).all()]
+
+@app.get("/api/perspectives/manage")
+def manage_perspectives(current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin only")
+    _ensure_tenant_perspectives(db, current_member.tenant_id)
+    return [{"id": row.id, "text": row.text, "enabled": row.enabled} for row in db.query(models.DailyPerspective).filter(models.DailyPerspective.tenant_id == current_member.tenant_id).order_by(models.DailyPerspective.id).all()]
+
+@app.post("/api/perspectives/manage", status_code=201)
+def create_perspective(payload: schemas.PerspectiveSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin only")
+    row = models.DailyPerspective(tenant_id=current_member.tenant_id, text=payload.text.strip(), enabled=payload.enabled)
+    db.add(row)
+    db.commit()
+    return {"id": row.id, "text": row.text, "enabled": row.enabled}
+
+@app.patch("/api/perspectives/manage/{perspective_id}")
+def edit_perspective(perspective_id: str, payload: schemas.PerspectiveSave, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin only")
+    row = db.query(models.DailyPerspective).filter(models.DailyPerspective.id == perspective_id, models.DailyPerspective.tenant_id == current_member.tenant_id).first()
+    if not row:
+        raise HTTPException(404, "Perspective not found")
+    row.text = payload.text.strip()
+    row.enabled = payload.enabled
+    db.commit()
+    return {"id": row.id, "text": row.text, "enabled": row.enabled}
+
+# Seed on first read for each tenant, including tenants created after deployment.
+# Normal daily requests only read; the database remains the source of truth.
+def _ensure_tenant_perspectives(db, tenant_id):
+    from perspective_content import PERSPECTIVES
+    if db.query(models.DailyPerspective.id).filter(models.DailyPerspective.tenant_id == tenant_id).first() is not None:
+        return
+    for item in PERSPECTIVES:
+        db.add(models.DailyPerspective(tenant_id=tenant_id, text=item, enabled=True))
+    db.commit()
+
+
 # ---------------------------------------------------------------
 # Serve the built frontend (production only, see frontend/vite.config.js)
 # ---------------------------------------------------------------
@@ -8629,3 +8739,4 @@ if os.path.isdir("dist"):
         if full_path and os.path.isfile(candidate):
             return FileResponse(candidate)
         return FileResponse("dist/index.html")
+

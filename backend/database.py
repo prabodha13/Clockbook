@@ -73,7 +73,8 @@ def get_db():
 
 _AUDIT_EXCLUDED_FIELDS = {
     "password_hash", "google_refresh_token", "token_hash", "token", "access_key", "api_key",
-    "segments", "logo_data_url", "value", "note", "context"
+    "segments", "logo_data_url", "value", "note", "context",
+    "birthday_month", "birthday_day", "show_birthday_celebration", "birthday_acknowledged_year"
 }
 _AUDIT_EXCLUDED_TYPES = {
     "AuditEvent", "Session", "RateLimitBucket", "GoogleOAuthState", "LoginEvent", "ClockStartEvent",
