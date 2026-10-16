@@ -1936,8 +1936,10 @@ def _calendar_attendee_emails(payload, current_member, db):
     seen_emails = set()
     for member_id in getattr(payload, "attendee_member_ids", []) or []:
         member = db.get(models.Member, member_id)
-        if not member:
+        if not member or member.tenant_id != current_member.tenant_id:
             raise HTTPException(404, "One of the selected Clockbook users was not found")
+        if current_member.role == "admin" and current_member.pod_id and member.pod_id != current_member.pod_id:
+            raise HTTPException(403, "One of the selected Clockbook users is outside your permitted scope")
         if member.id == current_member.id:
             continue
         email = (member.email or "").strip().lower()
@@ -2099,6 +2101,54 @@ def delete_calendar_event(event_id: str, current_member: models.Member = Depends
         raise
     except Exception:
         raise HTTPException(502, "Could not delete the Google Calendar event")
+
+
+@app.post("/api/calendar/quick-meeting/availability")
+def quick_meeting_availability(payload: dict, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    """Best-effort immediate Google free/busy check. Unknown is never reported as free."""
+    member_ids = payload.get("attendee_member_ids", []) if isinstance(payload, dict) else []
+    if not isinstance(member_ids, list) or len(member_ids) > 100:
+        raise HTTPException(400, "Invalid attendees")
+    try:
+        duration = int(payload.get("duration_minutes", 30))
+    except (ValueError, TypeError, AttributeError):
+        raise HTTPException(400, "Invalid meeting duration")
+    if not 5 <= duration <= 240:
+        raise HTTPException(400, "Invalid meeting duration")
+    people = []
+    for member_id in dict.fromkeys(member_ids):
+        member = db.query(models.Member).filter(
+            models.Member.id == member_id, models.Member.tenant_id == current_member.tenant_id
+        ).first()
+        if not member:
+            raise HTTPException(403, "One or more invitees are not available")
+        if current_member.role == "admin" and current_member.pod_id and member.pod_id != current_member.pod_id:
+            raise HTTPException(403, "One or more invitees are not available")
+        people.append(member)
+    now = datetime.utcnow().replace(microsecond=0)
+    result = {m.id: {"id": m.id, "name": m.name, "status": "unknown"} for m in people}
+    access_token = get_google_access_token(current_member, db)
+    if access_token and people:
+        emails = {m.email.strip().lower(): m for m in people if m.email and "@" in m.email}
+        if emails:
+            try:
+                response = httpx.post(
+                    "https://www.googleapis.com/calendar/v3/freeBusy",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                    json={"timeMin": now.isoformat() + "Z", "timeMax": (now + timedelta(minutes=duration)).isoformat() + "Z",
+                          "items": [{"id": email} for email in emails]},
+                    timeout=8,
+                )
+                if response.is_success:
+                    calendars = response.json().get("calendars", {})
+                    for email, member in emails.items():
+                        info = calendars.get(email, {})
+                        if not info or info.get("errors"):
+                            continue
+                        result[member.id]["status"] = "busy" if info.get("busy") else "free"
+            except Exception:
+                pass
+    return {"members": list(result.values()), "limited_to_accessible_calendars": True}
 
 
 @app.post("/api/calendar/quick-meeting", status_code=201)
