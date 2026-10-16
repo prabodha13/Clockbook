@@ -8325,6 +8325,24 @@ function ExportView({ members, clients, pods = [], isAdmin, currentUser, forceSe
         .cb-export-table-wrap .cb-table td:nth-child(2) {
           padding-left: 8px;
         }
+        .cb-export-table-wrap .cb-table th:nth-child(9),
+        .cb-export-table-wrap .cb-table th:nth-child(10),
+        .cb-export-table-wrap .cb-table th:nth-child(8) {
+          overflow-wrap: normal;
+          word-break: normal;
+          white-space: normal;
+          line-height: 1.2;
+        }
+        .cb-export-table-wrap .cb-table td:nth-child(6) {
+          overflow-wrap: normal;
+          word-break: normal;
+          white-space: normal;
+        }
+        .cb-export-table-wrap .cb-table td:nth-last-child(3) span {
+          overflow-wrap: normal;
+          word-break: keep-all;
+          hyphens: none;
+        }
         .cb-export-table-wrap .cb-icon-btn {
           width: 28px;
           min-width: 28px;
@@ -8349,7 +8367,7 @@ function ExportView({ members, clients, pods = [], isAdmin, currentUser, forceSe
             <colgroup>{exportColumnWidths.map((width, index) => <col key={index} style={{ width: `${width}%` }} />)}</colgroup>
             <thead style={{ background: "#ffffff" }}><tr style={{ background: "#ffffff", height: 38 }}>
               <th style={{ background: "#ffffff" }}>Date</th><th style={{ background: "#ffffff" }}>Client</th><th style={{ background: "#ffffff" }}>Task</th><th style={{ background: "#ffffff" }}>Role</th><th style={{ background: "#ffffff" }}>Task type</th><th style={{ background: "#ffffff" }}>Period</th>
-              <th className="num" style={{ background: "#ffffff" }}>Duration</th>{canViewTrackedTime && <th className="num" style={{ background: "#ffffff" }}>Tracked</th>}<th style={{ background: "#ffffff" }}>Bank Account</th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
+              <th className="num" style={{ background: "#ffffff" }}>Duration</th>{canViewTrackedTime && <th className="num" style={{ background: "#ffffff" }}>Tracked</th>}<th style={{ background: "#ffffff" }}><span style={{ display: "block" }}>Bank</span><span style={{ display: "block" }}>Account</span></th><th style={{ background: "#ffffff" }}>Metric</th><th className="num" style={{ background: "#ffffff" }}>Change</th>
               <th style={{ background: "#ffffff" }}>Note</th><th style={{ background: "#ffffff" }}>Tracked by</th><th style={{ background: "#ffffff" }}>Pushed</th><th style={{ background: "#ffffff" }}></th>{isAdmin && <th style={{ background: "#ffffff" }}></th>}
             </tr></thead>
           </table>
@@ -8362,7 +8380,7 @@ function ExportView({ members, clients, pods = [], isAdmin, currentUser, forceSe
           <thead ref={exportHeaderRef}>
             <tr>
               <th>Date</th><th>Client</th><th>Task</th><th>Role</th><th>Task type</th><th>Period</th>
-              <th className="num">Duration</th>{canViewTrackedTime && <th className="num">Tracked</th>}<th>Bank Account</th><th>Metric</th><th className="num">Change</th>
+              <th className="num">Duration</th>{canViewTrackedTime && <th className="num">Tracked</th>}<th><span style={{ display: "block" }}>Bank</span><span style={{ display: "block" }}>Account</span></th><th>Metric</th><th className="num">Change</th>
               <th>Note</th><th>Tracked by</th><th>Pushed</th><th></th>{isAdmin && <th></th>}
             </tr>
           </thead>
@@ -8403,12 +8421,12 @@ function ExportView({ members, clients, pods = [], isAdmin, currentUser, forceSe
                           type="button"
                           title="Correct submitted period"
                           onClick={() => setPeriodEditRow(r)}
-                          style={{ display: "block", maxWidth: "100%", padding: 0, border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                          style={{ display: "block", maxWidth: "100%", padding: 0, border: 0, background: "transparent", color: "inherit", font: "inherit", textAlign: "left", cursor: "pointer", whiteSpace: "normal", overflowWrap: "normal", wordBreak: "normal" }}
                         >
                           {r.period || "none"}
                         </button>
                       ) : (
-                        <span style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
+                        <span style={{ display: "block", maxWidth: "100%", whiteSpace: "normal", overflowWrap: "normal", wordBreak: "normal" }}>{r.period || "none"}</span>
                       )}
                     </td>
                     <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
@@ -8497,7 +8515,7 @@ function ExportView({ members, clients, pods = [], isAdmin, currentUser, forceSe
                             {r.period || "none"}
                           </button>
                         ) : (
-                          <span style={{ display: "block", maxWidth: "100%", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{r.period || "none"}</span>
+                          <span style={{ display: "block", maxWidth: "100%", whiteSpace: "normal", overflowWrap: "normal", wordBreak: "normal" }}>{r.period || "none"}</span>
                         )}
                       </td>
                       <td className="num cb-mono">{formatHM(r.seconds)}{r.adjusted && <span title="This time was edited at submission" style={{ color: "var(--amber)", marginLeft: 4 }}>*</span>}</td>
