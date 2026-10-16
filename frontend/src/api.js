@@ -68,6 +68,13 @@ async function request(path, options = {}, timeoutMs = 0) {
 }
 
 export const api = {
+  getBirthday: (memberId) => request(`/birthday/${encodeURIComponent(memberId)}`),
+  saveBirthday: (memberId, payload) => request(`/birthday/${encodeURIComponent(memberId)}`, { method: "PUT", body: JSON.stringify(payload) }),
+  acknowledgeBirthday: () => request("/birthday/acknowledge", { method: "POST" }),
+  getPerspectives: () => request("/perspectives"),
+  managePerspectives: () => request("/perspectives/manage"),
+  createPerspective: (payload) => request("/perspectives/manage", { method: "POST", body: JSON.stringify(payload) }),
+  updatePerspective: (id, payload) => request(`/perspectives/manage/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(payload) }),
   getAuthStatus: () => request("/auth/status"),
   getServerTime: () => request("/time"),
   getGoogleConnectUrl: () => request("/auth/google/connect-url"),

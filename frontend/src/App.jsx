@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 import { ENGLISH_WORDS_RAW } from "./spellcheckDictionary.js";
+import { userLocalClock, greetingForHour, PerspectiveCard, BirthdayCelebration, useBirthday, BirthdayPreferences, PerspectiveManager } from "./DashboardEnhancements.jsx";
 
 const CLOCKBOOK_SPELLCHECK_WORDS = new Set([
   "clockbook", "karbon", "xero", "brightpay", "brightbooks", "brightbook", "dext", "calamari",
@@ -1822,6 +1823,9 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
+  const localClock = userLocalClock(new Date(now), currentUser.timezone_name);
+  const birthday = useBirthday(currentUser, localClock);
+  const firstName = (currentUser.name || "there").trim().split(/\s+/)[0];
   const isSuperAdmin = currentUser.role === "super_admin";
   const canSeeSuperAdmins = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
   const canUseTeamView = isAdmin || currentUser.role === "admin" || currentUser.role === "super_admin";
@@ -1956,16 +1960,8 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
     <div style={{ position: "relative" }}>
       <div className="cb-page-head" style={{ alignItems: "flex-start", gap: 18, paddingBottom: 16 }}>
         <div style={{ minWidth: 220, paddingTop: 2 }}>
-          <div className="cb-page-title cb-serif">Dashboard</div>
-          <div className="cb-page-sub">
-            {viewFilter === "team"
-              ? "A live view of today's activity across the team."
-              : viewedMember
-                ? `Just ${viewedMember.name.split(" ")[0]}'s active work.`
-                : isAdmin && viewFilter === "mine"
-                  ? "Just your own active work."
-                  : "Your firm's active work, tracked client by client."}
-          </div>
+          <div className="cb-page-title cb-serif">{birthday.isBirthday ? `Happy Birthday, ${firstName}! 🎉` : `${greetingForHour(localClock.hour)}, ${firstName} ${localClock.hour >= 5 && localClock.hour < 12 ? "☀️" : localClock.hour >= 17 || localClock.hour < 5 ? "🌙" : ""}`}</div>
+          <div className="cb-page-sub">{birthday.isBirthday ? "Wishing you a wonderful year filled with happiness, growth, and meaningful moments." : localClock.date}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", justifyContent: "flex-end" }}>
           {canUseTeamView && (
@@ -1997,6 +1993,8 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         </div>
       </div>
 
+      <PerspectiveCard user={currentUser} clock={localClock}/>
+      {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday}/>}
       {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
           <table className="cb-table">
@@ -4338,7 +4336,7 @@ function SettingsView({
   realIsSuperAdmin = false, viewMode = "super_admin", onViewModeChange, effectiveIsAdmin = false, showDemoModeControls = true,
   demoAdminPermissions = [], onChangeDemoAdminPermissions = null,
   workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, onWorkspaceCreated, onBrandingUpdated, integrationStatus = {}, onIntegrationChanged,
-  onTestForgottenRecovery = null,
+  onTestForgottenRecovery = null, onPreviewBirthday = null,
 }) {
   const [newRole, setNewRole] = useState("");
   const [newPod, setNewPod] = useState("");
@@ -5227,6 +5225,7 @@ function SettingsView({
         </div>
       )}
 
+      {realIsSuperAdmin && viewMode === "super_admin" && <PerspectiveManager />}
       {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
@@ -5243,6 +5242,7 @@ function SettingsView({
               <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
                 {scanning ? "Scanning..." : "Scan for issues"}
               </button>
+              {realIsSuperAdmin && viewMode === "super_admin" && onPreviewBirthday && <button type="button" className="cb-btn cb-btn-sm" onClick={onPreviewBirthday}>Preview Birthday Celebration</button>}
               {realIsSuperAdmin && viewMode === "super_admin" && onTestForgottenRecovery && (
                 <button type="button" className="cb-btn cb-btn-sm" onClick={onTestForgottenRecovery}>
                   Test forgotten time recovery
@@ -8660,6 +8660,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
   const [settingUpId, setSettingUpId] = useState(null);
   const [error, setError] = useState("");
   const [showSlackSettings, setShowSlackSettings] = useState(false);
+  const [birthdayMemberId, setBirthdayMemberId] = useState(null);
   const [invitations, setInvitations] = useState([]);
   const [invitationMessage, setInvitationMessage] = useState("");
   const settingUpMember = members.find((m) => m.id === settingUpId);
@@ -8875,8 +8876,10 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
                       onClick: m.google_calendar_connected ? onDisconnectCalendar : onConnectCalendar,
                     },
                     { label: "Notifications", onClick: () => setShowSlackSettings(true) },
+                    { label: "My birthday", onClick: () => setBirthdayMemberId(m.id) },
                   ] : []),
                   ...(isAdmin ? [
+                    { label: "Birthday preferences", onClick: () => setBirthdayMemberId(m.id) },
                     { label: m.email ? "Reset password" : "Set up login", onClick: () => setSettingUpId(m.id) },
                     ...roleActions(m, currentUser).map((action) => ({
                       label: action.label, onClick: () => onChangeRole(m.id, action.target),
@@ -8889,6 +8892,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
           </div>
         ))}
       </div>
+      {birthdayMemberId && <BirthdayPreferences key={birthdayMemberId} member={members.find(m => m.id === birthdayMemberId) || currentUser} onClose={() => setBirthdayMemberId(null)} />}
       {settingUpMember && (
         <SetCredentialsModal
           memberName={settingUpMember.name}
@@ -11820,6 +11824,7 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState(null);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [birthdayPreview, setBirthdayPreview] = useState(false);
   const [showForgottenRecovery, setShowForgottenRecovery] = useState(() => Number(pendingRecoveryOnLoad?.gapMs) > 0);
   const [showForgottenRecoveryPreview, setShowForgottenRecoveryPreview] = useState(false);
   const [showAdHocMeeting, setShowAdHocMeeting] = useState(false);
@@ -13920,6 +13925,7 @@ export default function App() {
                 timerActionPending={timerActionPending}
               />
             )}
+            {birthdayPreview && <BirthdayCelebration firstName={(currentUser.name || "there").trim().split(/\s+/)[0]} onClose={() => setBirthdayPreview(false)} />}
             {view === "templates" && (
               <Templates
                 templates={templates} isAdmin={isAdmin} roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics}
@@ -14009,6 +14015,7 @@ export default function App() {
                 integrationStatus={integrationStatus}
                 onIntegrationChanged={loadIntegrationStatus}
                 onTestForgottenRecovery={() => setShowForgottenRecoveryPreview(true)}
+                onPreviewBirthday={() => setBirthdayPreview(true)}
               />
             )}
           </div>
