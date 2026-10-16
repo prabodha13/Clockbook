@@ -18,3 +18,8 @@
 .cb-snow-optout{position:fixed;right:12px;bottom:12px;z-index:3;opacity:.65;border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:4px 8px;font:inherit;font-size:11px;cursor:pointer}
 .cb-snow-preview-control{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:9999}
 .cb-season-settings{padding:16px 20px;margin-top:12px}
+
+/* Preview only: readable on the light Settings background; normal snowfall is unchanged. */
+.cb-season-snow-preview{z-index:9998;opacity:1;mask-image:none;-webkit-mask-image:none}
+.cb-season-snow-preview span{color:#5c7e91;font-size:clamp(17px,2vw,24px);opacity:.78;text-shadow:0 1px 3px #ffffffaa}
+@media(max-width:640px){.cb-season-snow-preview span:nth-child(n+7){display:block}.cb-season-snow-preview span:nth-child(n+19){display:none}}
