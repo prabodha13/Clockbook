@@ -1823,8 +1823,9 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
   );
 }
 
-function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null, workspaceLogo = "", workspaceId = "" }) {
+function Dashboard({ tasks, now, currentUser, members, pods = [], isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null, workspaceLogo = "", workspaceId = "" }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
+  const [teamPodFilter, setTeamPodFilter] = useState(""); // Team View only; empty means all accessible pods
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const localClock = userLocalClock(new Date(now), currentUser.timezone_name);
@@ -1887,7 +1888,15 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
         : members.filter((member) => (canSeeSuperAdmins || member.role !== "super_admin") && (member.role === "super_admin" || !currentUser.pod_id || member.pod_id === currentUser.pod_id)))
     : [];
 
-  const teamRows = teamMembers
+  // Admins without a pod assignment (including Super Admins) can narrow Team View
+  // to one of the pods already represented in their permitted team members.
+  const canFilterTeamPods = canUseTeamView && !currentUser.pod_id && !forceSelfOnly;
+  const teamPodOptions = (pods || []).filter((pod) => teamMembers.some((member) => String(member.pod_id || "") === String(pod.id)));
+  const filteredTeamMembers = canFilterTeamPods && teamPodFilter
+    ? teamMembers.filter((member) => String(member.pod_id || "") === teamPodFilter)
+    : teamMembers;
+
+  const teamRows = filteredTeamMembers
         .map((member) => {
           const memberTasks = tasks.filter((t) => t.owner_id === member.id);
           const trackedToday = memberTasks.reduce((sum, t) => sum + elapsedSecondsToday(t, now, member), 0);
@@ -2002,6 +2011,21 @@ function Dashboard({ tasks, now, currentUser, members, isAdmin, forceSelfOnly = 
       {birthday.birthdayOpen && <BirthdayCelebration firstName={firstName} onClose={birthday.dismissBirthday} workspaceLogo={workspaceLogo} wish={birthday.wish}/>}
       {canUseTeamView && viewFilter === "team" && (
         <div className="cb-table-wrap" style={{ marginBottom: 18 }}>
+          {canFilterTeamPods && teamPodOptions.length > 0 && (
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderBottom: "1px solid var(--line)" }}>
+              <label htmlFor="dashboard-team-pod-filter" style={{ fontWeight: 600, fontSize: 13 }}>Filter by Pod</label>
+              <select
+                id="dashboard-team-pod-filter"
+                className="cb-input"
+                style={{ maxWidth: 240, minWidth: 160 }}
+                value={teamPodFilter}
+                onChange={(event) => setTeamPodFilter(event.target.value)}
+              >
+                <option value="">All permitted pods</option>
+                {teamPodOptions.map((pod) => <option key={pod.id} value={String(pod.id)}>{pod.name}</option>)}
+              </select>
+            </div>
+          )}
           <table className="cb-table">
             <thead>
               <tr>
@@ -13928,7 +13952,7 @@ export default function App() {
           <div className="cb-content">
             {view === "dashboard" && (
               <Dashboard
-                tasks={tasks} now={now} currentUser={effectiveCurrentUser} members={members} isAdmin={isAdmin}
+                tasks={tasks} now={now} currentUser={effectiveCurrentUser} members={members} pods={pods} isAdmin={isAdmin}
                 forceSelfOnly={realIsSuperAdmin && superAdminViewMode === "member"}
                 onStart={requestStart} onPause={pauseTask} onComplete={setCompletingTask}
                 onDelete={deleteTask} onReassign={reassignTask} onReset={resetTask} onNewTask={() => setShowNewTask(true)}
