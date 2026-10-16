@@ -8791,7 +8791,7 @@ function SlackSettingsModal({ member, onClose, onConnect, onDisconnect, onTest, 
   );
 }
 
-function StaffRowMenu({ items }) {
+function StaffRowMenu({ items, showWhenEmpty = false }) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const buttonRef = useRef(null);
@@ -8823,7 +8823,7 @@ function StaffRowMenu({ items }) {
     });
   }, [open, items.length]);
 
-  if (items.length === 0) return null;
+  if (items.length === 0 && !showWhenEmpty) return null;
 
   return (
     <>
@@ -8832,6 +8832,11 @@ function StaffRowMenu({ items }) {
       </button>
       {open && createPortal(
         <div ref={menuRef} className="cb-row-menu" style={{ position: "fixed", top: position.top, left: position.left }}>
+          {items.length === 0 && (
+            <div style={{ padding: "9px 12px", color: "var(--muted)", fontSize: 12.5 }}>
+              No actions available
+            </div>
+          )}
           {items.map((item, i) => (
             <button
               key={i} className="cb-user-dropdown-item"
@@ -9102,7 +9107,8 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
                 </div>
               )}
-              {!podAssignmentOnly && <StaffRowMenu
+              <StaffRowMenu
+                showWhenEmpty={podAssignmentOnly}
                 items={[
                   ...(m.id === currentUser.id ? [
                     {
@@ -9112,7 +9118,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                     { label: "Notifications", onClick: () => setShowSlackSettings(true) },
                     { label: "My birthday", onClick: () => setBirthdayMemberId(m.id) },
                   ] : []),
-                  ...(isAdmin && !m.__demo_self_entry ? [
+                  ...(isAdmin && !podAssignmentOnly && !m.__demo_self_entry ? [
                     { label: "Birthday preferences", onClick: () => setBirthdayMemberId(m.id) },
                     { label: m.email ? "Reset password" : "Set up login", onClick: () => setSettingUpId(m.id) },
                     ...roleActions(m, currentUser).map((action) => ({
@@ -9121,7 +9127,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                     ...(m.id !== currentUser.id ? [{ label: "Delete", danger: true, onClick: () => handleDelete(m) }] : []),
                   ] : []),
                 ]}
-              />}
+              />
             </div>
           </div>;
         })}
