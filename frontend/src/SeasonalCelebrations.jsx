@@ -97,12 +97,13 @@ export function SeasonalExperience({ user, workspaceId, logo = "", now, birthday
     {activeModal && <SeasonalCelebration occasion={activeModal} name={(user.name || "there").trim().split(/\s+/)[0]} logo={logo} onClose={dismiss}/>}
   </>;
 }
-export function SeasonalSettings() {
+export function SeasonalSettings({ demoReadOnly = false }) {
   const [prefs, setPrefs] = useState(SEASON_DEFAULTS);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   useEffect(() => { api.getSeasonalSettings().then(v => setPrefs({ ...SEASON_DEFAULTS, ...v })).catch(e => setError(e.message)); }, []);
   async function update(field, checked) {
+    if (demoReadOnly) return;
     const next = { ...prefs, [field]: checked };
     setSaving(true); setError("");
     try { const saved = await api.updateSeasonalSettings(next); setPrefs(saved); window.dispatchEvent(new Event("clockbook-seasonal-settings")); }
@@ -110,8 +111,9 @@ export function SeasonalSettings() {
   }
   return <details className="cb-tmpl-card cb-perspective-manager cb-season-settings">
     <summary className="cb-perspective-manager-toggle">Seasonal celebrations <ChevronDown size={18}/></summary>
+    {demoReadOnly && <p className="cb-hint" role="status">Admin Demo View: read-only preview. Workspace settings cannot be changed here.</p>}
     <p className="cb-hint">Workspace-wide controls. Staff can individually hide December snowfall on their dashboard.</p>
-    {Object.entries({ halloween: "Halloween", christmas: "Christmas", yearend: "Year End", newyear: "New Year", snow: "December snowfall" }).map(([id, label]) => <label key={id}><input type="checkbox" disabled={saving} checked={prefs[id]} onChange={e => update(id, e.target.checked)}/> Enable {label}</label>)}
+    {Object.entries({ halloween: "Halloween", christmas: "Christmas", yearend: "Year End", newyear: "New Year", snow: "December snowfall" }).map(([id, label]) => <label key={id}><input type="checkbox" disabled={saving || demoReadOnly} checked={prefs[id]} onChange={e => update(id, e.target.checked)}/> Enable {label}</label>)}
     {error && <div role="alert" className="cb-error">{error}</div>}
   </details>;
 }

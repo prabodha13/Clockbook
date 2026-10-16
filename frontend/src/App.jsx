@@ -5233,9 +5233,9 @@ function SettingsView({
         </div>
       )}
 
-      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.PERSPECTIVES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.PERSPECTIVES))) && <PerspectiveManager />}
-      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.BIRTHDAY_WISHES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.BIRTHDAY_WISHES))) && <BirthdayWishManager />}
-      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.SEASONAL) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.SEASONAL))) && <SeasonalSettings user={currentUser} workspaceId={activeWorkspaceId}/>}
+      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.PERSPECTIVES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.PERSPECTIVES))) && <PerspectiveManager demoReadOnly={realIsSuperAdmin && viewMode !== "super_admin"} />}
+      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.BIRTHDAY_WISHES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.BIRTHDAY_WISHES))) && <BirthdayWishManager demoReadOnly={realIsSuperAdmin && viewMode !== "super_admin"} />}
+      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.SEASONAL) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.SEASONAL))) && <SeasonalSettings user={currentUser} workspaceId={activeWorkspaceId} demoReadOnly={realIsSuperAdmin && viewMode !== "super_admin"}/>}
       {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
