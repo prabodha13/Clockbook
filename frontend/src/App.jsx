@@ -8858,10 +8858,10 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
       ? members.filter((m) => m.pod_id === currentUser.pod_id && m.role !== "super_admin")
       : members;
     // In Super Admin's simulated Admin view only, show a self entry for
-    // notification/birthday preferences without exposing other Super Admins.
+    // personal preferences and ordinary staff settings without exposing other Super Admins.
     if (!isDemoAdminMode || !currentUser) return scoped;
     // The real Super Admin is excluded from the simulated Admin's ordinary
-    // staff scope; add back only the current user's safe preference entry.
+    // staff scope; add back only the current user's restricted demo self entry.
     const safeScoped = scoped.filter((m) => m.role !== "super_admin");
     return [{ ...currentUser, __demo_self_entry: true }, ...safeScoped.filter((m) => m.id !== currentUser.id)];
   }, [members, currentUser, isDemoAdminMode]);
@@ -8993,7 +8993,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {isAdmin && !m.__demo_self_entry && (
+              {isAdmin && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     Capacity
@@ -9027,7 +9027,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   </label>
                 </div>
               )}
-              {isAdmin && !m.__demo_self_entry && (
+              {isAdmin && (
                 <select
                   className="cb-select"
                   style={{ width: 118, minWidth: 118, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
@@ -9040,7 +9040,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   <option value="remote">Remote</option>
                 </select>
               )}
-              {isAdmin && !m.__demo_self_entry && (
+              {isAdmin && (
                 <div style={{ width: 180, minWidth: 180 }}>
                   <SearchableSelect
                     options={timezoneOptions}
@@ -9064,6 +9064,15 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   <option value="">No pod</option>
                   {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
+              )}
+              {m.__demo_self_entry && (
+                <div
+                  className="cb-select"
+                  title="Pod assignment cannot be changed in Admin Demo Mode"
+                  style={{ width: 150, padding: "7px 10px", fontSize: 12.5, color: "var(--ink-soft)", background: "var(--paper-soft)", cursor: "default" }}
+                >
+                  {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
+                </div>
               )}
               {currentUser.role === "admin" && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) && !m.__demo_self_entry && (
                 <div
