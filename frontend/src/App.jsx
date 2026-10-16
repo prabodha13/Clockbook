@@ -1847,14 +1847,28 @@ function Dashboard({ tasks, now, currentUser, members, pods = [], isAdmin, force
   const isSuperAdmin = currentUser.role === "super_admin";
   const canSeeSuperAdmins = isSuperAdmin || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_SUPER_ADMINS);
   const canUseTeamView = isAdmin || currentUser.role === "admin" || currentUser.role === "super_admin";
-  const pickableMembers = members.filter((m) => m.id !== currentUser.id && (canSeeSuperAdmins || m.role !== "super_admin"));
+  // The selector uses only members from the active workspace and the Admin's authorised pod.
+  // Super Admins retain workspace-wide visibility regardless of their own pod assignment.
+  const pickableMembers = members.filter((m) =>
+    m.id !== currentUser.id &&
+    (isSuperAdmin || (
+      (canSeeSuperAdmins || m.role !== "super_admin") &&
+      (!currentUser.pod_id || String(m.pod_id || "") === String(currentUser.pod_id))
+    ))
+  );
   const viewedMember = pickableMembers.find((m) => m.id === viewFilter);
+  useEffect(() => {
+    if (!["everyone", "mine", "team"].includes(viewFilter) && !viewedMember) {
+      setViewFilter("mine");
+    }
+  }, [viewFilter, viewedMember]);
 
   const visibleTasks = (() => {
     if (forceSelfOnly) return tasks.filter((t) => t.owner_id === currentUser.id);
     if (!isAdmin || viewFilter === "everyone" || viewFilter === "team") return tasks;
     if (viewFilter === "mine") return tasks.filter((t) => t.owner_id === currentUser.id);
-    return tasks.filter((t) => t.owner_id === viewFilter);
+    if (!viewedMember) return tasks.filter((t) => t.owner_id === currentUser.id);
+    return tasks.filter((t) => t.owner_id === viewedMember.id);
   })();
 
   const todo = visibleTasks.filter((t) => t.status === "todo");
