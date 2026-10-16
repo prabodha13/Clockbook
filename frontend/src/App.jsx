@@ -14510,11 +14510,16 @@ export default function App() {
           members={members}
           currentUser={currentUser}
           onSnooze={(snoozeMs) => {
-            // Keep the unanswered recovery reminder (and its accumulated eligible slices).
-            // Clearing it here caused a later screen lock to bypass freezeNoTrackWindow,
-            // allowing recorded Away time into the proposed recovery interval.
+            // Original ClockBook behaviour: snooze abandons the pending recovery
+            // opportunity and starts a fresh countdown immediately. The notification
+            // stays suppressed until expiry, but no pending reminder blocks timers.
+            // Keep the workspace-scoped session persistence for the snooze expiry.
             setNoTrackSnoozeUntil(Date.now() + snoozeMs);
-            noTrackHandledRef.current = true;
+            setNoTrackCountdownStart(Date.now());
+            noTrackHandledRef.current = false;
+            idleNoTrackAlertRef.current = null;
+            setIdleNoTrackAlert(null);
+            try { sessionStorage.removeItem(NO_TRACK_PENDING_KEY); } catch (_) {}
           }}
           onStartNew={async (liveGapMs, includeLostTime = true, windowEndMs = Date.now(), recoveryWindows = []) => {
             forgotToTrackGapMsRef.current = includeLostTime ? liveGapMs : null;
