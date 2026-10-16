@@ -5121,8 +5121,8 @@ function SettingsView({
           </div>
           <div style={SETTINGS_BODY_STYLE}>
             <div className="cb-hint" style={{ marginBottom: 8 }}>
-              Assign an admin to a pod on the Staff page and they will only see time and task data for people in that same pod. An admin with no pod keeps seeing everyone, and super admins always see everyone regardless of pod.
-              {!canManagePods && " Pod creation, deletion, and assignment require additional access from a Super Admin."}
+              Assign an Admin to a pod on the Staff page to limit their time and task data to that pod. An Admin without a pod can view all members within their permitted scope.
+              {!canManagePods && " Pod creation, deletion, and assignment require additional Admin access."}
             </div>
             {pods.map((p) => (
               <div key={p.id} className="cb-client-account-row">
@@ -5258,7 +5258,7 @@ function SettingsView({
           </div>
           <div style={SETTINGS_BODY_STYLE}>
             <div className="cb-hint" style={{ marginBottom: 8 }}>
-              Records supported screen-lock and sleep/inactive-browser periods for the super-admin Audit report. Turning this off stops new audit events from being recorded.
+              Records supported screen-lock and sleep/inactive-browser periods for the authorised Audit report. Turning this off stops new audit events from being recorded.
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <span style={{ fontSize: 13.5, fontWeight: 600 }}>
@@ -8917,7 +8917,7 @@ function StaffView({ members, currentUser, isAdmin, onAddMember, onManualAddMemb
               {currentUser.role === "admin" && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) && (
                 <div
                   className="cb-select"
-                  title="Pod assignments are managed by a Super Admin"
+                  title="Pod assignments require authorised Admin access"
                   style={{ width: 150, padding: "7px 10px", fontSize: 12.5, color: "var(--ink-soft)", background: "var(--paper-soft)", cursor: "default" }}
                 >
                   {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
@@ -9863,7 +9863,7 @@ function InactivityAuditView({ members }) {
           <tbody>{filteredActivityRows.map((r) => <tr key={`${r.member_id}-${r.date}`}><td>{r.member_name}</td><td>{formatDate(`${r.date}T12:00:00`)}</td><td>{r.timezone_name}</td><td className="num cb-mono">{r.first_login_at ? new Date(r.first_login_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.first_clock_at ? new Date(r.first_clock_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.laptop_turned_off_at ? new Date(r.laptop_turned_off_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", timeZone: r.timezone_name }) : "—"}</td><td className="num cb-mono">{r.first_login_to_shutdown_seconds != null ? formatHM(r.first_login_to_shutdown_seconds) : "—"}</td><td className="num cb-mono">{r.inactivity_seconds != null ? formatHM(r.inactivity_seconds) : "—"}</td><td className="num cb-mono" style={{ fontWeight: 700 }}>{r.net_first_login_to_shutdown_seconds != null ? formatHM(r.net_first_login_to_shutdown_seconds) : "—"}</td></tr>)}</tbody></table>
         </div>
       )}
-      {enabled === false && <div className="cb-notice">Audit recording is currently off. A super admin can turn it on from Settings.</div>}
+      {enabled === false && <div className="cb-notice">Audit recording is currently off. An authorised Admin can turn it on from Settings.</div>}
       {error && <div className="cb-empty">Could not load the audit.</div>}
       {enabled && events === null && <TableSkeleton rows={4} />}
       {enabled && events !== null && (
@@ -10550,7 +10550,7 @@ function InitialTimezoneModal({ currentUser, onConfirm }) {
       <div className="cb-welcome" style={{ maxWidth: 520 }}>
         <div className="cb-welcome-title cb-serif">Confirm your time zone</div>
         <div className="cb-welcome-sub" style={{ marginBottom: 16 }}>
-          ClockBook uses your time zone for work dates, recovery and reporting. Confirm it once to continue. After setup, an Admin or Super Admin can change it if needed.
+          ClockBook uses your time zone to display personalised greetings and daily experiences at the correct local time. Please confirm your time zone to continue. An Admin can update it later if needed.
         </div>
         <div className="cb-field" style={{ textAlign: "left" }}>
           <label className="cb-label">Time zone</label>
