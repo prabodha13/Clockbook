@@ -9119,7 +9119,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                     { label: "My birthday", onClick: () => setBirthdayMemberId(m.id) },
                   ] : []),
                   ...(isAdmin && !podAssignmentOnly && !m.__demo_self_entry ? [
-                    { label: "Birthday preferences", onClick: () => setBirthdayMemberId(m.id) },
+                    ...(m.id !== currentUser.id ? [{ label: "Birthday preferences", onClick: () => setBirthdayMemberId(m.id) }] : []),
                     { label: m.email ? "Reset password" : "Set up login", onClick: () => setSettingUpId(m.id) },
                     ...roleActions(m, currentUser).map((action) => ({
                       label: action.label, onClick: () => onChangeRole(m.id, action.target),
