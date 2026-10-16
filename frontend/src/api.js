@@ -84,6 +84,7 @@ export const api = {
   getServerTime: () => request("/time"),
   getGoogleConnectUrl: () => request("/auth/google/connect-url"),
   getPods: () => request("/pods"),
+  getTeamLeaveToday: () => request("/team/leave-today"),
   createPod: (name) => request("/pods", { method: "POST", body: JSON.stringify({ name }) }),
   deletePod: (id) => request(`/pods/${id}`, { method: "DELETE" }),
   updateMemberPod: (memberId, podId, expectedVersion) => request(`/members/${memberId}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId, expected_version: expectedVersion }) }),

@@ -1826,6 +1826,19 @@ function SuggestedTasksSection({ currentUser, clients, templates, roles, taskTyp
 function Dashboard({ tasks, now, currentUser, members, pods = [], isAdmin, forceSelfOnly = false, onStart, onPause, onComplete, onDelete, onReassign, onReset, onNewTask, onAdHocMeeting, onManualHelp, onLearningDevelopment, clients, templates, roles, taskTypes, bankAccounts, onCreateTasks, timerActionPending = null, workspaceLogo = "", workspaceId = "" }) {
   const [viewFilter, setViewFilter] = useState("mine"); // "everyone" | "mine" | "team" | a member id
   const [teamPodFilter, setTeamPodFilter] = useState(""); // Team View only; empty means all accessible pods
+  const [teamLeaveStatuses, setTeamLeaveStatuses] = useState({});
+  useEffect(() => {
+    if (viewFilter !== "team" || !(isAdmin || currentUser.role === "admin" || currentUser.role === "super_admin") || forceSelfOnly) return;
+    let cancelled = false;
+    setTeamLeaveStatuses({});
+    api.getTeamLeaveToday().then((response) => {
+      if (!cancelled) setTeamLeaveStatuses(response?.statuses || {});
+    }).catch(() => {
+      if (!cancelled) setTeamLeaveStatuses({});
+    });
+    return () => { cancelled = true; };
+  }, [viewFilter, currentUser.id, currentUser.role, currentUser.pod_id, workspaceId, forceSelfOnly, isAdmin, localClock.year, localClock.month, localClock.day]);
+
   const [showActiveOnly, setShowActiveOnly] = useState(false);
   const [taskSearch, setTaskSearch] = useState("");
   const localClock = userLocalClock(new Date(now), currentUser.timezone_name);
@@ -2034,6 +2047,7 @@ function Dashboard({ tasks, now, currentUser, members, pods = [], isAdmin, force
                 <th className="num">In progress</th>
                 <th className="num">Submitted today</th>
                 <th>Current status</th>
+                <th>Leave today</th>
               </tr>
             </thead>
             <tbody>
@@ -2060,6 +2074,11 @@ function Dashboard({ tasks, now, currentUser, members, pods = [], isAdmin, force
                       ) : (
                         <span style={{ color: "var(--ink-soft)" }}>No timer running</span>
                       )}
+                    </td>
+                    <td>
+                      {teamLeaveStatuses[member.id] === "on_leave" ? <span style={{ color: "var(--green)", fontWeight: 600 }}>On leave</span>
+                        : teamLeaveStatuses[member.id] === "not_on_leave" ? <span style={{ color: "var(--ink-soft)" }}>Not on leave</span>
+                        : <span style={{ color: "var(--ink-faint)" }}>Unavailable</span>}
                     </td>
                   </tr>
                 );
