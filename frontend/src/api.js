@@ -68,6 +68,8 @@ async function request(path, options = {}, timeoutMs = 0) {
 }
 
 export const api = {
+  getSeasonalSettings: () => request("/seasonal/settings"),
+  updateSeasonalSettings: (payload) => request("/seasonal/settings", { method: "PUT", body: JSON.stringify(payload) }),
   getBirthday: (memberId) => request(`/birthday/${encodeURIComponent(memberId)}`),
   saveBirthday: (memberId, payload) => request(`/birthday/${encodeURIComponent(memberId)}`, { method: "PUT", body: JSON.stringify(payload) }),
   acknowledgeBirthday: () => request("/birthday/acknowledge", { method: "POST" }),

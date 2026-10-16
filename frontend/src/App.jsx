@@ -10,7 +10,7 @@ import {
 import { api, downloadCsvFile, fetchCsvText, getToken, setToken, clearToken } from "./api.js";
 import { ENGLISH_WORDS_RAW } from "./spellcheckDictionary.js";
 import { userLocalClock, greetingForHour, PerspectiveCard, BirthdayCelebration, useBirthday, BirthdayPreferences, PerspectiveManager, BirthdayWishManager } from "./DashboardEnhancements.jsx";
-import { SeasonalExperience, SeasonalCelebration, SeasonalSettings } from "./SeasonalCelebrations.jsx";
+import { SEASONS, SnowfallPreview, SeasonalExperience, SeasonalCelebration, SeasonalSettings } from "./SeasonalCelebrations.jsx";
 
 const CLOCKBOOK_SPELLCHECK_WORDS = new Set([
   "clockbook", "karbon", "xero", "brightpay", "brightbooks", "brightbook", "dext", "calamari",
@@ -1124,6 +1124,9 @@ function ClaimScreen({ unclaimed, onClaim }) {
 }
 
 const ACCESS_PERMISSION = {
+  SEASONAL: "manage_seasonal_celebrations",
+  BIRTHDAY_WISHES: "manage_birthday_wishes",
+  PERSPECTIVES: "manage_daily_perspectives",
   INSIGHTS_LEAVE_CAPACITY: "insights_leave_capacity",
   REPORT_HELP: "report_help",
   REPORT_OVERRIDES: "report_manual_overrides",
@@ -4866,6 +4869,9 @@ function SettingsView({
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Workspace</div>
                   {checkbox(ACCESS_PERMISSION.MANAGE_WORKSPACE_BRANDING, "Manage workspace branding", "Change the workspace logo and branding settings.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_INTEGRATIONS, "Manage integrations", "Connect, replace, test or disconnect Karbon and Calamari credentials.", true)}
+                  {checkbox(ACCESS_PERMISSION.PERSPECTIVES, "Manage Daily Perspectives", "Manage the workspace perspective library.", true)}
+                  {checkbox(ACCESS_PERMISSION.BIRTHDAY_WISHES, "Manage Birthday Wishes", "Manage the workspace birthday wish library.", true)}
+                  {checkbox(ACCESS_PERMISSION.SEASONAL, "Manage Seasonal Celebrations", "Manage workspace holiday settings and snowfall.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_AUDIT_RECORDING, "Manage audit recording", "Turn inactivity/audit event recording on or off for the workspace.", true)}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Reports</div>
                   {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Report access can only be granted to Admins.</div>}
@@ -5227,9 +5233,9 @@ function SettingsView({
         </div>
       )}
 
-      {realIsSuperAdmin && viewMode === "super_admin" && <PerspectiveManager />}
-      {realIsSuperAdmin && viewMode === "super_admin" && <BirthdayWishManager />}
-      {realIsSuperAdmin && viewMode === "super_admin" && <SeasonalSettings user={currentUser} workspaceId={activeWorkspaceId} onPreview={onPreviewSeasonal}/>}
+      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.PERSPECTIVES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.PERSPECTIVES))) && <PerspectiveManager />}
+      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.BIRTHDAY_WISHES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.BIRTHDAY_WISHES))) && <BirthdayWishManager />}
+      {(realIsSuperAdmin && viewMode === "super_admin" || effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.SEASONAL) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.SEASONAL))) && <SeasonalSettings user={currentUser} workspaceId={activeWorkspaceId}/>}
       {effectiveIsAdmin && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE}>
           <div className="cb-tmpl-head" style={SETTINGS_HEAD_STYLE}>
@@ -5246,7 +5252,9 @@ function SettingsView({
               <button className="cb-btn cb-btn-sm" disabled={scanning} onClick={runScan}>
                 {scanning ? "Scanning..." : "Scan for issues"}
               </button>
-              {realIsSuperAdmin && viewMode === "super_admin" && onPreviewBirthday && <button type="button" className="cb-btn cb-btn-sm" onClick={onPreviewBirthday}>Preview Birthday Celebration</button>}
+              {((realIsSuperAdmin && viewMode === "super_admin") || (effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.BIRTHDAY_WISHES) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.BIRTHDAY_WISHES)))) && onPreviewBirthday && <button type="button" className="cb-btn cb-btn-sm" onClick={onPreviewBirthday}>Preview Birthday Celebration</button>}
+              {((realIsSuperAdmin && viewMode === "super_admin") || (effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.SEASONAL) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.SEASONAL)))) && Object.entries(SEASONS).map(([id, item]) => <button type="button" key={id} className="cb-btn cb-btn-sm" onClick={() => onPreviewSeasonal?.(id)}>Preview {item.label}</button>)}
+              {((realIsSuperAdmin && viewMode === "super_admin") || (effectiveIsAdmin && (realIsSuperAdmin ? demoAdminPermissions.includes(ACCESS_PERMISSION.SEASONAL) : hasAdditionalPermission(currentUser, ACCESS_PERMISSION.SEASONAL)))) && <button type="button" className="cb-btn cb-btn-sm" onClick={() => onPreviewSeasonal?.("snow")}>Preview Snowfall</button>}
               {realIsSuperAdmin && viewMode === "super_admin" && onTestForgottenRecovery && (
                 <button type="button" className="cb-btn cb-btn-sm" onClick={onTestForgottenRecovery}>
                   Test forgotten time recovery
@@ -13932,7 +13940,8 @@ export default function App() {
                 timerActionPending={timerActionPending}
               />
             )}
-            {seasonalPreview && <SeasonalCelebration occasion={seasonalPreview} name={(currentUser.name || "there").trim().split(/\s+/)[0]} logo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""} onClose={() => setSeasonalPreview(null)}/>}
+            {seasonalPreview === "snow" && <SnowfallPreview onClose={() => setSeasonalPreview(null)}/>}
+            {seasonalPreview && seasonalPreview !== "snow" && <SeasonalCelebration occasion={seasonalPreview} name={(currentUser.name || "there").trim().split(/\s+/)[0]} logo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""} onClose={() => setSeasonalPreview(null)}/>}
             {birthdayPreview && <BirthdayCelebration firstName={(currentUser.name || "there").trim().split(/\s+/)[0]} onClose={() => setBirthdayPreview(false)} workspaceLogo={(workspaces.find(w => w.id === activeWorkspaceId) || {}).logo_data_url || ""} />}
             {view === "templates" && (
               <Templates

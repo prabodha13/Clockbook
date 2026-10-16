@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { X, Snowflake, ChevronDown } from "lucide-react";
 import { userLocalClock } from "./DashboardEnhancements.jsx";
 import "./seasonalCelebrations.css";
+import { api } from "./api.js";
 
 export const SEASONS = {
   halloween: { label: "Halloween", title: "Happy Halloween", message: "May your day bring a little mystery, plenty of laughter, and no frightening deadlines.", symbol: "🎃" },
@@ -50,43 +51,61 @@ export function SeasonalCelebration({ occasion, name, logo, onClose }) {
     </section>
   </div>, document.body);
 }
+const SEASON_DEFAULTS = { halloween: true, christmas: true, yearend: true, newyear: true, snow: true };
+const snowKey = (user, workspaceId) => storageKey(user, workspaceId, "snow-opt-out");
+function Snowflakes({ subtle = false }) {
+  return <div className={`cb-season-snow ${subtle ? "cb-season-snow-subtle" : ""}`} aria-hidden="true">{Array.from({ length: 14 }, (_, i) => <span key={i} style={{ left: `${3 + (i * 37 % 94)}%`, animationDelay: `${-i * 1.8}s`, animationDuration: `${16 + i % 7 * 3}s` }}>❄</span>)}</div>;
+}
+export function SnowfallPreview({ onClose }) {
+  return <><Snowflakes/><div className="cb-snow-preview-control"><button type="button" className="cb-btn cb-btn-primary" onClick={onClose}>Close snowfall preview</button></div></>;
+}
 export function SeasonalExperience({ user, workspaceId, logo = "", now, birthdayIsOpen = false, preview = null, onPreviewClose }) {
   const clock = userLocalClock(new Date(now), user.timezone_name);
   const occasion = seasonalOccasion(clock);
   const [dismissed, setDismissed] = useState(false);
-  const [snowEnabled, setSnowEnabled] = useState(true);
-  const [eventsEnabled, setEventsEnabled] = useState(true);
+  const [prefs, setPrefs] = useState(null);
+  const [optOut, setOptOut] = useState(false);
   const [reducedSnow, setReducedSnow] = useState(false);
-  const key = storageKey(user, workspaceId, "prefs");
   const acknowledged = storageKey(user, workspaceId, `ack:${clock.year}:${occasion}`);
   useEffect(() => {
-    try { const data = JSON.parse(localStorage.getItem(key) || "{}"); setSnowEnabled(data.snow !== false); setEventsEnabled(data.events !== false); }
-    catch { setSnowEnabled(true); setEventsEnabled(true); }
-  }, [key]);
+    let active = true;
+    api.getSeasonalSettings().then(data => { if (active) setPrefs({ ...SEASON_DEFAULTS, ...data }); }).catch(() => { if (active) setPrefs(null); });
+    const refresh = () => api.getSeasonalSettings().then(data => { if (active) setPrefs({ ...SEASON_DEFAULTS, ...data }); }).catch(() => {});
+    window.addEventListener("clockbook-seasonal-settings", refresh);
+    return () => { active = false; window.removeEventListener("clockbook-seasonal-settings", refresh); };
+  }, [workspaceId, user.tenant_id]);
+  useEffect(() => { try { setOptOut(localStorage.getItem(snowKey(user, workspaceId)) === "1"); } catch { setOptOut(false); } }, [workspaceId, user.id]);
   useEffect(() => { try { setDismissed(localStorage.getItem(acknowledged) === "1"); } catch { setDismissed(false); } }, [acknowledged]);
   useEffect(() => { setReducedSnow(false); const timeout = window.setTimeout(() => setReducedSnow(true), 30000); return () => window.clearTimeout(timeout); }, [clock.dayKey, user.id, workspaceId]);
-  const showSnow = clock.month === 12 && snowEnabled;
-  const activeModal = preview || (eventsEnabled && !birthdayIsOpen && occasion && !dismissed ? occasion : null);
+  const showSnow = clock.month === 12 && prefs?.snow && !optOut;
+  const activeModal = preview || (!birthdayIsOpen && occasion && prefs?.[occasion] && !dismissed ? occasion : null);
   function dismiss() {
     if (preview) { onPreviewClose?.(); return; }
     setDismissed(true);
     try { localStorage.setItem(acknowledged, "1"); } catch { /* presentation must not prevent working */ }
   }
   return <>
-    {showSnow && <div className={`cb-season-snow ${reducedSnow ? "cb-season-snow-subtle" : ""}`} aria-hidden="true">{Array.from({ length: 14 }, (_, i) => <span key={i} style={{ left: `${3 + (i * 37 % 94)}%`, animationDelay: `${-i * 1.8}s`, animationDuration: `${16 + i % 7 * 3}s` }}>❄</span>)}</div>}
+    {showSnow && <Snowflakes subtle={reducedSnow}/>}
+    {showSnow && <button className="cb-snow-optout" type="button" onClick={() => { try { localStorage.setItem(snowKey(user, workspaceId), "1"); } catch {} setOptOut(true); }}>Hide snow</button>}
+    {clock.month === 12 && prefs?.snow && optOut && <button className="cb-snow-optout" type="button" onClick={() => { try { localStorage.removeItem(snowKey(user, workspaceId)); } catch {} setOptOut(false); }}>Show snow</button>}
     {activeModal && <SeasonalCelebration occasion={activeModal} name={(user.name || "there").trim().split(/\s+/)[0]} logo={logo} onClose={dismiss}/>}
   </>;
 }
-export function SeasonalSettings({ user, workspaceId, onPreview }) {
-  const key = storageKey(user, workspaceId, "prefs");
-  const [prefs, setPrefs] = useState({ snow: true, events: true });
-  useEffect(() => { try { const existing = JSON.parse(localStorage.getItem(key) || "{}"); setPrefs({ snow: existing.snow !== false, events: existing.events !== false }); } catch { setPrefs({ snow: true, events: true }); } }, [key]);
-  function update(field, checked) { const next = { ...prefs, [field]: checked }; setPrefs(next); try { localStorage.setItem(key, JSON.stringify(next)); window.dispatchEvent(new Event("clockbook-seasonal-settings")); } catch { /* optional preferences */ } }
-  return <details className="cb-tmpl-card cb-season-settings">
+export function SeasonalSettings() {
+  const [prefs, setPrefs] = useState(SEASON_DEFAULTS);
+  const [error, setError] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { api.getSeasonalSettings().then(v => setPrefs({ ...SEASON_DEFAULTS, ...v })).catch(e => setError(e.message)); }, []);
+  async function update(field, checked) {
+    const next = { ...prefs, [field]: checked };
+    setSaving(true); setError("");
+    try { const saved = await api.updateSeasonalSettings(next); setPrefs(saved); window.dispatchEvent(new Event("clockbook-seasonal-settings")); }
+    catch (e) { setError(e.message); } finally { setSaving(false); }
+  }
+  return <details className="cb-tmpl-card cb-perspective-manager cb-season-settings">
     <summary className="cb-perspective-manager-toggle">Seasonal celebrations <ChevronDown size={18}/></summary>
-    <p className="cb-hint">Personal preferences for this workspace on this browser. Reduced-motion accessibility settings always take precedence.</p>
-    <label><input type="checkbox" checked={prefs.snow} onChange={e => update("snow", e.target.checked)}/> Show gentle December snowfall</label>
-    <label><input type="checkbox" checked={prefs.events} onChange={e => update("events", e.target.checked)}/> Show seasonal greetings</label>
-    <div className="cb-season-preview-buttons">{Object.entries(SEASONS).map(([id, occasion]) => <button type="button" key={id} className="cb-btn cb-btn-sm" onClick={() => onPreview(id)}>Preview {occasion.label}</button>)}</div>
+    <p className="cb-hint">Workspace-wide controls. Staff can individually hide December snowfall on their dashboard.</p>
+    {Object.entries({ halloween: "Halloween", christmas: "Christmas", yearend: "Year End", newyear: "New Year", snow: "December snowfall" }).map(([id, label]) => <label key={id}><input type="checkbox" disabled={saving} checked={prefs[id]} onChange={e => update(id, e.target.checked)}/> Enable {label}</label>)}
+    {error && <div role="alert" className="cb-error">{error}</div>}
   </details>;
 }
