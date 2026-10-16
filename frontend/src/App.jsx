@@ -1132,6 +1132,8 @@ const ACCESS_PERMISSION = {
   REPORT_OVERRIDES: "report_manual_overrides",
   REPORT_AUDIT: "report_audit",
   MANAGE_PODS: "manage_pods",
+  ASSIGN_PODS_ACROSS_PODS: "assign_pods_across_pods",
+  CHANGE_OWN_POD: "change_own_pod",
   ADD_STAFF_MANUALLY: "add_staff_manually",
   MANAGE_LEARNING_CATEGORIES: "manage_learning_categories",
   MANAGE_DELEGATION_EXCLUSIONS: "manage_delegation_exclusions",
@@ -4917,7 +4919,9 @@ function SettingsView({
                   {checkbox(ACCESS_PERMISSION.INSIGHTS_LEAVE_CAPACITY, integrationStatus.calamari_connected ? "Leave & capacity insights" : "Capacity insights", integrationStatus.calamari_connected ? "View Leave Trends and Capacity & Utilisation in Insights." : "View Capacity & Utilisation in Insights. Leave Trends will appear when Calamari is connected.")}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Team & Staff</div>
                   {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Elevated administration permissions can only be granted to Admins.</div>}
-                  {checkbox(ACCESS_PERMISSION.MANAGE_PODS, "Manage pods", "Create/delete pods and change staff or Admin pod assignments.", true)}
+                  {checkbox(ACCESS_PERMISSION.MANAGE_PODS, "Manage pods", "Create/delete pods and reassign people only within existing Admin pod scope.", true)}
+                  {checkbox(ACCESS_PERMISSION.ASSIGN_PODS_ACROSS_PODS, "Assign pods across workspace", "Change other non-Super-Admin employees’ pods across the workspace. Does not allow changing your own pod or grant access to other staff settings or reports.", true)}
+                  {checkbox(ACCESS_PERMISSION.CHANGE_OWN_POD, "Change own pod", "Change only your own pod assignment. Does not grant permission to reassign anyone else.", true)}
                   {checkbox(ACCESS_PERMISSION.ADD_STAFF_MANUALLY, "Add staff manually", "Create a new staff login directly from the Staff page.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_LEARNING_CATEGORIES, "Manage L&D categories", "Create, rename, archive and restore Learning & Development categories.", true)}
                   {checkbox(ACCESS_PERMISSION.MANAGE_DELEGATION_EXCLUSIONS, "Manage delegation exclusions", "Choose work types that Insights must never suggest for delegation.", true)}
@@ -8851,11 +8855,14 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
   const [birthdayMemberId, setBirthdayMemberId] = useState(null);
   const [invitations, setInvitations] = useState([]);
   const [invitationMessage, setInvitationMessage] = useState("");
+  const crossPodAssignments = hasAdditionalPermission(currentUser, ACCESS_PERMISSION.ASSIGN_PODS_ACROSS_PODS);
+  const canChangeOwnPod = currentUser?.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.CHANGE_OWN_POD);
+  const mayAssignPod = currentUser?.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) || crossPodAssignments;
   // Staff directory visibility follows the existing tenant-scoped member list and
   // the current Admin pod scope. Never broaden Super Admin or unassigned Admin access.
   const staffDirectoryMembers = useMemo(() => {
-    const scoped = currentUser?.role === "admin" && currentUser?.pod_id
-      ? members.filter((m) => m.pod_id === currentUser.pod_id && m.role !== "super_admin")
+    const scoped = currentUser?.role === "admin"
+      ? members.filter((m) => m.role !== "super_admin" && (crossPodAssignments || !currentUser.pod_id || m.pod_id === currentUser.pod_id))
       : members;
     // In Super Admin's simulated Admin view only, show a self entry for
     // personal preferences and ordinary staff settings without exposing other Super Admins.
@@ -8864,7 +8871,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
     // staff scope; add back only the current user's restricted demo self entry.
     const safeScoped = scoped.filter((m) => m.role !== "super_admin");
     return [{ ...currentUser, __demo_self_entry: true }, ...safeScoped.filter((m) => m.id !== currentUser.id)];
-  }, [members, currentUser, isDemoAdminMode]);
+  }, [members, currentUser, isDemoAdminMode, crossPodAssignments]);
   const settingUpMember = staffDirectoryMembers.find((m) => m.id === settingUpId);
   useEffect(() => {
     if (settingUpId && !staffDirectoryMembers.some((m) => m.id === settingUpId)) setSettingUpId(null);
@@ -8976,8 +8983,9 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
         </div>
       )}
       <div className="cb-card-list">
-        {staffDirectoryMembers.map((m) => (
-          <div className="cb-row" key={m.id}>
+        {staffDirectoryMembers.map((m) => {
+          const podAssignmentOnly = currentUser?.role === "admin" && !!currentUser.pod_id && m.pod_id !== currentUser.pod_id && m.id !== currentUser.id;
+          return <div className="cb-row" key={m.id}>
             <div className="cb-row-main" style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <Avatar member={m} size={28} />
               <div>
@@ -8993,7 +9001,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
               </div>
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              {isAdmin && (
+              {isAdmin && !podAssignmentOnly && (
                 <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap" }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 5 }}>
                     Capacity
@@ -9027,7 +9035,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   </label>
                 </div>
               )}
-              {isAdmin && (
+              {isAdmin && !podAssignmentOnly && (
                 <select
                   className="cb-select"
                   style={{ width: 118, minWidth: 118, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
@@ -9040,7 +9048,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   <option value="remote">Remote</option>
                 </select>
               )}
-              {isAdmin && (
+              {isAdmin && !podAssignmentOnly && (
                 <div style={{ width: 180, minWidth: 180 }}>
                   <SearchableSelect
                     options={timezoneOptions}
@@ -9054,18 +9062,18 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   />
                 </div>
               )}
-              {!m.__demo_self_entry && (currentUser.role === "super_admin" || hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS)) && pods.length > 0 && (
+              {((m.id === currentUser.id ? canChangeOwnPod : mayAssignPod) && pods.length > 0) && (
                 <select
                   className="cb-select"
                   style={{ width: 150, padding: "6px 24px 6px 10px", fontSize: 12.5 }}
                   value={m.pod_id || ""}
                   onChange={(e) => onAssignPod(m.id, e.target.value || null)}
                 >
-                  <option value="">No pod</option>
-                  {pods.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  {(m.id === currentUser.id ? canChangeOwnPod : (currentUser.role !== "admin" || !currentUser.pod_id || crossPodAssignments)) && <option value="">No pod</option>}
+                  {pods.filter((p) => m.id === currentUser.id ? canChangeOwnPod : (currentUser.role !== "admin" || !currentUser.pod_id || crossPodAssignments || p.id === currentUser.pod_id)).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                 </select>
               )}
-              {m.__demo_self_entry && (
+              {m.__demo_self_entry && !canChangeOwnPod && (
                 <div
                   className="cb-select"
                   title="Pod assignment cannot be changed in Admin Demo Mode"
@@ -9074,7 +9082,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
                 </div>
               )}
-              {currentUser.role === "admin" && !hasAdditionalPermission(currentUser, ACCESS_PERMISSION.MANAGE_PODS) && !m.__demo_self_entry && (
+              {currentUser.role === "admin" && !(m.id === currentUser.id ? canChangeOwnPod : mayAssignPod) && !m.__demo_self_entry && (
                 <div
                   className="cb-select"
                   title="Pod assignments require authorised Admin access"
@@ -9083,7 +9091,7 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                   {(pods.find((p) => p.id === m.pod_id) || {}).name || "No pod"}
                 </div>
               )}
-              <StaffRowMenu
+              {!podAssignmentOnly && <StaffRowMenu
                 items={[
                   ...(m.id === currentUser.id ? [
                     {
@@ -9102,10 +9110,10 @@ function StaffView({ members, currentUser, isAdmin, isDemoAdminMode = false, onA
                     ...(m.id !== currentUser.id ? [{ label: "Delete", danger: true, onClick: () => handleDelete(m) }] : []),
                   ] : []),
                 ]}
-              />
+              />}
             </div>
-          </div>
-        ))}
+          </div>;
+        })}
       </div>
       {birthdayMemberId && <BirthdayPreferences key={birthdayMemberId} member={staffDirectoryMembers.find(m => m.id === birthdayMemberId)} onClose={() => setBirthdayMemberId(null)} />}
       {settingUpMember && (
