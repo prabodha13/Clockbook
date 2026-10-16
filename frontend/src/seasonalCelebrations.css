@@ -23,3 +23,7 @@
 .cb-season-snow-preview{z-index:9998;opacity:1;mask-image:none;-webkit-mask-image:none}
 .cb-season-snow-preview span{color:#5c7e91;font-size:clamp(17px,2vw,24px);opacity:.78;text-shadow:0 1px 3px #ffffffaa}
 @media(max-width:640px){.cb-season-snow-preview span:nth-child(n+7){display:block}.cb-season-snow-preview span:nth-child(n+19){display:none}}
+
+/* Preview follows the real 30-second fade while remaining legible on Settings. */
+.cb-season-snow-preview.cb-season-snow-subtle{opacity:.38}
+.cb-season-snow-preview.cb-season-snow-subtle span{opacity:.55}

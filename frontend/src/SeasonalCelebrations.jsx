@@ -58,7 +58,12 @@ function Snowflakes({ subtle = false, preview = false }) {
   return <div className={`cb-season-snow ${subtle ? "cb-season-snow-subtle" : ""} ${preview ? "cb-season-snow-preview" : ""}`} aria-hidden="true">{Array.from({ length: count }, (_, i) => <span key={i} style={{ left: `${3 + (i * 37 % 94)}%`, animationDelay: `${-i * 1.8}s`, animationDuration: `${16 + i % 7 * 3}s` }}>❄</span>)}</div>;
 }
 export function SnowfallPreview({ onClose }) {
-  return <><Snowflakes preview/><div className="cb-snow-preview-control"><button type="button" className="cb-btn cb-btn-primary" onClick={onClose}>Close snowfall preview</button></div></>;
+  const [reducedSnow, setReducedSnow] = useState(false);
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setReducedSnow(true), 30000);
+    return () => window.clearTimeout(timeout);
+  }, []);
+  return <><Snowflakes preview subtle={reducedSnow}/><div className="cb-snow-preview-control"><button type="button" className="cb-btn cb-btn-primary" onClick={onClose}>Close snowfall preview</button></div></>;
 }
 export function SeasonalExperience({ user, workspaceId, logo = "", now, birthdayIsOpen = false, preview = null, onPreviewClose }) {
   const clock = userLocalClock(new Date(now), user.timezone_name);
