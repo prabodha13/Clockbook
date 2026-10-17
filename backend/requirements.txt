@@ -3,7 +3,7 @@ starlette==1.6.0
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.35
 psycopg2-binary==2.9.9
-pydantic==2.9.2
+pydantic==2.13.5
 bcrypt==4.2.0
 httpx==0.28.1
 alembic==1.13.3
