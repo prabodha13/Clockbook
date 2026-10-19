@@ -235,11 +235,17 @@ class ClientOut(BaseModel):
     version: int = 1
     name: str
     code: Optional[str] = None
+    pod_id: Optional[str] = None
 
 
 class ClientCreate(BaseModel):
     name: str = Field(min_length=1, max_length=240)
     code: str = Field(min_length=1, max_length=80)
+    expected_version: Optional[int] = Field(default=None, ge=1)
+
+
+class ClientPodUpdate(BaseModel):
+    pod_id: Optional[str] = None
     expected_version: Optional[int] = Field(default=None, ge=1)
 
 

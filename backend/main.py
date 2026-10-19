@@ -566,6 +566,8 @@ def run_startup_migrations():
         with engine.begin() as conn:
             if "code" not in existing_client_columns:
                 conn.execute(text("ALTER TABLE clients ADD COLUMN code VARCHAR"))
+            if "pod_id" not in existing_client_columns:
+                conn.execute(text("ALTER TABLE clients ADD COLUMN pod_id VARCHAR"))
 
     if "task_type_options" in inspector.get_table_names():
         existing_task_type_columns = {c["name"] for c in inspector.get_columns("task_type_options")}
@@ -1031,6 +1033,7 @@ def is_admin_or_above(role):
 # Fine-grained permissions that a Super Admin may delegate without creating another role.
 # Security/workspace ownership controls deliberately stay Super-Admin-only.
 PERMISSION_INSIGHTS_LEAVE_CAPACITY = "insights_leave_capacity"
+PERMISSION_REPORT_CLIENT_WORKLOAD = "report_client_workload"
 PERMISSION_REPORT_HELP = "report_help"
 PERMISSION_REPORT_OVERRIDES = "report_manual_overrides"
 PERMISSION_REPORT_AUDIT = "report_audit"
@@ -1054,6 +1057,7 @@ DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_BIRTHDAY_WISHES,
     PERMISSION_PERSPECTIVES,
     PERMISSION_REPORT_HELP,
+    PERMISSION_REPORT_CLIENT_WORKLOAD,
     PERMISSION_REPORT_OVERRIDES,
     PERMISSION_REPORT_AUDIT,
     PERMISSION_MANAGE_PODS,
@@ -4551,6 +4555,130 @@ def get_insights(
 
 
 # ---------------------------------------------------------------
+# Client workload & efficiency (read-only, tenant/pod restricted)
+# ---------------------------------------------------------------
+
+def _workload_bucket(work_date, grouping):
+    if grouping == "weekly":
+        monday = work_date - timedelta(days=work_date.weekday())
+        return monday.strftime("%Y-%m-%d")
+    if grouping == "yearly":
+        return str(work_date.year)
+    return work_date.strftime("%Y-%m")
+
+
+def _workload_task_kind(task):
+    name = (task.name or "").strip().casefold()
+    label = (task.tracks_number_label or "").strip().casefold()
+    if name == "aged payables review":
+        return "ap", None
+    if name == "aged receivables review":
+        return "ar", None
+    if "dext" in label and "bill" in label:
+        return "dext", "Dext bills"
+    if "transaction" in label or "bank" in label:
+        return "bank", (task.bank_account_name or "Unspecified bank account").strip()
+    return "other", None
+
+
+def _workload_empty():
+    return {"bank_count": 0, "bank_seconds": 0.0, "dext_count": 0, "dext_seconds": 0.0,
+            "ap_seconds": 0.0, "ar_seconds": 0.0, "total_seconds": 0.0, "bank_accounts": {}}
+
+
+def _workload_stats(row):
+    accounts = sorted(({
+        "name": key, "processed": value["count"], "seconds": round(value["seconds"], 2),
+        "minutes_per_item": round(value["seconds"] / 60 / value["count"], 3) if value["count"] > 0 else None,
+    } for key, value in row["bank_accounts"].items()), key=lambda a: a["name"].casefold())
+    return {
+        "bank_count": row["bank_count"], "bank_seconds": round(row["bank_seconds"], 2),
+        "bank_minutes_per_item": round(row["bank_seconds"] / 60 / row["bank_count"], 3) if row["bank_count"] > 0 else None,
+        "dext_count": row["dext_count"], "dext_seconds": round(row["dext_seconds"], 2),
+        "dext_minutes_per_item": round(row["dext_seconds"] / 60 / row["dext_count"], 3) if row["dext_count"] > 0 else None,
+        "ap_seconds": round(row["ap_seconds"], 2), "ar_seconds": round(row["ar_seconds"], 2),
+        "total_seconds": round(row["total_seconds"], 2), "bank_accounts": accounts,
+    }
+
+
+@app.get("/api/reports/client-workload")
+def client_workload_report(
+    grouping: str = "monthly", date_from: str = "", date_to: str = "", client_id: str = "",
+    current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db),
+):
+    _require_delegated_admin_permission(current_member, PERMISSION_REPORT_CLIENT_WORKLOAD,
+                                        "You do not have access to the Client Workload Report")
+    if grouping not in ("weekly", "monthly", "yearly"):
+        raise HTTPException(400, "Invalid comparison period")
+    try:
+        lower = date.fromisoformat(date_from) if date_from else None
+        upper = date.fromisoformat(date_to) if date_to else None
+    except ValueError:
+        raise HTTPException(400, "Dates must use YYYY-MM-DD")
+    if lower and upper and lower > upper:
+        raise HTTPException(400, "Start date must not be later than end date")
+    tenant_id = current_member.tenant_id
+    query = db.query(models.Client).filter(models.Client.tenant_id == tenant_id,
+                                           models.Client.id != _unassigned_client_id(tenant_id))
+    # Never expose unassigned client data to delegated users. Scope by client ownership,
+    # not by the pod of the employee who did the work.
+    if current_member.role != "super_admin":
+        if not current_member.pod_id:
+            return {"grouping": grouping, "clients": []}
+        query = query.filter(models.Client.pod_id == current_member.pod_id)
+    if client_id:
+        query = query.filter(models.Client.id == client_id)
+    clients = query.order_by(models.Client.name).all()
+    if not clients:
+        return {"grouping": grouping, "clients": []}
+    client_map = {c.id: c for c in clients}
+    records = (db.query(models.TaskInstance)
+               .filter(models.TaskInstance.tenant_id == tenant_id,
+                       models.TaskInstance.client_id.in_(list(client_map)),
+                       models.TaskInstance.status == "submitted").all())
+    rows = {c.id: {"summary": _workload_empty(), "periods": {}} for c in clients}
+    for task in records:
+        work_at = _insights_task_work_date(task)
+        if not work_at:
+            continue
+        work_date = work_at.date()
+        if lower and work_date < lower or upper and work_date > upper:
+            continue
+        period = _workload_bucket(work_date, grouping)
+        client_row = rows[task.client_id]
+        period_row = client_row["periods"].setdefault(period, _workload_empty())
+        seconds = _insights_task_seconds(task)
+        kind, account = _workload_task_kind(task)
+        quantity = (int(task.start_count) - int(task.end_count)
+                    if task.start_count is not None and task.end_count is not None else None)
+        # Existing count fields are outstanding stock levels: start - end is the net reduction.
+        for target in (client_row["summary"], period_row):
+            target["total_seconds"] += seconds
+            if kind == "ap":
+                target["ap_seconds"] += seconds
+            elif kind == "ar":
+                target["ar_seconds"] += seconds
+            elif kind == "dext":
+                target["dext_seconds"] += seconds
+                if quantity is not None:
+                    target["dext_count"] += quantity
+            elif kind == "bank":
+                target["bank_seconds"] += seconds
+                if quantity is not None:
+                    target["bank_count"] += quantity
+                acc = target["bank_accounts"].setdefault(account, {"count": 0, "seconds": 0.0})
+                acc["seconds"] += seconds
+                if quantity is not None:
+                    acc["count"] += quantity
+    return {"grouping": grouping, "clients": [{
+        "id": c.id, "name": c.name, "code": c.code, "pod_id": c.pod_id,
+        "summary": _workload_stats(rows[c.id]["summary"]),
+        "periods": [{"period": key, **_workload_stats(value)}
+                    for key, value in sorted(rows[c.id]["periods"].items())],
+    } for c in clients]}
+
+
+# ---------------------------------------------------------------
 # Clients
 # ---------------------------------------------------------------
 
@@ -4594,6 +4722,25 @@ def create_client(payload: schemas.ClientCreate, current_member: models.Member =
     except IntegrityError:
         db.rollback()
         raise HTTPException(400, f'The code "{code}" is already in use')
+    db.refresh(client)
+    return client
+
+
+@app.patch("/api/clients/{client_id}/pod", response_model=schemas.ClientOut)
+def update_client_pod(client_id: str, payload: schemas.ClientPodUpdate, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
+    # Client ownership influences a delegated report: only Super Admins may change it.
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Only Super Admins may assign client pods")
+    client = db.get(models.Client, client_id)
+    if not client or client.tenant_id != current_member.tenant_id:
+        raise HTTPException(404, "Client not found")
+    _require_expected_version(client, payload.expected_version)
+    if payload.pod_id:
+        pod = db.get(models.Pod, payload.pod_id)
+        if not pod or pod.tenant_id != current_member.tenant_id:
+            raise HTTPException(404, "Pod not found")
+    client.pod_id = payload.pod_id
+    db.commit()
     db.refresh(client)
     return client
 

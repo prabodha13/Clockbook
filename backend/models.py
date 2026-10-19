@@ -307,6 +307,7 @@ class Client(TenantScopedMixin, VersionedMixin, Base):
     id = Column(String, primary_key=True, default=lambda: gen_id("cli"))
     name = Column(String, nullable=False)
     code = Column(String, nullable=True)
+    pod_id = Column(String, ForeignKey("pods.id"), nullable=True)
 
 
 class BankAccount(TenantScopedMixin, VersionedMixin, Base):
