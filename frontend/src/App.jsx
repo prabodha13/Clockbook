@@ -10666,6 +10666,7 @@ function WorkloadTrendChart({ periods, metric, title, suffix = "" }) {
 }
 
 function ClientWorkloadReportView() {
+  const [selectedBank, setSelectedBank] = useState("");
   const [grouping, setGrouping] = useState("monthly");
   const [clientId, setClientId] = useState("");
   const [dateFrom, setDateFrom] = useState("");
