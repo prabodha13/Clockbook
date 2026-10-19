@@ -5033,7 +5033,32 @@ def learning_library(keyword: str = "", category: str = "", letter: str = "", cu
 
     query = db.query(models.LearningRecord)
     if category:
-        query = query.filter(func.lower(models.LearningRecord.category) == category.lower())
+        # Learning records preserve their original category label. Include earlier labels
+        # from this category's rename audit history so renamed categories remain searchable.
+        category_names = {category.lower()}
+        configured = db.query(models.LearningCategory).filter(
+            func.lower(models.LearningCategory.name) == category.lower()
+        ).first()
+        if configured:
+            rename_events = db.query(models.AuditEvent).filter(
+                models.AuditEvent.entity_type == "LearningCategory",
+                models.AuditEvent.entity_id == configured.id,
+                models.AuditEvent.action == "update",
+            ).all()
+            for event in rename_events:
+                name_change = (event.changes or {}).get("name")
+                if isinstance(name_change, dict):
+                    for label in (name_change.get("before"), name_change.get("after")):
+                        if isinstance(label, str) and label.strip():
+                            category_names.add(label.strip().lower())
+            # Do not claim labels that now belong to a different configured category.
+            other_labels = db.query(models.LearningCategory.name).filter(
+                models.LearningCategory.id != configured.id
+            ).all()
+            category_names.difference_update(
+                label.lower() for (label,) in other_labels if label.lower() != category.lower()
+            )
+        query = query.filter(func.lower(models.LearningRecord.category).in_(category_names))
     if letter:
         query = query.filter(func.upper(func.substr(models.LearningRecord.topic, 1, 1)) == letter)
     records = query.order_by(models.LearningRecord.learned_at.desc()).all()
