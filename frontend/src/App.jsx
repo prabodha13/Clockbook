@@ -10642,26 +10642,61 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   </div>;
 }
 
-function WorkloadTrendChart({ periods, metric, title, suffix = "" }) {
-  const values = periods.map((p) => Number(p[metric] || 0));
-  const max = Math.max(1, ...values);
-  const w = 670, h = 180, left = 54, top = 18, bottom = 32, right = 12;
-  const x = (i) => left + i * (w - left - right) / Math.max(1, periods.length - 1);
-  const y = (v) => top + (1 - v / max) * (h - top - bottom);
-  const path = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-  return <div className="cb-tmpl-card" style={{ padding: 14, minWidth: 0 }}>
-    <div style={{ fontWeight: 750, marginBottom: 8 }}>{title}</div>
-    {!periods.length ? <div className="cb-hint">No submitted entries for the selected range.</div> :
-      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${title} trend`} style={{ display: "block", width: "100%", maxHeight: 220 }}>
-        {[0, 0.5, 1].map((f) => <g key={f}>
-          <line x1={left} x2={w-right} y1={y(max*f)} y2={y(max*f)} stroke="var(--border)" />
-          <text x={left-7} y={y(max*f)+4} textAnchor="end" fontSize="11" fill="var(--ink-soft)">{Number((max*f).toFixed(2)).toLocaleString()}{suffix}</text>
-        </g>)}
-        <path d={path} fill="none" stroke="var(--accent, #5483aa)" strokeWidth="2.5" strokeLinejoin="round" />
-        {values.map((v,i) => <circle key={i} cx={x(i)} cy={y(v)} r="3.5" fill="var(--accent, #5483aa)"><title>{periods[i].period}: {v.toFixed(2)}{suffix}</title></circle>)}
-        {periods.map((p,i) => (periods.length <= 8 || i % Math.ceil(periods.length/8) === 0) ?
-          <text key={p.period} x={x(i)} y={h-8} textAnchor="middle" fontSize="10" fill="var(--ink-soft)">{p.period}</text> : null)}
-      </svg>}
+function WorkloadComparisonChart({ periods, title, series, formatValue = (v) => Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }) }) {
+  const width = 900, height = 292, left = 64, right = 22, top = 22, bottom = 54;
+  const plotW = width - left - right, plotH = height - top - bottom;
+  const colors = ["#286d78", "#d58a34", "#7259a5", "#5d9c64", "#c16a7a", "#577ba8", "#929041", "#997258"];
+  const lines = series.map((item, index) => ({ ...item, color: colors[index % colors.length] }));
+  const allValues = lines.flatMap((item) => periods.map((period) => Number(item.get(period)))).filter(Number.isFinite);
+  const minimum = Math.min(0, ...allValues);
+  const maximum = Math.max(1, ...allValues);
+  const span = maximum - minimum || 1;
+  const x = (i) => left + (periods.length === 1 ? plotW / 2 : i * plotW / (periods.length - 1));
+  const y = (v) => top + ((maximum - v) / span) * plotH;
+  const formatPeriod = (period) => {
+    const label = String(period || "");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(label)) return label.slice(5);
+    if (/^\d{4}-\d{2}$/.test(label)) return label.slice(0, 4) + "-" + label.slice(5);
+    return label;
+  };
+  const ticks = [0, 0.5, 1].map((fraction) => minimum + span * fraction);
+  const hasData = periods.length > 0 && allValues.some((value) => value !== 0);
+  return <div className="cb-tmpl-card" style={{ padding: "18px 18px 12px", minWidth: 0 }}>
+    <div style={{ fontWeight: 750, fontSize: 15, marginBottom: 12 }}>{title}</div>
+    {!hasData ? <div className="cb-hint" style={{ padding: "48px 0", textAlign: "center" }}>No recorded activity for these periods.</div> : <>
+      <div style={{ overflowX: "auto" }}>
+        <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${title} comparison`} style={{ display: "block", width: "100%", minWidth: 470, maxHeight: 310 }}>
+          {ticks.map((tick, index) => <g key={index}>
+            <line x1={left} x2={width - right} y1={y(tick)} y2={y(tick)} stroke="var(--line)" strokeDasharray="4 4" />
+            <text x={left - 12} y={y(tick) + 4} textAnchor="end" fontSize="12" fill="var(--ink-soft)">{formatValue(tick)}</text>
+          </g>)}
+          {periods.map((p, index) => (periods.length <= 9 || index % Math.ceil(periods.length / 9) === 0 || index === periods.length - 1) ?
+            <text key={`${p.period}-${index}`} x={x(index)} y={height - 24} textAnchor="middle" fontSize="12" fill="var(--ink-soft)">{formatPeriod(p.period)}</text> : null)}
+          {lines.map((line) => {
+            const segments = [];
+            let segment = [];
+            periods.forEach((period, index) => {
+              const value = line.get(period);
+              if (value == null || !Number.isFinite(Number(value))) {
+                if (segment.length) segments.push(segment);
+                segment = [];
+              } else segment.push({ index, value: Number(value) });
+            });
+            if (segment.length) segments.push(segment);
+            return <g key={line.label}>
+              {segments.map((points, index) => <path key={index} d={points.map((point, i) => `${i ? "L" : "M"}${x(point.index).toFixed(1)},${y(point.value).toFixed(1)}`).join(" ")} fill="none" stroke={line.color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />)}
+              {periods.map((period, index) => {
+                const value = line.get(period);
+                return value == null || !Number.isFinite(Number(value)) ? null : <circle key={index} cx={x(index)} cy={y(Number(value))} r="4" fill={line.color}><title>{`${line.label}, ${period.period}: ${formatValue(Number(value))}`}</title></circle>;
+              })}
+            </g>;
+          })}
+        </svg>
+      </div>
+      <div style={{ display: "flex", justifyContent: "center", flexWrap: "wrap", gap: "8px 18px", marginTop: 6 }}>
+        {lines.map((line) => <span key={line.label} style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12 }}><span style={{ display: "inline-block", width: 18, height: 3, borderRadius: 2, background: line.color }} />{line.label}</span>)}
+      </div>
+    </>}
   </div>;
 }
 
@@ -10725,30 +10760,38 @@ function ClientWorkloadReportView() {
       <tbody>{accessible.map((c) => <tr key={c.id}><td><button className="cb-btn cb-btn-sm" onClick={() => setClientId(c.id)}>{c.name}</button></td><td className="num">{c.summary.bank_count}</td><td className="num">{hours(c.summary.bank_seconds)}</td><td className="num">{c.summary.dext_count}</td><td className="num">{hours(c.summary.dext_seconds)}</td><td className="num">{hours(c.summary.ap_seconds)}</td><td className="num">{hours(c.summary.ar_seconds)}</td><td className="num">{hours(c.summary.total_seconds)}</td></tr>)}</tbody></table></div>}
     {selected && <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0" }}><h3>{selected.name}</h3><button className="cb-btn cb-btn-sm" onClick={() => setClientId("")}>All clients</button></div>
-      <div className="cb-insight-grid" style={{ marginBottom: 16 }}>
-        {[["Bank transactions", selected.summary.bank_count], ["Bank processing", hours(selected.summary.bank_seconds)], ["Bank average", average(selected.summary.bank_minutes_per_item)], ["Dext bills", selected.summary.dext_count], ["Dext processing", hours(selected.summary.dext_seconds)], ["Dext average", average(selected.summary.dext_minutes_per_item)], ["AP review", hours(selected.summary.ap_seconds)], ["AR review", hours(selected.summary.ar_seconds)], ["Total client time", hours(selected.summary.total_seconds)]].map(([label, value]) => <div className="cb-tmpl-card" key={label} style={{ padding: 12, minWidth: 130 }}><div className="cb-hint">{label}</div><div style={{ fontWeight: 800, fontSize: 20 }}>{value}</div></div>)}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(230px,1fr))", gap: 12, marginBottom: 16 }}>
+        {[["Bank transactions", Number(selected.summary.bank_count || 0).toLocaleString()], ["Dext bills", Number(selected.summary.dext_count || 0).toLocaleString()], ["Total client hours", hours(selected.summary.total_seconds)], ["AP / AR review", `${hours(selected.summary.ap_seconds)} / ${hours(selected.summary.ar_seconds)}`]].map(([label, value]) => <div className="cb-tmpl-card" key={label} style={{ padding: 14 }}><div className="cb-hint">{label}</div><div style={{ fontSize: 23, fontWeight: 800, marginTop: 3 }}>{value}</div></div>)}
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12, marginBottom: 16 }}>
-        <WorkloadTrendChart periods={selected.periods} metric="bank_count" title="Bank transaction volume" />
-        <WorkloadTrendChart periods={selected.periods} metric="bank_seconds" title="Bank processing time (seconds)" suffix="s" />
-        <WorkloadTrendChart periods={selected.periods} metric="bank_minutes_per_item" title="Bank average minutes / transaction" />
-        <WorkloadTrendChart periods={selected.periods} metric="dext_count" title="Dext bill volume" />
-        <WorkloadTrendChart periods={selected.periods} metric="dext_seconds" title="Dext processing time (seconds)" suffix="s" />
-        <WorkloadTrendChart periods={selected.periods} metric="dext_minutes_per_item" title="Dext average minutes / bill" />
-        <WorkloadTrendChart periods={selected.periods} metric="ap_seconds" title="AP review time (seconds)" suffix="s" />
-        <WorkloadTrendChart periods={selected.periods} metric="ar_seconds" title="AR review time (seconds)" suffix="s" />
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr)", gap: 16, marginBottom: 18 }}>
+        <WorkloadComparisonChart periods={selected.periods} title="Workload volumes by period" series={[
+          { label: "Bank transactions", get: (p) => p.bank_count },
+          { label: "Dext bills", get: (p) => p.dext_count },
+        ]} />
+        <WorkloadComparisonChart periods={selected.periods} title="Average processing time by bank / gateway and Dext (minutes per item)" series={[
+          ...bankNames.map((name) => ({ label: name, get: (p) => p.bank_accounts.find((a) => a.name === name)?.minutes_per_item ?? null })),
+          { label: "Dext bills", get: (p) => p.dext_minutes_per_item },
+        ]} formatValue={(v) => `${Number(v).toFixed(2)} min`} />
+        <WorkloadComparisonChart periods={selected.periods} title="Processing and review time by period (hours)" series={[
+          { label: "Bank processing", get: (p) => Number(p.bank_seconds || 0) / 3600 },
+          { label: "Dext processing", get: (p) => Number(p.dext_seconds || 0) / 3600 },
+          { label: "AP review", get: (p) => Number(p.ap_seconds || 0) / 3600 },
+          { label: "AR review", get: (p) => Number(p.ar_seconds || 0) / 3600 },
+        ]} formatValue={(v) => `${Number(v).toFixed(1)} h`} />
       </div>
-      <div className="cb-tmpl-card" style={{ padding: 14, marginBottom: 16 }}>
-        <label className="cb-hint">Bank / payment gateway
-          <select className="cb-input" value={activeBank} onChange={(e) => setSelectedBank(e.target.value)} style={{ maxWidth: 300 }}>
+      <div className="cb-tmpl-card" style={{ padding: 14, marginBottom: 18 }}>
+        <label className="cb-hint">Bank / payment gateway detail
+          <select className="cb-input" value={activeBank} onChange={(e) => setSelectedBank(e.target.value)} style={{ maxWidth: 320 }}>
             {bankNames.map((name) => <option key={name} value={name}>{name}</option>)}
           </select>
         </label>
-        {activeBank ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 12, marginTop: 12 }}>
-          <WorkloadTrendChart periods={bankPeriods} metric="processed" title={`${activeBank}: net transactions processed`} />
-          <WorkloadTrendChart periods={bankPeriods} metric="seconds" title={`${activeBank}: time (seconds)`} suffix="s" />
-          <WorkloadTrendChart periods={bankPeriods} metric="minutes_per_item" title={`${activeBank}: average minutes / transaction`} />
-        </div> : <div className="cb-hint">No submitted bank accounts for the selected period.</div>}
+        {activeBank ? <div style={{ marginTop: 12 }}>
+          <div className="cb-hint" style={{ marginBottom: 10 }}>Selected account: {activeBank}. Count and average use this account only.</div>
+          <WorkloadComparisonChart periods={bankPeriods} title={`${activeBank}: volume and processing time`} series={[
+            { label: "Transactions processed", get: (p) => p.processed },
+          ]} />
+          <div style={{ overflowX: "auto", marginTop: 12 }}><table className="cb-table"><thead><tr><th>Period</th><th className="num">Processed</th><th className="num">Processing time</th><th className="num">Average / transaction</th></tr></thead><tbody>{bankPeriods.map((p) => <tr key={p.period}><td>{p.period}</td><td className="num">{Number(p.processed).toLocaleString()}</td><td className="num">{minutes(p.seconds)}</td><td className="num">{average(p.minutes_per_item)}</td></tr>)}</tbody></table></div>
+        </div> : <div className="cb-hint" style={{ marginTop: 12 }}>No submitted bank accounts for the selected period.</div>}
       </div>
       <h3>Bank & payment gateway breakdown</h3>
       <div style={{ overflowX: "auto", marginBottom: 18 }}><table className="cb-table"><thead><tr><th>Bank / gateway</th><th className="num">Net transactions processed</th><th className="num">Time</th><th className="num">Average / transaction</th></tr></thead><tbody>{selected.summary.bank_accounts.map((a) => <tr key={a.name}><td>{a.name}</td><td className="num">{a.processed}</td><td className="num">{minutes(a.seconds)}</td><td className="num">{average(a.minutes_per_item)}</td></tr>)}</tbody></table></div>
