@@ -302,3 +302,31 @@ def test_management_ld_report_admin_can_edit_category_only_within_scope():
         assert denied.value.status_code == 403
     finally:
         s.close()
+
+
+def test_library_finds_existing_learnings_after_category_rename_with_tenant_isolation():
+    s = database.SessionLocal()
+    try:
+        tenant_a = 'tenant_ld_rename_a'
+        tenant_b = 'tenant_ld_rename_b'
+        _tenant(s, tenant_a, 'ld-rename-a')
+        admin_a = _member(s, tenant_a, 'admin-rename-a@example.com', role='super_admin')
+        s.info['actor_member_id'] = admin_a.id
+        employee_a = _member(s, tenant_a, 'employee-rename-a@example.com')
+        _seed_learning(s, tenant_a)
+        original = s.query(models.LearningCategory).filter(models.LearningCategory.name == 'Tax').one()
+        task_a = models.TaskInstance(client_id=main._unassigned_client_id(tenant_a), client_name=main.UNASSIGNED_CLIENT_NAME, name=main.BUILTIN_LEARNING_TASK_TYPE, task_type=main.BUILTIN_LEARNING_TASK_TYPE, owner_id=employee_a.id, status='submitted', segments=[])
+        s.add(task_a); s.flush()
+        s.add(models.LearningRecord(task_id=task_a.id, member_id=employee_a.id, member_name=employee_a.name, category='Tax', topic='Old category topic', what_i_learned='Original content remains unchanged', duration_seconds=60))
+        s.commit()
+        main.update_learning_category(original.id, schemas.LearningCategoryUpdate(name='Tax and Revenue', expected_version=original.version), current_member=admin_a, db=s)
+        results = main.learning_library(category='Tax and Revenue', current_member=employee_a, db=s)
+        assert len(results) == 1 and results[0].records[0].topic == 'Old category topic'
+        assert s.query(models.LearningRecord).filter(models.LearningRecord.task_id == task_a.id).one().category == 'Tax'
+
+        _tenant(s, tenant_b, 'ld-rename-b')
+        employee_b = _member(s, tenant_b, 'employee-rename-b@example.com')
+        _seed_learning(s, tenant_b)
+        assert main.learning_library(category='Tax and Revenue', current_member=employee_b, db=s) == []
+    finally:
+        s.close()
