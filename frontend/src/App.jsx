@@ -1210,7 +1210,7 @@ function WorkspaceLogo({ workspace, size = 22 }) {
   );
 }
 
-function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, realIsSuperAdmin = false, showDemoModeControls = true, onToggleDemoModeControls, timerActionPending = null }) {
+function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onComplete, onQuickMeeting, onStartTour, workspaces = [], activeWorkspaceId = "", onSwitchWorkspace, realIsSuperAdmin = false, demoViewMode = "super_admin", showDemoModeControls = true, onToggleDemoModeControls, timerActionPending = null }) {
   const isAdmin = isAdminRole(currentUser.role);
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
   const workspaceMenuRef = useRef(null);
@@ -1273,7 +1273,7 @@ function TopBar({ currentUser, onLogout, pinnedTask, now, onPause, onResume, onC
                     style={{ width: "100%", display: "flex", alignItems: "center", gap: 9, padding: "8px 9px", border: 0, borderRadius: 7, background: workspace.id === activeWorkspace.id ? "var(--paper-soft)" : "transparent", color: "var(--ink)", cursor: "pointer", textAlign: "left", font: "inherit" }}
                   >
                     <WorkspaceLogo workspace={workspace} size={24} />
-                    <span style={{ minWidth: 0 }}><span style={{ display: "block", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{workspace.name}</span><span className="cb-hint">{roleLabel(workspace.role)}</span></span>
+                    <span style={{ minWidth: 0 }}><span style={{ display: "block", fontWeight: 650, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{workspace.name}</span><span className="cb-hint">{realIsSuperAdmin && workspace.role === "super_admin" && demoViewMode !== "super_admin" ? (demoViewMode === "member" ? "Staff" : "Admin") : roleLabel(workspace.role)}</span></span>
                   </button>
                 ))}
               </div>
@@ -14386,6 +14386,7 @@ export default function App() {
             activeWorkspaceId={activeWorkspaceId}
             onSwitchWorkspace={switchWorkspace}
             realIsSuperAdmin={realIsSuperAdmin}
+            demoViewMode={superAdminViewMode}
             showDemoModeControls={showDemoModeControls}
             onToggleDemoModeControls={toggleSuperAdminDemoControls}
             timerActionPending={timerActionPending}
