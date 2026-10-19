@@ -146,6 +146,8 @@ export const api = {
   deleteMember: (memberId) => request(`/members/${memberId}`, { method: "DELETE" }),
 
   getClients: () => request("/clients"),
+  setClientPod: (id, podId, expectedVersion) => request(`/clients/${id}/pod`, { method: "PATCH", body: JSON.stringify({ pod_id: podId || null, expected_version: expectedVersion }) }),
+  getClientWorkload: (grouping, clientId, dateFrom, dateTo) => request(`/reports/client-workload?${new URLSearchParams({ grouping, client_id: clientId || "", date_from: dateFrom || "", date_to: dateTo || "" })}`),
   createClient: (name, code) => request("/clients", { method: "POST", body: JSON.stringify({ name, code }) }),
   importClients: (rows) => request("/clients/import", { method: "POST", body: JSON.stringify({ rows }) }),
   updateClient: (id, name, code, expectedVersion) => request(`/clients/${id}`, { method: "PATCH", body: JSON.stringify({ name, code, expected_version: expectedVersion }) }),

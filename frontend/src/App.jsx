@@ -1129,6 +1129,7 @@ const ACCESS_PERMISSION = {
   PERSPECTIVES: "manage_daily_perspectives",
   INSIGHTS_LEAVE_CAPACITY: "insights_leave_capacity",
   REPORT_HELP: "report_help",
+  REPORT_CLIENT_WORKLOAD: "report_client_workload",
   REPORT_OVERRIDES: "report_manual_overrides",
   REPORT_AUDIT: "report_audit",
   MANAGE_PODS: "manage_pods",
@@ -1154,10 +1155,11 @@ function hasAdditionalPermission(member, permission) {
 
 function reportModesForMember(member) {
   if (!member) return [];
-  if (member.role === "super_admin") return ["help", "overrides", "inactivity", "integrity"];
+  if (member.role === "super_admin") return ["help", "overrides", "inactivity", "integrity", "workload"];
   if (member.role !== "admin") return [];
   const modes = [];
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_HELP)) modes.push("help");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_CLIENT_WORKLOAD)) modes.push("workload");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_OVERRIDES)) modes.push("overrides");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_AUDIT)) modes.push("inactivity");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.TIME_INTEGRITY_AUDIT)) modes.push("integrity");
@@ -4936,6 +4938,7 @@ function SettingsView({
                   {checkbox(ACCESS_PERMISSION.MANAGE_AUDIT_RECORDING, "Manage audit recording", "Turn inactivity/audit event recording on or off for the workspace.", true)}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Reports</div>
                   {selected.role !== "admin" && <div className="cb-hint" style={{ marginBottom: 6 }}>Report access can only be granted to Admins.</div>}
+                  {checkbox(ACCESS_PERMISSION.REPORT_CLIENT_WORKLOAD, "View Client Workload Report", "Read-only bank, Dext and review-time comparisons scoped to clients assigned to the Admin's pod.", true)}
                   {checkbox(ACCESS_PERMISSION.REPORT_HELP, "Help activity", "View the Help activity report for the Admin's permitted team scope.", true)}
                   {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
                   {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
@@ -5462,7 +5465,7 @@ function Templates({ templates, isAdmin, roles, taskTypes, trackedMetrics, onAdd
   );
 }
 
-function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpdateClient, onDeleteClient, onAddAccount, onDeleteAccount, onMergeClients }) {
+function ClientRow({ client, taskCount, bankAccounts, isAdmin, canAssignPod, pods = [], onAssignPod, allClients, onUpdateClient, onDeleteClient, onAddAccount, onDeleteAccount, onMergeClients }) {
   const [expanded, setExpanded] = useState(false);
   const [name, setName] = useState("");
   const [error, setError] = useState("");
@@ -5606,6 +5609,11 @@ function ClientRow({ client, taskCount, bankAccounts, isAdmin, allClients, onUpd
       )}
       {expanded && (
         <div className="cb-client-detail">
+          <div className="cb-hint" style={{ marginBottom: 8 }}>Client pod</div>
+          {canAssignPod ? <select className="cb-input" value={client.pod_id || ""} onChange={async (e) => { try { await onAssignPod(client.id, e.target.value); } catch (err) { setError(err.message); } }} style={{ maxWidth: 280, marginBottom: 12 }}>
+            <option value="">Unassigned (report restricted)</option>
+            {pods.map((pod) => <option key={pod.id} value={pod.id}>{pod.name}</option>)}
+          </select> : <div className="cb-hint" style={{ marginBottom: 12 }}>{pods.find((pod) => pod.id === client.pod_id)?.name || "Unassigned"}</div>}
           <div className="cb-hint" style={{ marginBottom: 8 }}>Bank accounts</div>
           {bankAccounts.length === 0 && <div className="cb-hint" style={{ marginBottom: 8 }}>No bank accounts added yet.</div>}
           {bankAccounts.map((a) => (
@@ -5829,7 +5837,7 @@ function ClientImportModal({ onClose, onImport }) {
   );
 }
 
-function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onImport, onUpdate, onDelete, onAddAccount, onDeleteAccount, onMergeClients }) {
+function Clients({ clients, tasks, bankAccounts, pods = [], isAdmin, canAssignPod = false, onAssignPod, onAdd, onImport, onUpdate, onDelete, onAddAccount, onDeleteAccount, onMergeClients }) {
   const [name, setName] = useState("");
   const [code, setCode] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
@@ -5891,7 +5899,7 @@ function Clients({ clients, tasks, bankAccounts, isAdmin, onAdd, onImport, onUpd
           const accounts = bankAccounts.filter((a) => a.client_id === c.id);
           return (
             <ClientRow
-              key={c.id} client={c} taskCount={count} bankAccounts={accounts} isAdmin={isAdmin} allClients={clients}
+              key={c.id} client={c} taskCount={count} bankAccounts={accounts} isAdmin={isAdmin} canAssignPod={canAssignPod} pods={pods} onAssignPod={onAssignPod} allClients={clients}
               onUpdateClient={onUpdate} onDeleteClient={onDelete} onAddAccount={onAddAccount} onDeleteAccount={onDeleteAccount}
               onMergeClients={onMergeClients}
             />
@@ -10634,12 +10642,129 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   </div>;
 }
 
+function WorkloadTrendChart({ periods, metric, title, suffix = "" }) {
+  const values = periods.map((p) => Number(p[metric] || 0));
+  const max = Math.max(1, ...values);
+  const w = 670, h = 180, left = 54, top = 18, bottom = 32, right = 12;
+  const x = (i) => left + i * (w - left - right) / Math.max(1, periods.length - 1);
+  const y = (v) => top + (1 - v / max) * (h - top - bottom);
+  const path = values.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  return <div className="cb-tmpl-card" style={{ padding: 14, minWidth: 0 }}>
+    <div style={{ fontWeight: 750, marginBottom: 8 }}>{title}</div>
+    {!periods.length ? <div className="cb-hint">No submitted entries for the selected range.</div> :
+      <svg viewBox={`0 0 ${w} ${h}`} role="img" aria-label={`${title} trend`} style={{ display: "block", width: "100%", maxHeight: 220 }}>
+        {[0, 0.5, 1].map((f) => <g key={f}>
+          <line x1={left} x2={w-right} y1={y(max*f)} y2={y(max*f)} stroke="var(--border)" />
+          <text x={left-7} y={y(max*f)+4} textAnchor="end" fontSize="11" fill="var(--ink-soft)">{Number((max*f).toFixed(2)).toLocaleString()}{suffix}</text>
+        </g>)}
+        <path d={path} fill="none" stroke="var(--accent, #5483aa)" strokeWidth="2.5" strokeLinejoin="round" />
+        {values.map((v,i) => <circle key={i} cx={x(i)} cy={y(v)} r="3.5" fill="var(--accent, #5483aa)"><title>{periods[i].period}: {v.toFixed(2)}{suffix}</title></circle>)}
+        {periods.map((p,i) => (periods.length <= 8 || i % Math.ceil(periods.length/8) === 0) ?
+          <text key={p.period} x={x(i)} y={h-8} textAnchor="middle" fontSize="10" fill="var(--ink-soft)">{p.period}</text> : null)}
+      </svg>}
+  </div>;
+}
+
+function ClientWorkloadReportView() {
+  const [grouping, setGrouping] = useState("monthly");
+  const [clientId, setClientId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    api.getClientWorkload(grouping, "", dateFrom, dateTo).then((data) => {
+      if (!active) return;
+      setResult(data); setError("");
+    }).catch((err) => { if (active) setError(err.message); }).finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [grouping, dateFrom, dateTo, refresh]);
+  const accessible = result?.clients || [];
+  const selected = accessible.find((c) => c.id === clientId) || null;
+  const bankNames = selected?.summary.bank_accounts.map((a) => a.name) || [];
+  const activeBank = bankNames.includes(selectedBank) ? selectedBank : (bankNames[0] || "");
+  const bankPeriods = (selected?.periods || []).map((p) => {
+    const b = p.bank_accounts.find((a) => a.name === activeBank);
+    return { period: p.period, processed: b?.processed ?? 0, seconds: b?.seconds ?? 0, minutes_per_item: b?.minutes_per_item ?? 0 };
+  });
+  const minutes = (seconds) => `${(Number(seconds || 0) / 60).toFixed(1)} min`;
+  const hours = (seconds) => `${(Number(seconds || 0) / 3600).toFixed(2)} h`;
+  const average = (value) => value == null ? "N/A" : `${Number(value).toFixed(2)} min`;
+  const change = (current, previous) => previous ? `${((current - previous) / Math.abs(previous) * 100).toFixed(1)}%` : "N/A";
+  const columns = [
+    ["bank_count", "Bank transactions", (v) => Number(v || 0).toLocaleString()],
+    ["bank_seconds", "Bank processing time", hours],
+    ["bank_minutes_per_item", "Bank avg / transaction", average],
+    ["dext_count", "Dext bills", (v) => Number(v || 0).toLocaleString()],
+    ["dext_seconds", "Dext processing time", hours],
+    ["dext_minutes_per_item", "Dext avg / bill", average],
+    ["ap_seconds", "AP review", hours],
+    ["ar_seconds", "AR review", hours],
+    ["total_seconds", "Total client time", hours],
+  ];
+  return <div>
+    <div className="cb-page-head"><div><div className="cb-page-title cb-serif">Client Workload & Efficiency</div>
+      <div className="cb-page-sub">Submitted ClockBook activity · Client-pod scoped · Original work dates · Actual averages, no fixed benchmark</div></div>
+      <button className="cb-btn cb-btn-sm" onClick={() => setRefresh((x) => x+1)} disabled={loading}><RotateCcw size={14} />Refresh</button>
+    </div>
+    <div style={{ display: "flex", gap: 9, flexWrap: "wrap", alignItems: "end", marginBottom: 16 }}>
+      <label className="cb-hint">Comparison<select className="cb-input" value={grouping} onChange={(e) => setGrouping(e.target.value)}><option value="weekly">Week by week</option><option value="monthly">Month by month</option><option value="yearly">Year by year</option></select></label>
+      <label className="cb-hint">From<input className="cb-input" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} /></label>
+      <label className="cb-hint">To<input className="cb-input" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} /></label>
+      <label className="cb-hint">Client<select className="cb-input" value={clientId} onChange={(e) => setClientId(e.target.value)}><option value="">All authorised clients</option>{accessible.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+    </div>
+    {error && <div className="cb-error">{error}</div>}
+    {loading && <div className="cb-hint">Loading workload…</div>}
+    {!loading && !accessible.length && <div className="cb-empty">No clients available. A Super Admin can assign client pods in Clients; report access must also be granted in Staff Permissions.</div>}
+    {!selected && accessible.length > 0 && <div style={{ overflowX: "auto" }}><table className="cb-table" style={{ width: "100%" }}><thead><tr><th>Client</th><th className="num">Bank transactions</th><th className="num">Bank time</th><th className="num">Dext bills</th><th className="num">Dext time</th><th className="num">AP review</th><th className="num">AR review</th><th className="num">Client time</th></tr></thead>
+      <tbody>{accessible.map((c) => <tr key={c.id}><td><button className="cb-btn cb-btn-sm" onClick={() => setClientId(c.id)}>{c.name}</button></td><td className="num">{c.summary.bank_count}</td><td className="num">{hours(c.summary.bank_seconds)}</td><td className="num">{c.summary.dext_count}</td><td className="num">{hours(c.summary.dext_seconds)}</td><td className="num">{hours(c.summary.ap_seconds)}</td><td className="num">{hours(c.summary.ar_seconds)}</td><td className="num">{hours(c.summary.total_seconds)}</td></tr>)}</tbody></table></div>}
+    {selected && <>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "12px 0" }}><h3>{selected.name}</h3><button className="cb-btn cb-btn-sm" onClick={() => setClientId("")}>All clients</button></div>
+      <div className="cb-insight-grid" style={{ marginBottom: 16 }}>
+        {[["Bank transactions", selected.summary.bank_count], ["Bank processing", hours(selected.summary.bank_seconds)], ["Bank average", average(selected.summary.bank_minutes_per_item)], ["Dext bills", selected.summary.dext_count], ["Dext processing", hours(selected.summary.dext_seconds)], ["Dext average", average(selected.summary.dext_minutes_per_item)], ["AP review", hours(selected.summary.ap_seconds)], ["AR review", hours(selected.summary.ar_seconds)], ["Total client time", hours(selected.summary.total_seconds)]].map(([label, value]) => <div className="cb-tmpl-card" key={label} style={{ padding: 12, minWidth: 130 }}><div className="cb-hint">{label}</div><div style={{ fontWeight: 800, fontSize: 20 }}>{value}</div></div>)}
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(300px,1fr))", gap: 12, marginBottom: 16 }}>
+        <WorkloadTrendChart periods={selected.periods} metric="bank_count" title="Bank transaction volume" />
+        <WorkloadTrendChart periods={selected.periods} metric="bank_seconds" title="Bank processing time (seconds)" suffix="s" />
+        <WorkloadTrendChart periods={selected.periods} metric="bank_minutes_per_item" title="Bank average minutes / transaction" />
+        <WorkloadTrendChart periods={selected.periods} metric="dext_count" title="Dext bill volume" />
+        <WorkloadTrendChart periods={selected.periods} metric="dext_seconds" title="Dext processing time (seconds)" suffix="s" />
+        <WorkloadTrendChart periods={selected.periods} metric="dext_minutes_per_item" title="Dext average minutes / bill" />
+        <WorkloadTrendChart periods={selected.periods} metric="ap_seconds" title="AP review time (seconds)" suffix="s" />
+        <WorkloadTrendChart periods={selected.periods} metric="ar_seconds" title="AR review time (seconds)" suffix="s" />
+      </div>
+      <div className="cb-tmpl-card" style={{ padding: 14, marginBottom: 16 }}>
+        <label className="cb-hint">Bank / payment gateway
+          <select className="cb-input" value={activeBank} onChange={(e) => setSelectedBank(e.target.value)} style={{ maxWidth: 300 }}>
+            {bankNames.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        {activeBank ? <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(290px,1fr))", gap: 12, marginTop: 12 }}>
+          <WorkloadTrendChart periods={bankPeriods} metric="processed" title={`${activeBank}: net transactions processed`} />
+          <WorkloadTrendChart periods={bankPeriods} metric="seconds" title={`${activeBank}: time (seconds)`} suffix="s" />
+          <WorkloadTrendChart periods={bankPeriods} metric="minutes_per_item" title={`${activeBank}: average minutes / transaction`} />
+        </div> : <div className="cb-hint">No submitted bank accounts for the selected period.</div>}
+      </div>
+      <h3>Bank & payment gateway breakdown</h3>
+      <div style={{ overflowX: "auto", marginBottom: 18 }}><table className="cb-table"><thead><tr><th>Bank / gateway</th><th className="num">Net transactions processed</th><th className="num">Time</th><th className="num">Average / transaction</th></tr></thead><tbody>{selected.summary.bank_accounts.map((a) => <tr key={a.name}><td>{a.name}</td><td className="num">{a.processed}</td><td className="num">{minutes(a.seconds)}</td><td className="num">{average(a.minutes_per_item)}</td></tr>)}</tbody></table></div>
+      <h3>Period comparison</h3>
+      <div style={{ overflowX: "auto" }}><table className="cb-table"><thead><tr><th>Period</th>{columns.map(([,label]) => <th key={label} className="num">{label}</th>)}</tr></thead><tbody>{selected.periods.map((row) => <tr key={row.period}><td>{row.period}</td>{columns.map(([key,,format]) => <td key={key} className="num">{format(row[key])}</td>)}</tr>)}</tbody></table></div>
+      <div className="cb-hint" style={{ marginTop: 10 }}>Counts = opening outstanding minus closing outstanding (net reduction, possibly negative). Average = total corresponding minutes ÷ net items when positive. Bank accounts are listed individually; a blended bank average is shown only as an overview. AP/AR review times are separate. Negative or zero net counts display N/A for averages.</div>
+    </>}
+  </div>;
+}
+
 function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes = ["help", "overrides", "inactivity", "integrity"] }) {
   const available = [
     { value: "help", label: "Help activity" },
     { value: "overrides", label: "Manual overrides" },
     { value: "inactivity", label: "Audit" },
     { value: "integrity", label: "Time Integrity Audit" },
+    { value: "workload", label: "Client Workload & Efficiency" },
   ].filter((item) => allowedModes.includes(item.value));
   const [mode, setMode] = useState(available[0]?.value || "");
   useEffect(() => {
@@ -10651,7 +10776,7 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
       {available.length > 1 && <div style={{ marginBottom: 16 }}>
         <StableSaaSTabs value={mode} onChange={setMode} ariaLabel="Reports view" options={available} />
       </div>}
-      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : <TimeIntegrityAuditView members={members} pods={pods} clients={clients} />}
+      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : mode === "integrity" ? <TimeIntegrityAuditView members={members} pods={pods} clients={clients} /> : <ClientWorkloadReportView />}
     </div>
   );
 }
@@ -13873,6 +13998,12 @@ export default function App() {
     return result;
   }
 
+  async function assignClientPod(clientId, podId) {
+    const current = clients.find((c) => c.id === clientId);
+    const updated = await api.setClientPod(clientId, podId, current?.version || 1);
+    setClients((prev) => prev.map((c) => c.id === updated.id ? updated : c));
+  }
+
   async function updateClient(clientId, name, code) {
     const current = clients.find((c) => c.id === clientId);
     const updated = await api.updateClient(clientId, name, code, current?.version || 1);
@@ -14290,7 +14421,7 @@ export default function App() {
             )}
             {view === "clients" && (
               <Clients
-                clients={clients} tasks={tasks} bankAccounts={bankAccounts} isAdmin={isAdmin}
+                clients={clients} tasks={tasks} bankAccounts={bankAccounts} pods={pods} isAdmin={isAdmin} canAssignPod={realIsSuperAdmin && superAdminViewMode === "super_admin"} onAssignPod={assignClientPod}
                 onAdd={addClient} onImport={importClients} onUpdate={updateClient} onDelete={deleteClient} onAddAccount={addBankAccount} onDeleteAccount={deleteBankAccount}
                 onMergeClients={mergeClients}
               />
