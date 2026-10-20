@@ -4054,7 +4054,7 @@ function WorkspaceSettingsCard({ workspaces = [], activeWorkspaceId = "", onSwit
         </div>
       </div>
 
-      {(!platformChecked || isPlatformAdmin) && (
+      {(!realIsSuperAdmin || viewMode === "super_admin") && (!platformChecked || isPlatformAdmin) && (
         <div className="cb-tmpl-card" style={SETTINGS_CARD_STYLE} aria-busy={!platformChecked ? "true" : undefined}>
           <div className="cb-tmpl-head" style={{ ...SETTINGS_HEAD_STYLE, minHeight: !platformChecked ? 50 : 0 }}>
             {!platformChecked ? (
