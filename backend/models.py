@@ -194,6 +194,16 @@ class LoginEvent(TenantScopedMixin, Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class ConnectionDiagnosticEvent(TenantScopedMixin, Base):
+    __tablename__ = "connection_diagnostic_events"
+    __table_args__ = (Index("ix_connection_diag_tenant_member_time", "tenant_id", "member_id", "created_at"),)
+    id = Column(String, primary_key=True, default=lambda: gen_id("diag"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False, index=True)
+    event_type = Column(String(64), nullable=False)
+    details = Column(JSON, nullable=False, default=dict)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
 class DailyPresenceEvent(TenantScopedMixin, Base):
     __tablename__ = "daily_presence_events"
     __table_args__ = (

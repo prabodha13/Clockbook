@@ -1049,6 +1049,7 @@ PERMISSION_MANAGE_AUDIT_RECORDING = "manage_audit_recording"
 PERMISSION_MANAGE_SUPER_ADMINS = "manage_super_admins"
 PERMISSION_VIEW_TRACKED_TIME = "view_tracked_time"
 PERMISSION_TIME_INTEGRITY_AUDIT = "view_time_integrity_audit"
+PERMISSION_CONNECTION_DIAGNOSTICS = "view_connection_diagnostics"
 PERMISSION_PERSPECTIVES = "manage_daily_perspectives"
 PERMISSION_BIRTHDAY_WISHES = "manage_birthday_wishes"
 PERMISSION_SEASONAL = "manage_seasonal_celebrations"
@@ -1072,6 +1073,7 @@ DELEGATABLE_ADMIN_PERMISSIONS = {
     PERMISSION_MANAGE_SUPER_ADMINS,
     PERMISSION_VIEW_TRACKED_TIME,
     PERMISSION_TIME_INTEGRITY_AUDIT,
+    PERMISSION_CONNECTION_DIAGNOSTICS,
 }
 ALL_DELEGATABLE_PERMISSIONS = DELEGATABLE_ADMIN_PERMISSIONS | {PERMISSION_INSIGHTS_LEAVE_CAPACITY}
 
@@ -1332,7 +1334,22 @@ def claim_account(payload: schemas.ClaimAccountRequest, request: Request, db: Se
     token = _create_single_user_session(db, user.id, member.id, member.tenant_id, getattr(payload, "instance_id", None), takeover=True)
     db.add(models.LoginEvent(member_id=member.id))
     db.commit()
+    _record_connection_diagnostic(member.tenant_id, member.id, "login_success")
     return schemas.LoginResponse(token=token, member=member)
+
+
+def _record_connection_diagnostic(tenant_id, member_id, event_type, details=None):
+    """Best effort, isolated diagnostic write. Never gate authentication or timers."""
+    try:
+        with SessionLocal() as diagnostic_db:
+            diagnostic_db.info["tenant_id"] = tenant_id
+            diagnostic_db.add(models.ConnectionDiagnosticEvent(
+                tenant_id=tenant_id, member_id=member_id,
+                event_type=event_type, details=details or {},
+            ))
+            diagnostic_db.commit()
+    except Exception:
+        logger.exception("Connection diagnostic write failed")
 
 
 @app.post("/api/auth/login", response_model=schemas.LoginResponse)
@@ -1362,6 +1379,7 @@ def login(payload: schemas.LoginRequest, request: Request, db: Session = Depends
     )
     db.add(models.LoginEvent(member_id=member.id))
     db.commit()
+    _record_connection_diagnostic(member.tenant_id, member.id, "login_success")
     return schemas.LoginResponse(token=token, member=member)
 
 
@@ -1384,8 +1402,10 @@ def logout(authorization: str = Header(None), db: Session = Depends(get_db)):
             for task in running_tasks:
                 task.segments = close_open_segment(task.segments, logout_at)
                 task.status = "paused"
+            diagnostic_tenant, diagnostic_member = session.tenant_id, session.member_id
             db.delete(session)
             db.commit()
+            _record_connection_diagnostic(diagnostic_tenant, diagnostic_member, "manual_logout")
     return None
 
 
@@ -1405,8 +1425,14 @@ def instance_heartbeat(current_member: models.Member = Depends(get_current_membe
         raise HTTPException(401, "This ClockBook session is active in another browser instance")
     if not session.instance_id and instance_id:
         session.instance_id = instance_id
-    session.last_seen_at = datetime.utcnow()
+    now_utc = datetime.utcnow()
+    previous_seen = session.last_seen_at
+    session.last_seen_at = now_utc
     db.commit()
+    if previous_seen and (now_utc - previous_seen).total_seconds() >= 180:
+        elapsed = int((now_utc - previous_seen).total_seconds())
+        _record_connection_diagnostic(current_member.tenant_id, current_member.id,
+                                      "connection_resumed", {"gap_seconds": elapsed, "cause": "unknown"})
     return {"ok": True}
 
 
@@ -8530,6 +8556,80 @@ def time_integrity_audit_report(
         rows=result_rows, daily_segments=daily_segments, summary=summary,
         tracked_total_diagnostics=tracked_total_diagnostics
     )
+
+
+# Diagnostic observations are separate from time and Away detection. Browser permission
+# checks are passive and never call requestPermission or display new prompts.
+@app.post("/api/audit/connection-observation", status_code=204)
+def connection_observation(
+    payload: dict, current_member: models.Member = Depends(get_current_member),
+):
+    event_type = str(payload.get("event_type") or "")
+    if event_type not in {"permission_observed", "permission_changed", "idle_detector_status", "page_restored"}:
+        raise HTTPException(400, "Unsupported diagnostic observation")
+    raw = payload.get("details") or {}
+    if not isinstance(raw, dict):
+        raise HTTPException(400, "Invalid diagnostic details")
+    allowed = {"permission", "from", "to", "state", "reason"}
+    details = {key: str(value)[:80] for key, value in raw.items() if key in allowed}
+    _record_connection_diagnostic(current_member.tenant_id, current_member.id, event_type, details)
+    return None
+
+
+@app.get("/api/reports/connection-diagnostics")
+def connection_diagnostics_report(
+    date_from: str = None, date_to: str = None, member_id: str = None,
+    current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db),
+):
+    _require_delegated_admin_permission(current_member, PERMISSION_CONNECTION_DIAGNOSTICS,
+                                        "You do not have access to Connection Diagnostics")
+    try:
+        start = datetime.strptime(date_from, "%Y-%m-%d").date() if date_from else datetime.utcnow().date() - timedelta(days=7)
+        end = datetime.strptime(date_to, "%Y-%m-%d").date() if date_to else datetime.utcnow().date()
+    except ValueError:
+        raise HTTPException(400, "Dates must be YYYY-MM-DD")
+    if end < start or (end - start).days > 90:
+        raise HTTPException(400, "Select an interval of at most 90 days")
+    allowed_ids = _insights_allowed_member_ids(current_member, db)
+    if member_id and member_id not in allowed_ids:
+        raise HTTPException(403, "Employee outside authorised scope")
+    target_ids = {member_id} if member_id else allowed_ids
+    member_names = {m.id: m.name for m in db.query(models.Member).filter(models.Member.id.in_(target_ids)).all()}
+    earliest = datetime.combine(start, datetime.min.time())
+    latest = datetime.combine(end + timedelta(days=1), datetime.min.time())
+    query = db.query(models.ConnectionDiagnosticEvent).filter(
+        models.ConnectionDiagnosticEvent.member_id.in_(target_ids),
+        models.ConnectionDiagnosticEvent.created_at >= earliest,
+        models.ConnectionDiagnosticEvent.created_at < latest,
+    )
+    rows = query.order_by(models.ConnectionDiagnosticEvent.created_at.desc()).limit(2000).all()
+    # Legacy LoginEvent entries are included so historical successful logins are visible.
+    existing_logins = db.query(models.LoginEvent).filter(
+        models.LoginEvent.member_id.in_(target_ids),
+        models.LoginEvent.created_at >= earliest,
+        models.LoginEvent.created_at < latest,
+    ).order_by(models.LoginEvent.created_at.desc()).limit(2000).all()
+    events = [{"id": r.id, "member_id": r.member_id, "member_name": member_names.get(r.member_id, ""),
+               "event_type": r.event_type, "details": r.details or {},
+               "created_at": r.created_at.isoformat() + "Z"} for r in rows]
+    for r in existing_logins:
+        if not any(e["member_id"] == r.member_id and e["event_type"] == "login_success"
+                   and abs((datetime.fromisoformat(e["created_at"].rstrip("Z")) - r.created_at).total_seconds()) < 3 for e in events):
+            events.append({"id": r.id, "member_id": r.member_id, "member_name": member_names.get(r.member_id, ""),
+                           "event_type": "login_success", "details": {"source": "existing login history"},
+                           "created_at": r.created_at.isoformat() + "Z"})
+    # Existing Away records are read-only diagnostic context, not new Away logic.
+    away_rows = db.query(models.InactivityEvent).filter(
+        models.InactivityEvent.member_id.in_(target_ids),
+        models.InactivityEvent.started_at >= earliest,
+        models.InactivityEvent.started_at < latest,
+    ).order_by(models.InactivityEvent.started_at.desc()).limit(2000).all()
+    for r in away_rows:
+        events.append({"id": r.id, "member_id": r.member_id, "member_name": member_names.get(r.member_id, ""),
+                       "event_type": "away_recorded", "details": {"kind": r.kind, "seconds": round(r.seconds)},
+                       "created_at": r.started_at.isoformat() + "Z"})
+    events.sort(key=lambda x: x["created_at"], reverse=True)
+    return {"events": events[:2000], "members": [{"id": mid, "name": name} for mid, name in sorted(member_names.items(), key=lambda x: x[1].lower())]}
 
 
 @app.get("/api/audit/changes", response_model=list[schemas.AuditEventOut])
