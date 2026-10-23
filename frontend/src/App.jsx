@@ -1144,6 +1144,7 @@ const ACCESS_PERMISSION = {
   MANAGE_SUPER_ADMINS: "manage_super_admins",
   VIEW_TRACKED_TIME: "view_tracked_time",
   TIME_INTEGRITY_AUDIT: "view_time_integrity_audit",
+  CONNECTION_DIAGNOSTICS: "view_connection_diagnostics",
 };
 
 function hasAdditionalPermission(member, permission) {
@@ -1155,7 +1156,7 @@ function hasAdditionalPermission(member, permission) {
 
 function reportModesForMember(member) {
   if (!member) return [];
-  if (member.role === "super_admin") return ["help", "overrides", "inactivity", "integrity", "workload"];
+  if (member.role === "super_admin") return ["help", "overrides", "inactivity", "integrity", "workload", "diagnostics"];
   if (member.role !== "admin") return [];
   const modes = [];
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_HELP)) modes.push("help");
@@ -1163,6 +1164,7 @@ function reportModesForMember(member) {
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_OVERRIDES)) modes.push("overrides");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.REPORT_AUDIT)) modes.push("inactivity");
   if (hasAdditionalPermission(member, ACCESS_PERMISSION.TIME_INTEGRITY_AUDIT)) modes.push("integrity");
+  if (hasAdditionalPermission(member, ACCESS_PERMISSION.CONNECTION_DIAGNOSTICS)) modes.push("diagnostics");
   return modes;
 }
 
@@ -4943,6 +4945,7 @@ function SettingsView({
                   {checkbox(ACCESS_PERMISSION.REPORT_OVERRIDES, "Manual overrides", "View the Manual overrides report for records already visible to that Admin.", true)}
                   {checkbox(ACCESS_PERMISSION.REPORT_AUDIT, "Audit", "View inactivity and login-to-shutdown audit reporting for the Admin's permitted team scope.", true)}
                   {checkbox(ACCESS_PERMISSION.TIME_INTEGRITY_AUDIT, "View Time Integrity Audit", "View the Time Integrity Audit for the Admin's permitted team scope. The calculation and flags remain management-only and are enforced by the backend.", true)}
+                  {checkbox(ACCESS_PERMISSION.CONNECTION_DIAGNOSTICS, "View Connection Diagnostics", "Read-only login, logout, connection and browser permission diagnostic history for the Admin's permitted team scope.", true)}
                   <div style={{ fontSize: 13.5, fontWeight: 750, margin: "18px 0 6px" }}>Always Super Admin only</div>
                   <div className="cb-hint" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>Additional Admin Permissions, Super Admin promotion/demotion, emergency workspace session revocation, Platform Admin controls, cross-pod Super Admin reporting, and Demo/View Mode cannot be delegated.</div>
                 </div>
@@ -10802,6 +10805,64 @@ function ClientWorkloadReportView() {
   </div>;
 }
 
+function ConnectionDiagnosticsView() {
+  const today = new Date().toLocaleDateString("en-CA");
+  const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toLocaleDateString("en-CA");
+  const [from, setFrom] = useState(sevenDaysAgo);
+  const [to, setTo] = useState(today);
+  const [person, setPerson] = useState("");
+  const [kind, setKind] = useState("");
+  const [result, setResult] = useState({ events: [], members: [] });
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setError("");
+    api.getConnectionDiagnostics(from, to, person).then((rows) => {
+      if (!cancelled) setResult(rows);
+    }).catch((err) => { if (!cancelled) setError(err.message || "Unable to load diagnostics"); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [from, to, person]);
+  const rows = (result.events || []).filter(e => !kind || e.event_type === kind);
+  const counts = { logins: rows.filter(e => e.event_type === "login_success").length,
+    logouts: rows.filter(e => e.event_type === "manual_logout").length,
+    gaps: rows.filter(e => e.event_type === "connection_resumed").length,
+    permissions: rows.filter(e => e.event_type === "permission_changed").length };
+  const labels = { login_success: "Login successful", manual_logout: "Manual logout",
+    connection_resumed: "Connection resumed after a gap", permission_changed: "Permission change detected",
+    permission_observed: "Permission status observed", idle_detector_status: "Idle Detection status",
+    page_restored: "Page restored", away_recorded: "Away period recorded" };
+  return <div>
+    <div className="cb-page-title cb-serif">Connection &amp; Detection Diagnostics</div>
+    <p className="cb-hint">Technical events only. Connection gaps have unknown causes; they do not prove browser closure, cookie clearing or deliberate action. No new employee notifications are sent.</p>
+    <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 16 }}>
+      <label className="cb-hint">From <input className="cb-input" type="date" value={from} onChange={e => setFrom(e.target.value)} /></label>
+      <label className="cb-hint">To <input className="cb-input" type="date" value={to} onChange={e => setTo(e.target.value)} /></label>
+      <label className="cb-hint">Employee <select className="cb-input" value={person} onChange={e => setPerson(e.target.value)}>
+        <option value="">All permitted employees</option>{(result.members || []).map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select></label>
+      <label className="cb-hint">Event type <select className="cb-input" value={kind} onChange={e => setKind(e.target.value)}>
+        <option value="">All events</option>{Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+      </select></label>
+    </div>
+    {error && <div className="cb-hint" role="alert">{error}</div>}
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+      {[["Logins", counts.logins], ["Manual logouts", counts.logouts], ["Reconnection gaps", counts.gaps], ["Permission changes", counts.permissions]].map(([label, value]) =>
+        <div className="cb-tmpl-card" key={label} style={{ padding: 14, flex: "1 1 145px" }}><div className="cb-hint">{label}</div><strong style={{ fontSize: 24 }}>{value}</strong></div>)}
+    </div>
+    {loading ? <div className="cb-hint">Loading events...</div> :
+      <div style={{ overflowX: "auto" }}><table className="cb-table"><thead><tr><th>Time</th><th>Employee</th><th>Event</th><th>Details</th></tr></thead><tbody>
+        {rows.map(e => <tr key={e.id}><td style={{ whiteSpace: "nowrap" }}>{new Date(e.created_at).toLocaleString()}</td>
+          <td>{e.member_name}</td><td>{labels[e.event_type] || e.event_type}</td>
+          <td>{e.event_type === "connection_resumed" ? `Gap of approximately ${Math.round((e.details?.gap_seconds || 0) / 60)} min, cause unknown`
+            : e.event_type === "away_recorded" ? `${e.details?.kind || "Away"}, ${Math.round((e.details?.seconds || 0) / 60)} min`
+            : Object.entries(e.details || {}).filter(([k]) => k !== "source").map(([k,v]) => `${k}: ${v}`).join(", ") || "Recorded"}</td></tr>)}
+        {!rows.length && <tr><td colSpan={4}>No recorded diagnostic events in this period.</td></tr>}
+      </tbody></table></div>}
+  </div>;
+}
+
 function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes = ["help", "overrides", "inactivity", "integrity"] }) {
   const available = [
     { value: "help", label: "Help activity" },
@@ -10809,6 +10870,7 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
     { value: "inactivity", label: "Audit" },
     { value: "integrity", label: "Time Integrity Audit" },
     { value: "workload", label: "Client Workload & Efficiency" },
+    { value: "diagnostics", label: "Connection & Detection Diagnostics" },
   ].filter((item) => allowedModes.includes(item.value));
   const [mode, setMode] = useState(available[0]?.value || "");
   useEffect(() => {
@@ -10820,7 +10882,7 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
       {available.length > 1 && <div style={{ marginBottom: 16 }}>
         <StableSaaSTabs value={mode} onChange={setMode} ariaLabel="Reports view" options={available} />
       </div>}
-      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : mode === "integrity" ? <TimeIntegrityAuditView members={members} pods={pods} clients={clients} /> : <ClientWorkloadReportView />}
+      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : mode === "integrity" ? <TimeIntegrityAuditView members={members} pods={pods} clients={clients} /> : mode === "workload" ? <ClientWorkloadReportView /> : <ConnectionDiagnosticsView />}
     </div>
   );
 }
@@ -12682,6 +12744,38 @@ export default function App() {
     send();
     const iv = setInterval(() => { if (!cancelled) send(); }, 30000);
     return () => { cancelled = true; clearInterval(iv); };
+  }, [authState, currentUser?.id, duplicateTabBlocked]);
+
+  // Passive, best-effort browser health observations for the restricted diagnostics report.
+  // Never request permissions here and never affect task, Away or recovery behaviour.
+  useEffect(() => {
+    if (authState !== "ready" || !currentUser || duplicateTabBlocked) return;
+    let cancelled = false;
+    const storageKey = `clockbook_diagnostic_permission_status:${currentUser.tenant_id}:${currentUser.id}`;
+    let last = {};
+    try { last = JSON.parse(sessionStorage.getItem(storageKey) || "{}"); } catch (_) { last = {}; }
+    const inspect = async () => {
+      if (cancelled) return;
+      const statuses = { notification: typeof Notification === "undefined" ? "unavailable" : Notification.permission };
+      try {
+        statuses.device_use = ("IdleDetector" in window && navigator.permissions?.query)
+          ? (await navigator.permissions.query({ name: "idle-detection" })).state : "unavailable";
+      } catch (_) { statuses.device_use = "unknown"; }
+      for (const [permission, state] of Object.entries(statuses)) {
+        if (cancelled) return;
+        const previous = last[permission];
+        if (previous === state) continue;
+        last[permission] = state;
+        try { sessionStorage.setItem(storageKey, JSON.stringify(last)); } catch (_) {}
+        try { await api.sendConnectionObservation(previous === undefined ? "permission_observed" : "permission_changed",
+          { permission, from: previous || "unknown", to: state }); } catch (_) { /* diagnostics cannot disrupt ClockBook */ }
+      }
+    };
+    inspect();
+    const timer = setInterval(inspect, 60000);
+    const onVisible = () => { if (!document.hidden) inspect(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => { cancelled = true; clearInterval(timer); document.removeEventListener("visibilitychange", onVisible); };
   }, [authState, currentUser?.id, duplicateTabBlocked]);
 
   // Silent presence heartbeat for the Daily start activity report. This is deliberately
