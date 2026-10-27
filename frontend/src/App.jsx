@@ -13647,29 +13647,9 @@ export default function App() {
   useEffect(() => {
     if (!myRunningTask) return;
     const iv = setInterval(() => {
-      api.sendHeartbeat(myRunningTask.id).then(async (updated) => {
-        if (!updated || updated.status !== "paused") return;
-        // The server detected a prolonged gap before accepting a resumed heartbeat.
-        // Only handle a gap for the timer this interval was tracking; another tab may
-        // already have legitimately paused or switched it in the meantime.
-        const lastSeen = updated.last_heartbeat_at
-          ? new Date(updated.last_heartbeat_at).getTime() : NaN;
-        const end = updated.segments?.[updated.segments.length - 1]?.end;
-        const stoppedAt = end ? new Date(end).getTime() : NaN;
-        const isGapPause = Number.isFinite(lastSeen) && Number.isFinite(stoppedAt)
-          && Math.abs(lastSeen - stoppedAt) < 1000
-          && Date.now() + clockOffsetRef.current - lastSeen >= HEARTBEAT_STALE_MS;
-        mergeTask(updated);
-        if (!isGapPause) return;
-        const gapMs = Math.max(0, Date.now() + clockOffsetRef.current - lastSeen);
-        const inactivityEventId = await recordInactivity(
-          "stale_gap", lastSeen - clockOffsetRef.current, Date.now(), myRunningTask,
-        );
-        showAwayAlert(myRunningTask, gapMs, lastSeen, inactivityEventId,
-          "lost connection while the timer was running");
-      }).catch(() => {
-        // Failed pings do not alter task duration. The server checks the gap before
-        // it accepts the first successful heartbeat following reconnection.
+      api.sendHeartbeat(myRunningTask.id).catch(() => {
+        // A missed ping is fine, this is just a periodic best-effort signal, the next
+        // successful one (or the stale check on a future load) is what actually matters
       });
     }, 45000);
     return () => clearInterval(iv);
