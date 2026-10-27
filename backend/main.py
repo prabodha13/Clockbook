@@ -6257,20 +6257,30 @@ def start_task(task_id: str, payload: schemas.TaskStart = schemas.TaskStart(), c
 
 @app.post("/api/tasks/{task_id}/heartbeat", response_model=schemas.TaskOut)
 def heartbeat_task(task_id: str, current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db)):
-    # A lightweight, periodic "still here" ping sent while a timer runs. This is the only
-    # signal that can catch a browser disappearing outright (closed, crashed, or the machine
-    # shut down), none of which leave any JS running to detect the gap the way sleep and lock
-    # detection can, since those rely on the same execution context waking back up.
-    task = db.get(models.TaskInstance, task_id)
+    # Lock the row: a heartbeat after an outage must not overwrite the last verified
+    # activity timestamp or race against Pause/Submit/Start in another browser.
+    task = _get_task_for_update(db, task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     if task.owner_id != current_member.id:
         raise HTTPException(403, "This task belongs to someone else")
     if task.status != "running":
-        # Nothing to keep alive, but not an error, the browser may not know yet that this
-        # was paused or submitted elsewhere
         return task
-    task.last_heartbeat_at = datetime.utcnow()
+
+    now = datetime.utcnow()
+    # This is intentionally the same two-minute threshold used by the existing
+    # initial-load stale-timer check. A recovered connection is not evidence that
+    # the employee was working throughout the missing interval.
+    if task.last_heartbeat_at and now - task.last_heartbeat_at >= timedelta(minutes=2):
+        last_verified = task.last_heartbeat_at
+        task.segments = close_open_segment(task.segments, last_verified.isoformat() + "Z")
+        task.status = "paused"
+        # Preserve last_heartbeat_at for the client-side Away/stale-gap workflow.
+        db.commit()
+        db.refresh(task)
+        return task
+
+    task.last_heartbeat_at = now
     db.commit()
     db.refresh(task)
     return task
