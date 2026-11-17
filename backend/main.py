@@ -8268,6 +8268,165 @@ def save_karbon_reconciliation_note(payload: schemas.KarbonReconciliationNoteSav
     return {"member_id": payload.member_id, "date": payload.date.isoformat(), "note": note_text}
 
 
+# Historical locked-time repair is intentionally separate from live timer/recovery handling.
+# Neither endpoint can be delegated to an ordinary Admin, regardless of permissions.
+def _locked_time_repair_plan(db: Session, tenant_id: str, member: models.Member, work_date):
+    day_start, day_end = _local_workday_utc_bounds(work_date, member)
+    away_rows = db.query(models.InactivityEvent).filter(
+        models.InactivityEvent.tenant_id == tenant_id,
+        models.InactivityEvent.member_id == member.id,
+        models.InactivityEvent.kind == "screen_locked",
+        models.InactivityEvent.started_at < day_end,
+        models.InactivityEvent.ended_at > day_start,
+    ).order_by(models.InactivityEvent.started_at).all()
+    # A lock classified as helping/receiving help is not automatically non-working time.
+    explained = {row[0] for row in db.query(models.HelpEvent.inactivity_event_id).filter(
+        models.HelpEvent.tenant_id == tenant_id,
+        models.HelpEvent.inactivity_event_id.in_([e.id for e in away_rows] or ["__none__"]),
+    ).all() if row[0]}
+    lock_ranges = _merge_time_ranges([
+        (max(e.started_at, day_start), min(e.ended_at, day_end))
+        for e in away_rows if e.id not in explained
+    ])
+    eligible = db.query(models.TaskInstance).filter(
+        models.TaskInstance.tenant_id == tenant_id,
+        models.TaskInstance.owner_id == member.id,
+    ).order_by(models.TaskInstance.id).all()
+    proposed = []
+    warnings = []
+    for task in eligible:
+        original = list(task.segments or [])
+        changed = False
+        deducted = 0.0
+        revised = []
+        for seg in original:
+            if not isinstance(seg, dict) or not seg.get("start") or not seg.get("end") or seg.get("source") not in (None, "", "timer"):
+                revised.append(seg)
+                continue
+            try:
+                start = parse_utc_naive(seg["start"])
+                end = parse_utc_naive(seg["end"])
+            except (TypeError, ValueError):
+                revised.append(seg)
+                continue
+            if end <= start:
+                revised.append(seg)
+                continue
+            intersections = _merge_time_ranges([(max(start, a, day_start), min(end, b, day_end)) for a,b in lock_ranges])
+            if not intersections:
+                revised.append(seg)
+                continue
+            if task.pushed_to_karbon:
+                warnings.append({"task_id": task.id, "task_name": task.name, "reason": "Already exported to Karbon; manual review required"})
+                revised.append(seg)
+                continue
+            cursor = start
+            pieces = []
+            for a,b in intersections:
+                if cursor < a:
+                    pieces.append({**seg, "start": _diagnostic_iso_utc(cursor), "end": _diagnostic_iso_utc(a)})
+                cursor = max(cursor, b)
+            if cursor < end:
+                pieces.append({**seg, "start": _diagnostic_iso_utc(cursor), "end": _diagnostic_iso_utc(end)})
+            # A wholly locked segment disappears; its original remains in the correction ledger.
+            revised.extend(pieces)
+            deducted += (end-start).total_seconds() - sum(
+                (parse_utc_naive(part["end"]) - parse_utc_naive(part["start"])).total_seconds() for part in pieces
+            )
+            changed = True
+        if changed:
+            proposed.append({
+                "task_id": task.id, "task_name": task.name, "client_name": task.client_name,
+                "task_status": task.status,
+                "deducted_seconds": round(deducted, 3), "before": original, "after": revised,
+            })
+    # The preview token is derived from the entire current evidence set, not client input.
+    fingerprint_data = {
+        "tenant_id": tenant_id, "member_id": member.id, "work_date": work_date.isoformat(),
+        "locks": [(e.id, e.started_at.isoformat(), e.ended_at.isoformat(), e.kind) for e in away_rows],
+        "explained": sorted(explained),
+        "tasks": [(t.id, t.status, t.pushed_to_karbon, t.segments) for t in eligible],
+    }
+    token = hashlib.sha256(json.dumps(fingerprint_data, sort_keys=True, default=str).encode()).hexdigest()
+    return proposed, warnings, token, len(away_rows)
+
+
+def _locked_time_repair_target(db: Session, current_member: models.Member, member_id: str, work_date: str):
+    if current_member.role != "super_admin":
+        raise HTTPException(403, "Super Admin access required")
+    try:
+        date_value = datetime.strptime(work_date, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Date must be YYYY-MM-DD")
+    if date_value > _utc_naive_to_local(datetime.utcnow(), current_member).date():
+        raise HTTPException(400, "Cannot reconcile future dates")
+    member = db.query(models.Member).filter(
+        models.Member.id == member_id, models.Member.tenant_id == current_member.tenant_id,
+    ).first()
+    if member is None:
+        raise HTTPException(404, "Staff member not found in this tenant")
+    return member, date_value
+
+
+@app.get("/api/reports/locked-time-reconciliation/preview")
+def preview_locked_time_reconciliation(
+    member_id: str, work_date: str,
+    current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db),
+):
+    member, day = _locked_time_repair_target(db, current_member, member_id, work_date)
+    changes, warnings, token, lock_count = _locked_time_repair_plan(db, current_member.tenant_id, member, day)
+    history = db.query(models.LockedTimeCorrection).filter(
+        models.LockedTimeCorrection.tenant_id == current_member.tenant_id,
+        models.LockedTimeCorrection.member_id == member.id,
+        models.LockedTimeCorrection.work_date == day,
+    ).order_by(models.LockedTimeCorrection.created_at.desc()).all()
+    return {
+        "member_id": member.id, "member_name": member.name, "work_date": str(day),
+        "lock_count": lock_count, "token": token,
+        "total_deducted_seconds": round(sum(c["deducted_seconds"] for c in changes), 3),
+        "changes": [{k:v for k,v in c.items() if k not in ("before", "after")} for c in changes],
+        "warnings": warnings,
+        "history": [{"id": h.id, "created_at": _diagnostic_iso_utc(h.created_at),
+                     "deducted_seconds": h.deducted_seconds, "reason": h.reason} for h in history],
+    }
+
+
+@app.post("/api/reports/locked-time-reconciliation/apply")
+def apply_locked_time_reconciliation(
+    payload: schemas.LockedTimeReconciliationApply,
+    current_member: models.Member = Depends(get_current_member), db: Session = Depends(get_db),
+):
+    member, day = _locked_time_repair_target(db, current_member, payload.member_id, payload.work_date)
+    if len(payload.reason.strip()) < 10 or len(payload.reason) > 1000:
+        raise HTTPException(400, "Provide a reason of 10 to 1000 characters")
+    _lock_timer_owner(db, member.id)
+    changes, warnings, token, _ = _locked_time_repair_plan(db, current_member.tenant_id, member, day)
+    if not hmac.compare_digest(token, payload.preview_token):
+        raise HTTPException(409, "Timer or inactivity evidence changed. Refresh the preview before applying.")
+    if not changes:
+        raise HTTPException(409, "No eligible locked-time overlaps remain")
+    # Row lock and optimistic evidence comparison avoid overwriting concurrent task writes.
+    for change in changes:
+        task = db.query(models.TaskInstance).filter(
+            models.TaskInstance.tenant_id == current_member.tenant_id,
+            models.TaskInstance.id == change["task_id"],
+            models.TaskInstance.owner_id == member.id,
+        ).with_for_update().one_or_none()
+        if task is None or task.segments != change["before"]:
+            raise HTTPException(409, "Task changed. Refresh the reconciliation preview")
+        task.segments = change["after"]
+    total = round(sum(c["deducted_seconds"] for c in changes), 3)
+    ledger = models.LockedTimeCorrection(
+        tenant_id=current_member.tenant_id, member_id=member.id,
+        work_date=day, actor_id=current_member.id,
+        reason=payload.reason.strip(), deducted_seconds=total, changes=changes,
+    )
+    db.add(ledger)
+    db.commit()
+    return {"correction_id": ledger.id, "updated_tasks": len(changes), "deducted_seconds": total,
+            "warning_count": len(warnings)}
+
+
 @app.get("/api/reports/time-integrity-audit", response_model=schemas.TimeIntegrityAuditResponse)
 def time_integrity_audit_report(
     date_from: str = None, date_to: str = None, member_id: str = None, pod_id: str = None,

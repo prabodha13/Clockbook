@@ -239,6 +239,19 @@ class ActivePresenceInterval(TenantScopedMixin, Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
+class LockedTimeCorrection(TenantScopedMixin, Base):
+    """Append-only evidence for super-admin-approved historical screen-lock corrections."""
+    __tablename__ = "locked_time_corrections"
+    id = Column(String, primary_key=True, default=lambda: gen_id("ltc"))
+    member_id = Column(String, ForeignKey("members.id"), nullable=False, index=True)
+    work_date = Column(Date, nullable=False)
+    actor_id = Column(String, ForeignKey("members.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    reason = Column(Text, nullable=False)
+    deducted_seconds = Column(Float, nullable=False)
+    changes = Column(JSON, nullable=False)
+
+
 class TimeIntegrityAuditEntry(TenantScopedMixin, Base):
     __tablename__ = "time_integrity_audit_entries"
     __table_args__ = (

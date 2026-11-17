@@ -844,3 +844,10 @@ class TimeIntegrityAuditResponse(BaseModel):
     summary: TimeIntegrityAuditSummary
     tracked_total_diagnostics: List[TrackedTotalDiagnosticRow] = Field(default_factory=list)
 
+
+
+class LockedTimeReconciliationApply(BaseModel):
+    member_id: str
+    work_date: str
+    preview_token: str
+    reason: str
