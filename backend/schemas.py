@@ -851,3 +851,4 @@ class LockedTimeReconciliationApply(BaseModel):
     work_date: str
     preview_token: str
     reason: str
+    selected_task_ids: List[str] = Field(default_factory=list)

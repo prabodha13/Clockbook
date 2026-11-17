@@ -8405,6 +8405,14 @@ def apply_locked_time_reconciliation(
         raise HTTPException(409, "Timer or inactivity evidence changed. Refresh the preview before applying.")
     if not changes:
         raise HTTPException(409, "No eligible locked-time overlaps remain")
+    # Only server-recomputed, explicitly selected tasks may be corrected.
+    selected_ids = payload.selected_task_ids
+    if not selected_ids or len(selected_ids) != len(set(selected_ids)):
+        raise HTTPException(400, "Select at least one distinct task to correct")
+    eligible_ids = {change["task_id"] for change in changes}
+    if any(task_id not in eligible_ids for task_id in selected_ids):
+        raise HTTPException(409, "Selected task is no longer eligible. Refresh the preview")
+    changes = [change for change in changes if change["task_id"] in set(selected_ids)]
     # Row lock and optimistic evidence comparison avoid overwriting concurrent task writes.
     for change in changes:
         task = db.query(models.TaskInstance).filter(
