@@ -276,9 +276,9 @@ export const api = {
     const q = new URLSearchParams({ member_id: memberId, work_date: workDate });
     return request(`/reports/locked-time-reconciliation/preview?${q.toString()}`);
   },
-  applyLockedTimeReconciliation: (memberId, workDate, previewToken, reason) =>
+  applyLockedTimeReconciliation: (memberId, workDate, previewToken, reason, selectedTaskIds) =>
     request("/reports/locked-time-reconciliation/apply", { method: "POST", body: JSON.stringify({
-      member_id: memberId, work_date: workDate, preview_token: previewToken, reason,
+      member_id: memberId, work_date: workDate, preview_token: previewToken, reason, selected_task_ids: selectedTaskIds,
     }) }),
   sendPresenceHeartbeat: () => request("/audit/presence-heartbeat", { method: "POST" }),
   sendConnectionObservation: (event_type, details = {}) => request("/audit/connection-observation", { method: "POST", body: JSON.stringify({ event_type, details }) }),

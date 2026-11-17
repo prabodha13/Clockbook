@@ -10187,28 +10187,39 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [], canRepa
   const [repairDate, setRepairDate] = useState(today);
   const [repairPreview, setRepairPreview] = useState(null);
   const [repairReason, setRepairReason] = useState("");
+  const [repairSelectedIds, setRepairSelectedIds] = useState([]);
   const [repairBusy, setRepairBusy] = useState(false);
   const [repairError, setRepairError] = useState("");
   const [repairSuccess, setRepairSuccess] = useState("");
   async function previewRepair() {
     if (!repairStaffId || !repairDate) return;
-    setRepairBusy(true); setRepairPreview(null); setRepairError(""); setRepairSuccess("");
+    setRepairBusy(true); setRepairPreview(null); setRepairSelectedIds([]); setRepairError(""); setRepairSuccess("");
     try { setRepairPreview(await api.previewLockedTimeReconciliation(repairStaffId, repairDate)); }
     catch (err) { setRepairError(err.message || "Unable to preview screen-lock correction"); }
     finally { setRepairBusy(false); }
   }
   async function applyRepair() {
-    if (!repairPreview || !repairReason.trim() || repairBusy) return;
+    if (!repairPreview || repairReason.trim().length < 10 || repairBusy || repairSelectedIds.length === 0) return;
+    const chosen = repairPreview.changes.filter(c => repairSelectedIds.includes(c.task_id));
+    if (chosen.length !== repairSelectedIds.length) return;
+    const seconds = chosen.reduce((total, item) => total + Number(item.deducted_seconds || 0), 0);
+    if (!window.confirm(`Correct ${chosen.length} selected task(s), removing ${Math.round(seconds / 60)} minute(s) of locked time? This changes the effective timer segments and retains the originals in correction history.`)) return;
     setRepairBusy(true); setRepairError(""); setRepairSuccess("");
     try {
-      const result = await api.applyLockedTimeReconciliation(repairPreview.member_id, repairPreview.work_date, repairPreview.token, repairReason);
+      const result = await api.applyLockedTimeReconciliation(repairPreview.member_id, repairPreview.work_date, repairPreview.token, repairReason, repairSelectedIds);
       setRepairSuccess(`Corrected ${result.updated_tasks} tasks, excluding ${Math.round(result.deducted_seconds / 60)} minutes of locked time. Correction ID: ${result.correction_id}`);
-      setRepairPreview(null); setRepairReason("");
+      setRepairPreview(null); setRepairSelectedIds([]); setRepairReason("");
       load();
-    } catch (err) { setRepairError(err.message || "Unable to apply correction. Refresh the preview."); setRepairPreview(null); }
+    } catch (err) { setRepairError(err.message || "Unable to apply correction. Refresh the preview."); setRepairPreview(null); setRepairSelectedIds([]); }
     finally { setRepairBusy(false); }
   }
 
+
+  const selectedRepairChanges = (repairPreview?.changes || []).filter(c => repairSelectedIds.includes(c.task_id));
+  const selectedRepairSeconds = selectedRepairChanges.reduce((total, c) => total + Number(c.deducted_seconds || 0), 0);
+  function toggleRepairSelection(taskId, checked) {
+    setRepairSelectedIds(previous => checked ? [...previous.filter(id => id !== taskId), taskId] : previous.filter(id => id !== taskId));
+  }
 
   function toggleIntegritySegments(rowId) {
     setExpandedIntegritySegments((previous) => {
@@ -10398,20 +10409,30 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [], canRepa
       <strong>Reconcile locked time</strong> <span className="cb-hint">Super Admin only · this workspace only</span>
       <p className="cb-hint">Preview detected screen-lock overlaps before correcting historical timer segments. Recovered time and tasks exported to Karbon are not adjusted. Original records are retained in an immutable correction history.</p>
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-        <label>Staff member<br/><select className="cb-input" value={repairStaffId} onChange={e => { setRepairStaffId(e.target.value); setRepairPreview(null); }}><option value="">Select staff</option>{members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
-        <label>Work date<br/><input className="cb-input" type="date" value={repairDate} onChange={e => { setRepairDate(e.target.value); setRepairPreview(null); }}/></label>
-        <button className="cb-btn" type="button" disabled={repairBusy || !repairStaffId || !repairDate} onClick={previewRepair}>{repairBusy ? "Working…" : "Preview locked time"}</button>
+        <label>Staff member<br/><select className="cb-input" value={repairStaffId} onChange={e => { setRepairStaffId(e.target.value); setRepairPreview(null); setRepairSelectedIds([]); }}><option value="">Select staff</option>{members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+        <label>Work date<br/><input className="cb-input" type="date" value={repairDate} onChange={e => { setRepairDate(e.target.value); setRepairPreview(null); setRepairSelectedIds([]); }}/></label>
+        <button className="cb-btn" type="button" style={{ alignSelf: "flex-end", minHeight: 36, marginBottom: 0 }} disabled={repairBusy || !repairStaffId || !repairDate} onClick={previewRepair}>{repairBusy ? "Working…" : "Preview locked time"}</button>
       </div>
       {repairError && <div role="alert" style={{ color: "#a33", marginTop: 10 }}>{repairError}</div>}
       {repairSuccess && <div role="status" style={{ marginTop: 10 }}>{repairSuccess}</div>}
       {repairPreview && <div style={{ marginTop: 12 }}>
         <div><strong>{repairPreview.member_name}</strong> · {repairPreview.work_date} · {repairPreview.lock_count} recorded lock periods · <strong>{Math.round(repairPreview.total_deducted_seconds / 60)} minutes proposed for removal</strong></div>
-        {repairPreview.changes.length > 0 && <div className="cb-table-wrap" style={{ marginTop: 8 }}><table className="cb-table"><thead><tr><th>Client</th><th>Task</th><th>Recorded status</th><th>Locked time to remove</th></tr></thead><tbody>{repairPreview.changes.map(c => <tr key={c.task_id}><td>{c.client_name}</td><td>{c.task_name}</td><td>{c.task_status}</td><td>{Math.round(c.deducted_seconds / 60)}m</td></tr>)}</tbody></table></div>}
+        {repairPreview.changes.length > 0 && <>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", marginTop: 10 }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}><input type="checkbox" checked={repairPreview.changes.length > 0 && repairSelectedIds.length === repairPreview.changes.length} onChange={e => setRepairSelectedIds(e.target.checked ? repairPreview.changes.map(c => c.task_id) : [])} disabled={repairBusy}/> Select all</label>
+            <button className="cb-btn" type="button" disabled={repairBusy || repairSelectedIds.length === 0} onClick={() => setRepairSelectedIds([])}>Deselect all</button>
+            <span className="cb-hint">{selectedRepairChanges.length} of {repairPreview.changes.length} tasks selected · <strong>{Math.round(selectedRepairSeconds / 60)} minutes selected for removal</strong></span>
+          </div>
+          <div className="cb-table-wrap" style={{ marginTop: 8 }}><table className="cb-table"><thead><tr><th>Select</th><th>Client</th><th>Task</th><th>Recorded status</th><th>Locked time to remove</th></tr></thead><tbody>{repairPreview.changes.map(c => <tr key={c.task_id}><td><input type="checkbox" aria-label={`Select correction for ${c.client_name}: ${c.task_name}`} checked={repairSelectedIds.includes(c.task_id)} disabled={repairBusy} onChange={e => toggleRepairSelection(c.task_id, e.target.checked)}/></td><td>{c.client_name}</td><td>{c.task_name}</td><td>{c.task_status}</td><td>{Math.round(c.deducted_seconds / 60)}m</td></tr>)}</tbody></table></div>
+        </>}
         {repairPreview.warnings.map(w => <div className="cb-hint" key={w.task_id} style={{ marginTop: 6 }}>Excluded: {w.task_name}. {w.reason}</div>)}
         {repairPreview.history.length > 0 && <div className="cb-hint" style={{ marginTop: 8 }}>Previous correction(s): {repairPreview.history.map(h => `${h.id}: ${Math.round(h.deducted_seconds / 60)}m (${h.reason})`).join("; ")}</div>}
-        {repairPreview.changes.length ? <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "end" }}>
-          <label style={{ flex: "1 1 300px" }}>Reason for correction<br/><input className="cb-input" style={{ width: "100%" }} maxLength={1000} placeholder="Explain why these locked periods are being excluded" value={repairReason} onChange={e => setRepairReason(e.target.value)}/></label>
-          <button className="cb-btn" type="button" disabled={repairBusy || repairReason.trim().length < 10} onClick={applyRepair}>Apply approved correction</button>
+        {repairPreview.changes.length ? <div style={{ marginTop: 12 }}>
+          <label style={{ display: "block" }}>Reason for correction<input className="cb-input" style={{ width: "100%", display: "block", boxSizing: "border-box", marginTop: 4 }} maxLength={1000} placeholder="Explain why these locked periods are being excluded" value={repairReason} onChange={e => setRepairReason(e.target.value)}/></label>
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, marginTop: 10 }}>
+            <span className="cb-hint">Only selected tasks will be changed; unselected tasks will remain unchanged.</span>
+            <button className="cb-btn" type="button" style={{ minHeight: 36, margin: 0 }} disabled={repairBusy || repairReason.trim().length < 10 || repairSelectedIds.length === 0} onClick={applyRepair}>Apply selected corrections ({selectedRepairChanges.length})</button>
+          </div>
         </div> : <div className="cb-hint" style={{ marginTop: 8 }}>No eligible locked-time overlaps to correct.</div>}
       </div>}
     </div>}
