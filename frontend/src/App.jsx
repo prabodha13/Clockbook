@@ -10158,7 +10158,7 @@ function AuditMultiSelect({ label, options = [], values = [], onChange, allLabel
   </div>;
 }
 
-function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
+function TimeIntegrityAuditView({ members = [], pods = [], clients = [], canRepairLockedTime = false }) {
   const today = localDateKeyFromDate(new Date());
   const [dateFrom, setDateFrom] = useState(today);
   const [dateTo, setDateTo] = useState(today);
@@ -10183,6 +10183,32 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
   const [showDailyTimerTimeline, setShowDailyTimerTimeline] = useState(false);
   const [expandedDailyTimelineKeys, setExpandedDailyTimelineKeys] = useState(() => new Set());
   const [expandedTrackedDiagnostics, setExpandedTrackedDiagnostics] = useState(() => new Set());
+  const [repairStaffId, setRepairStaffId] = useState("");
+  const [repairDate, setRepairDate] = useState(today);
+  const [repairPreview, setRepairPreview] = useState(null);
+  const [repairReason, setRepairReason] = useState("");
+  const [repairBusy, setRepairBusy] = useState(false);
+  const [repairError, setRepairError] = useState("");
+  const [repairSuccess, setRepairSuccess] = useState("");
+  async function previewRepair() {
+    if (!repairStaffId || !repairDate) return;
+    setRepairBusy(true); setRepairPreview(null); setRepairError(""); setRepairSuccess("");
+    try { setRepairPreview(await api.previewLockedTimeReconciliation(repairStaffId, repairDate)); }
+    catch (err) { setRepairError(err.message || "Unable to preview screen-lock correction"); }
+    finally { setRepairBusy(false); }
+  }
+  async function applyRepair() {
+    if (!repairPreview || !repairReason.trim() || repairBusy) return;
+    setRepairBusy(true); setRepairError(""); setRepairSuccess("");
+    try {
+      const result = await api.applyLockedTimeReconciliation(repairPreview.member_id, repairPreview.work_date, repairPreview.token, repairReason);
+      setRepairSuccess(`Corrected ${result.updated_tasks} tasks, excluding ${Math.round(result.deducted_seconds / 60)} minutes of locked time. Correction ID: ${result.correction_id}`);
+      setRepairPreview(null); setRepairReason("");
+      load();
+    } catch (err) { setRepairError(err.message || "Unable to apply correction. Refresh the preview."); setRepairPreview(null); }
+    finally { setRepairBusy(false); }
+  }
+
 
   function toggleIntegritySegments(rowId) {
     setExpandedIntegritySegments((previous) => {
@@ -10368,6 +10394,27 @@ function TimeIntegrityAuditView({ members = [], pods = [], clients = [] }) {
       </div>
     </div>
 
+    {canRepairLockedTime && <div style={{ border: "1px solid var(--line)", background: "var(--paper)", padding: 14, borderRadius: 10, marginBottom: 16 }}>
+      <strong>Reconcile locked time</strong> <span className="cb-hint">Super Admin only · this workspace only</span>
+      <p className="cb-hint">Preview detected screen-lock overlaps before correcting historical timer segments. Recovered time and tasks exported to Karbon are not adjusted. Original records are retained in an immutable correction history.</p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+        <label>Staff member<br/><select className="cb-input" value={repairStaffId} onChange={e => { setRepairStaffId(e.target.value); setRepairPreview(null); }}><option value="">Select staff</option>{members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+        <label>Work date<br/><input className="cb-input" type="date" value={repairDate} onChange={e => { setRepairDate(e.target.value); setRepairPreview(null); }}/></label>
+        <button className="cb-btn" type="button" disabled={repairBusy || !repairStaffId || !repairDate} onClick={previewRepair}>{repairBusy ? "Working…" : "Preview locked time"}</button>
+      </div>
+      {repairError && <div role="alert" style={{ color: "#a33", marginTop: 10 }}>{repairError}</div>}
+      {repairSuccess && <div role="status" style={{ marginTop: 10 }}>{repairSuccess}</div>}
+      {repairPreview && <div style={{ marginTop: 12 }}>
+        <div><strong>{repairPreview.member_name}</strong> · {repairPreview.work_date} · {repairPreview.lock_count} recorded lock periods · <strong>{Math.round(repairPreview.total_deducted_seconds / 60)} minutes proposed for removal</strong></div>
+        {repairPreview.changes.length > 0 && <div className="cb-table-wrap" style={{ marginTop: 8 }}><table className="cb-table"><thead><tr><th>Client</th><th>Task</th><th>Recorded status</th><th>Locked time to remove</th></tr></thead><tbody>{repairPreview.changes.map(c => <tr key={c.task_id}><td>{c.client_name}</td><td>{c.task_name}</td><td>{c.task_status}</td><td>{Math.round(c.deducted_seconds / 60)}m</td></tr>)}</tbody></table></div>}
+        {repairPreview.warnings.map(w => <div className="cb-hint" key={w.task_id} style={{ marginTop: 6 }}>Excluded: {w.task_name}. {w.reason}</div>)}
+        {repairPreview.history.length > 0 && <div className="cb-hint" style={{ marginTop: 8 }}>Previous correction(s): {repairPreview.history.map(h => `${h.id}: ${Math.round(h.deducted_seconds / 60)}m (${h.reason})`).join("; ")}</div>}
+        {repairPreview.changes.length ? <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "end" }}>
+          <label style={{ flex: "1 1 300px" }}>Reason for correction<br/><input className="cb-input" style={{ width: "100%" }} maxLength={1000} placeholder="Explain why these locked periods are being excluded" value={repairReason} onChange={e => setRepairReason(e.target.value)}/></label>
+          <button className="cb-btn" type="button" disabled={repairBusy || repairReason.trim().length < 10} onClick={applyRepair}>Apply approved correction</button>
+        </div> : <div className="cb-hint" style={{ marginTop: 8 }}>No eligible locked-time overlaps to correct.</div>}
+      </div>}
+    </div>}
     <div style={{
       border: "1px solid var(--line)",
       borderRadius: 10,
@@ -10892,7 +10939,7 @@ function ConnectionDiagnosticsView() {
   </div>;
 }
 
-function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes = ["help", "overrides", "inactivity", "integrity"] }) {
+function SuperAdminReportsView({ members, pods = [], clients = [], realIsSuperAdmin = false, allowedModes = ["help", "overrides", "inactivity", "integrity"] }) {
   const available = [
     { value: "help", label: "Help activity" },
     { value: "overrides", label: "Manual overrides" },
@@ -10911,7 +10958,7 @@ function SuperAdminReportsView({ members, pods = [], clients = [], allowedModes 
       {available.length > 1 && <div style={{ marginBottom: 16 }}>
         <StableSaaSTabs value={mode} onChange={setMode} ariaLabel="Reports view" options={available} />
       </div>}
-      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : mode === "integrity" ? <TimeIntegrityAuditView members={members} pods={pods} clients={clients} /> : mode === "workload" ? <ClientWorkloadReportView /> : <ConnectionDiagnosticsView />}
+      {mode === "help" ? <HelpReportView /> : mode === "overrides" ? <ManualOverridesReportView /> : mode === "inactivity" ? <InactivityAuditView members={members} /> : mode === "integrity" ? <TimeIntegrityAuditView members={members} pods={pods} clients={clients} canRepairLockedTime={realIsSuperAdmin} /> : mode === "workload" ? <ClientWorkloadReportView /> : <ConnectionDiagnosticsView />}
     </div>
   );
 }
@@ -14650,7 +14697,7 @@ export default function App() {
                 onChangeNotificationChannel={updateNotificationChannel}
               />
             )}
-            {view === "reports" && canViewReports && <SuperAdminReportsView members={reportMembers} pods={pods} clients={clients} allowedModes={allowedReportModes} />}
+            {view === "reports" && canViewReports && <SuperAdminReportsView members={reportMembers} pods={pods} clients={clients} realIsSuperAdmin={realIsSuperAdmin && superAdminViewMode === "super_admin"} allowedModes={allowedReportModes} />}
             {view === "settings" && (isAdmin || realIsSuperAdmin) && (
               <SettingsView
                 roles={roles} taskTypes={taskTypes} trackedMetrics={trackedMetrics} learningCategories={learningCategories}
